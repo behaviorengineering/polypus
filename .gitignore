@@ -1,0 +1,27 @@
+# MLX uv venv (backends/mlx)
+backends/mlx/.venv/
+
+# Build output
+bin/
+build/
+dist/
+
+# Local env overrides
+.env
+
+# Model inventory disk cache
+.polypus/
+
+# OS / scratch
+.DS_Store
+**/.DS_Store
+tmp/
+
+# Test / coverage
+coverage.out
+coverage.html
+*.prof
+
+# Editor
+.idea/
+.vscode/

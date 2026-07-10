@@ -1,0 +1,351 @@
+package gateway
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/router"
+)
+
+// Handler is the Polypus HTTP gateway (Bifrost router + capability proxies).
+type Handler struct {
+	opts     config.ServeOptions
+	router   *router.Client
+	proxy    http.Handler
+	invCache *modelsInventoryCache
+}
+
+// NewHandler returns the public Polypus HTTP handler.
+func NewHandler(opts config.ServeOptions) (http.Handler, error) {
+	rcfg, err := config.LoadRouterConfig(opts)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: %w", err)
+	}
+	rc, err := router.NewClient(rcfg)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: %w", err)
+	}
+	proxyURL := rc.Registry().ProxyBackendURL()
+	proxy, err := newFallbackProxy(proxyURL)
+	if err != nil {
+		rc.Close()
+		return nil, err
+	}
+	return &Handler{opts: opts, router: rc, proxy: proxy, invCache: newModelsInventoryCache()}, nil
+}
+
+func newFallbackProxy(backendURL string) (http.Handler, error) {
+	target, err := url.Parse(backendURL)
+	if err != nil {
+		return nil, fmt.Errorf("backend url: %w", err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		http.Error(w, fmt.Sprintf("polypus backend unavailable: %v", err), http.StatusBadGateway)
+	}
+	origDirector := proxy.Director
+	proxy.Director = func(r *http.Request) {
+		origDirector(r)
+		r.Host = target.Host
+	}
+	return proxy, nil
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.URL.Path == "/health" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		h.serveHealth(w, r)
+	case r.URL.Path == "/v1/models" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		h.serveModelsList(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/models/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		h.serveModelRetrieve(w, r)
+	case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
+		h.serveChatCompletions(w, r)
+	case r.URL.Path == "/v1/embeddings" && r.Method == http.MethodPost:
+		h.serveEmbeddings(w, r)
+	case r.URL.Path == "/v1/audio/speech" && r.Method == http.MethodPost:
+		h.serveSpeech(w, r)
+	case r.URL.Path == "/v1/audio/transcriptions" && r.Method == http.MethodPost:
+		h.serveTranscription(w, r)
+	case r.URL.Path == "/v1/audio/voices" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		h.proxy.ServeHTTP(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (h *Handler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, chatMaxBody))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	model, err := extractChatModel(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	reg := h.router.Registry()
+	cfg := reg.Config()
+	vision := chatBodyHasVision(body)
+	var backendID, downstream string
+	if vision {
+		backendID, downstream, err = reg.ResolveVision(model)
+	} else {
+		if cfg.DefaultChatBackend == "" {
+			http.Error(w, "polypus: no chat backend configured", http.StatusServiceUnavailable)
+			return
+		}
+		backendID, downstream, err = reg.ResolveChat(model)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !h.ensureModelAllowed(backendID, model) {
+		writeModelNotAllowed(w, model)
+		return
+	}
+	backendURL, ok := reg.BackendURL(backendID)
+	if !ok {
+		http.Error(w, "polypus: backend not found", http.StatusBadGateway)
+		return
+	}
+	rewritten, err := rewriteChatModel(body, downstream)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := proxyChatCompletions(w, r, backendURL, rewritten); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+}
+
+func (h *Handler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, embedMaxBody))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	model, err := extractEmbedModel(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	reg := h.router.Registry()
+	cfg := reg.Config()
+	if cfg.DefaultEmbedBackend == "" {
+		http.Error(w, "polypus: no embed backend configured", http.StatusServiceUnavailable)
+		return
+	}
+	backendID, downstream, err := reg.ResolveEmbed(model)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !h.ensureModelAllowed(backendID, model) {
+		writeModelNotAllowed(w, model)
+		return
+	}
+	backendURL, ok := reg.BackendURL(backendID)
+	if !ok {
+		http.Error(w, "polypus: backend not found", http.StatusBadGateway)
+		return
+	}
+	rewritten, err := rewriteEmbedModel(body, downstream)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := proxyEmbeddings(w, r, backendURL, rewritten); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+}
+
+type healthBackend struct {
+	ID    string `json:"id"`
+	URL   string `json:"url"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+type healthResponse struct {
+	Status   string          `json:"status"`
+	Router   string          `json:"router"`
+	Backends []healthBackend `json:"backends"`
+}
+
+func (h *Handler) serveHealth(w http.ResponseWriter, r *http.Request) {
+	reg := h.router.Registry()
+	cfg := reg.Config()
+	backends := make([]healthBackend, 0, len(cfg.Backends))
+	defaultOK := false
+	for _, id := range cfg.BackendIDs() {
+		b := cfg.Backends[id]
+		entry := healthBackend{ID: id, URL: b.BaseURL}
+		if err := pingBackend(r, b.BaseURL); err != nil {
+			entry.Error = err.Error()
+		} else {
+			entry.OK = true
+		}
+		if id == cfg.DefaultTTSBackend {
+			defaultOK = entry.OK
+		}
+		backends = append(backends, entry)
+	}
+	if !defaultOK {
+		http.Error(w, "default TTS backend unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(healthResponse{
+		Status:   "ok",
+		Router:   "bifrost",
+		Backends: backends,
+	})
+}
+
+func (h *Handler) serveSpeech(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Model          string   `json:"model"`
+		Input          string   `json:"input"`
+		Voice          string   `json:"voice"`
+		ResponseFormat string   `json:"response_format"`
+		Speed          *float64 `json:"speed"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if prov, _, err := h.router.Registry().ResolveTTS(req.Model); err == nil {
+		if !h.ensureModelAllowed(string(prov), req.Model) {
+			writeModelNotAllowed(w, req.Model)
+			return
+		}
+	}
+	audio, err := h.router.Synthesize(r.Context(), router.SpeechRequest{
+		Model:          req.Model,
+		Input:          req.Input,
+		Voice:          req.Voice,
+		ResponseFormat: req.ResponseFormat,
+		Speed:          req.Speed,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", speechContentType(req.ResponseFormat))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(audio)
+}
+
+func (h *Handler) serveTranscription(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "multipart: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file required: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	audio, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, "read file: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	filename := "audio.wav"
+	if header != nil && header.Filename != "" {
+		filename = header.Filename
+	}
+	format := r.FormValue("response_format")
+	if format == "" {
+		format = "json"
+	}
+	sttModel := r.FormValue("model")
+	if prov, _, err := h.router.Registry().ResolveSTT(sttModel); err == nil {
+		if !h.ensureModelAllowed(string(prov), sttModel) {
+			writeModelNotAllowed(w, sttModel)
+			return
+		}
+	}
+	out, ct, err := h.router.Transcribe(r.Context(), router.TranscriptionRequest{
+		Model:          sttModel,
+		Audio:          audio,
+		Filename:       filename,
+		ResponseFormat: format,
+		Language:       r.FormValue("language"),
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", ct)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
+}
+
+func speechContentType(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "wav":
+		return "audio/wav"
+	case "opus":
+		return "audio/opus"
+	case "aac":
+		return "audio/aac"
+	case "flac":
+		return "audio/flac"
+	default:
+		return "audio/mpeg"
+	}
+}
+
+func pingBackend(r *http.Request, backendURL string) error {
+	ctx := r.Context()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(backendURL, "/")+"/", nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// ListenAndServe starts the gateway on opts.ListenAddr().
+func ListenAndServe(opts config.ServeOptions) error {
+	handler, err := NewHandler(opts)
+	if err != nil {
+		return err
+	}
+	server := &http.Server{
+		Addr:              opts.ListenAddr(),
+		Handler:           handler,
+		ReadHeaderTimeout: 30 * time.Second,
+	}
+	return server.ListenAndServe()
+}

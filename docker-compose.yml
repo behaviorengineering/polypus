@@ -1,0 +1,13 @@
+# Gateway-only compose (MLX backend on host: make mlx-serve).
+services:
+  polypus:
+    build: .
+    image: xynova/polypus:latest
+    ports:
+      - "${POLYPUS_PORT:-1320}:1320"
+    environment:
+      POLYPUS_HOST: 0.0.0.0
+      POLYPUS_PORT: "1320"
+      POLYPUS_BACKEND_URL: "${POLYPUS_BACKEND_URL:-http://host.docker.internal:1322}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

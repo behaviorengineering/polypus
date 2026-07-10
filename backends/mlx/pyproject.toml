@@ -1,0 +1,22 @@
+[project]
+name = "polypus-mlx"
+version = "0.1.0"
+description = "MLX-Audio backend for Polypus (loopback only, Apple Silicon)"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "mlx-audio[server]>=0.4.4",
+  "soundfile>=0.12.1",
+  # mlx-lm 0.31.x registers NewlineTokenizer with a string key; transformers 5.13 breaks that.
+  "transformers>=5.5.0,<5.13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "openai>=1.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
