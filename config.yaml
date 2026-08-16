@@ -9,7 +9,7 @@ default_tts_backend: cf_local
 default_stt_backend: cf_local
 default_proxy_backend: cf_local
 default_chat_backend: cf_local
-default_vision_backend: lm_studio
+default_vision_backend: cf_local
 default_embed_backend: lm_studio
 
 backends:

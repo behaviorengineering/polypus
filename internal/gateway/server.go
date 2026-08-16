@@ -1,16 +1,21 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/router"
 )
 
@@ -124,7 +129,10 @@ func (h *Handler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := proxyChatCompletions(w, r, backendURL, rewritten); err != nil {
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
+	defer func() { observability.EndSpan(span, err) }()
+	r = r.WithContext(ctx)
+	if err = proxyChatCompletions(w, r, backendURL, rewritten); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -167,7 +175,10 @@ func (h *Handler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := proxyEmbeddings(w, r, backendURL, rewritten); err != nil {
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", model, backendID, backendURL, downstream)
+	defer func() { observability.EndSpan(span, err) }()
+	r = r.WithContext(ctx)
+	if err = proxyEmbeddings(w, r, backendURL, rewritten); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -233,13 +244,20 @@ func (h *Handler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if prov, _, err := h.router.Registry().ResolveTTS(req.Model); err == nil {
-		if !h.ensureModelAllowed(string(prov), req.Model) {
+	backendID, downstream, resolveErr := h.router.Registry().ResolveTTS(req.Model)
+	if resolveErr == nil {
+		if !h.ensureModelAllowed(string(backendID), req.Model) {
 			writeModelNotAllowed(w, req.Model)
 			return
 		}
 	}
-	audio, err := h.router.Synthesize(r.Context(), router.SpeechRequest{
+	backendURL := ""
+	if resolveErr == nil {
+		backendURL, _ = h.router.Registry().BackendURL(string(backendID))
+	}
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.speech", req.Model, string(backendID), backendURL, downstream)
+	defer func() { observability.EndSpan(span, err) }()
+	audio, err := h.router.Synthesize(ctx, router.SpeechRequest{
 		Model:          req.Model,
 		Input:          req.Input,
 		Voice:          req.Voice,
@@ -280,13 +298,20 @@ func (h *Handler) serveTranscription(w http.ResponseWriter, r *http.Request) {
 		format = "json"
 	}
 	sttModel := r.FormValue("model")
-	if prov, _, err := h.router.Registry().ResolveSTT(sttModel); err == nil {
-		if !h.ensureModelAllowed(string(prov), sttModel) {
+	backendID, downstream, resolveErr := h.router.Registry().ResolveSTT(sttModel)
+	if resolveErr == nil {
+		if !h.ensureModelAllowed(string(backendID), sttModel) {
 			writeModelNotAllowed(w, sttModel)
 			return
 		}
 	}
-	out, ct, err := h.router.Transcribe(r.Context(), router.TranscriptionRequest{
+	backendURL := ""
+	if resolveErr == nil {
+		backendURL, _ = h.router.Registry().BackendURL(string(backendID))
+	}
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.transcription", sttModel, string(backendID), backendURL, downstream)
+	defer func() { observability.EndSpan(span, err) }()
+	out, ct, err := h.router.Transcribe(ctx, router.TranscriptionRequest{
 		Model:          sttModel,
 		Audio:          audio,
 		Filename:       filename,
@@ -336,16 +361,45 @@ func pingBackend(r *http.Request, backendURL string) error {
 	return nil
 }
 
+// Close releases router resources.
+func (h *Handler) Close() {
+	if h != nil && h.router != nil {
+		h.router.Close()
+	}
+}
+
 // ListenAndServe starts the gateway on opts.ListenAddr().
 func ListenAndServe(opts config.ServeOptions) error {
 	handler, err := NewHandler(opts)
 	if err != nil {
 		return err
 	}
+	if h, ok := handler.(*Handler); ok {
+		defer h.Close()
+	}
 	server := &http.Server{
 		Addr:              opts.ListenAddr(),
-		Handler:           handler,
+		Handler:           observability.WrapHandler(handler),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
-	return server.ListenAndServe()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe()
+	}()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case err := <-errCh:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	case <-sigCh:
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			return err
+		}
+		return nil
+	}
 }

@@ -8,12 +8,17 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 const chatProxyTimeout = 900 * time.Second
 const chatMaxBody = 32 << 20
 
-var chatProxyClient = &http.Client{Timeout: chatProxyTimeout}
+var chatProxyClient = &http.Client{
+	Timeout:   chatProxyTimeout,
+	Transport: observability.WrapTransport(http.DefaultTransport),
+}
 
 func extractChatModel(body []byte) (string, error) {
 	var payload map[string]any
@@ -39,6 +44,16 @@ func rewriteChatModel(body []byte, model string) ([]byte, error) {
 		return nil, fmt.Errorf("marshal: %w", err)
 	}
 	return out, nil
+}
+
+func chatBodyIsStream(body []byte) bool {
+	var payload struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	return payload.Stream
 }
 
 func chatBodyHasVision(body []byte) bool {
@@ -73,6 +88,8 @@ func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL str
 		body = patched
 	}
 	target := strings.TrimRight(strings.TrimSpace(backendURL), "/") + "/v1/chat/completions"
+	streaming := chatBodyIsStream(body)
+	observability.RecordProxyIO(r.Context(), target, streaming, 0, -1)
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("request: %w", err)
@@ -91,8 +108,10 @@ func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL str
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, chatMaxBody))
 	if err != nil {
+		observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, -1)
 		return fmt.Errorf("read response: %w", err)
 	}
+	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, len(raw))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if fixed, changed := mergeReasoningIntoContent(raw); changed {
 			raw = fixed

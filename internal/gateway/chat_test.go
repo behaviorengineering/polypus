@@ -16,6 +16,15 @@ func TestMergeReasoningIntoContent(t *testing.T) {
 	}
 }
 
+func TestChatBodyIsStream(t *testing.T) {
+	if chatBodyIsStream([]byte(`{"stream":true}`)) != true {
+		t.Fatal("expected stream")
+	}
+	if chatBodyIsStream([]byte(`{"stream":false}`)) {
+		t.Fatal("expected non-stream")
+	}
+}
+
 func TestDisableChatThinkingInRequestGLM(t *testing.T) {
 	in := []byte(`{"model":"@cf/zai-org/glm-4.7-flash","messages":[{"role":"user","content":"hi"}]}`)
 	out, changed := disableChatThinkingInRequest(in)

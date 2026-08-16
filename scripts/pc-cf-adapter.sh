@@ -14,7 +14,7 @@ if [[ -x "$REPO/bin/polypus-cf-adapter" ]]; then
   CF_BIN="$REPO/bin/polypus-cf-adapter"
 fi
 if [[ -z "$CF_BIN" ]]; then
-  echo "missing bin/polypus-cf-adapter; run: make build (repo: $REPO)" >&2
+  echo "missing bin/polypus-cf-adapter; run: make build (Polypus or Consilium: $REPO)" >&2
   exit 1
 fi
 

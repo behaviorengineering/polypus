@@ -1,4 +1,4 @@
-.PHONY: help build install test vet tidy mlx-sync mlx-serve serve serve-down serve-legacy smoke smoke-higgs smoke-stt smoke-all docker-build
+.PHONY: help build build-gateway build-cf-adapter install test vet tidy mlx-sync serve serve-down smoke smoke-higgs smoke-stt smoke-all docker-build
 
 include ports.env
 export POLYPUS_HOST POLYPUS_PORT POLYPUS_MLX_HOST POLYPUS_MLX_PORT
@@ -10,18 +10,23 @@ else
 BINARY := $(PARENT_ROOT)/bin/polypus
 endif
 
+# Nested as providers/polypus: Consilium is two levels up (adapter lives in tool/).
+CONSILIUM_ROOT :=
+ifneq ($(wildcard $(abspath $(CURDIR)/../..)/stack/.env.example),)
+CONSILIUM_ROOT := $(abspath $(CURDIR)/../..)
+endif
+CF_ADAPTER_BIN := $(CONSILIUM_ROOT)/bin/polypus-cf-adapter
+
 IMAGE_REPO ?= xynova/polypus
 IMAGE_TAG ?= latest
 
 help:
 	@echo "polypus — local OpenAI speech gateway (TTS/STT backends behind loopback)"
 	@echo ""
-	@echo "  make build         Build $(BINARY)"
+	@echo "  make build         Build $(BINARY)$(if $(CONSILIUM_ROOT), and $(CF_ADAPTER_BIN),)"
 	@echo "  make mlx-sync      uv sync for backends/mlx"
 	@echo "  make serve         process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 (POLYPUS_PHOENIX=0 to skip)"
 	@echo "  make serve-down    Stop this Polypus process-compose project only"
-	@echo "  make serve-legacy  Bash serve-all.sh (no process-compose)"
-	@echo "  make mlx-serve     MLX backend only (debug)"
 	@echo "  make smoke         curl TTS smoke test via gateway"
 	@echo "  make smoke-higgs   Higgs v2 TTS smoke (narration alternative)"
 	@echo "  make smoke-stt     TTS then STT round-trip via gateway"
@@ -30,9 +35,20 @@ help:
 	@echo "  make test          go test ./..."
 	@echo "  make vet           go vet ./..."
 
-build:
+build: build-gateway build-cf-adapter
+
+build-gateway:
 	@mkdir -p $(dir $(BINARY))
 	go build -o $(BINARY) ./cmd/polypus
+
+# cf-adapter is Consilium code (tool/cmd/polypus-cf-adapter). Skip when this repo is standalone.
+build-cf-adapter:
+ifeq ($(CONSILIUM_ROOT),)
+	@true
+else
+	@mkdir -p $(CONSILIUM_ROOT)/bin
+	cd $(CONSILIUM_ROOT) && go build -o bin/polypus-cf-adapter ./tool/cmd/polypus-cf-adapter
+endif
 
 install:
 	go build -o $(shell go env GOPATH)/bin/polypus ./cmd/polypus
@@ -41,10 +57,6 @@ mlx-sync:
 	chmod +x backends/mlx/scripts/sync.sh
 	./backends/mlx/scripts/sync.sh
 
-mlx-serve:
-	chmod +x backends/mlx/scripts/serve.sh
-	./backends/mlx/scripts/serve.sh
-
 serve: build
 	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-cf-adapter.sh scripts/pc-phoenix.sh
 	./scripts/pc-up.sh
@@ -52,10 +64,6 @@ serve: build
 serve-down:
 	chmod +x scripts/pc-down.sh
 	./scripts/pc-down.sh
-
-serve-legacy: build
-	chmod +x scripts/serve-all.sh
-	./scripts/serve-all.sh
 
 smoke:
 	chmod +x scripts/smoke.sh

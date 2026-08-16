@@ -32,6 +32,7 @@ flowchart TB
   G --> M
   G --> A
   G --> LMS
+  G --> OTLP
   A -->|"INFERENCE_CLOUD_CASE=1"| CF
   C -.-> OTLP
   N -.-> OTLP
@@ -52,15 +53,16 @@ flowchart TB
 
 ```bash
 make mlx-sync
+make build        # gateway bin/polypus; also Consilium bin/polypus-cf-adapter when nested
 make serve        # process-compose TUI: gateway :1320 + backends + Phoenix :6006
 make serve-down   # stop this Polypus project only
 make smoke        # → /tmp/polypus-smoke.mp3
 make smoke-stt    # TTS then STT round-trip
 ```
 
-`INFERENCE_CLOUD_CASE=1` starts the Cloudflare adapter (`:1323`) instead of MLX. Set `POLYPUS_ENABLE_MLX=1` to run MLX as well. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`. Clients (Consilium, n8n) point `openinference.endpoint` at `localhost:4317`.
+`INFERENCE_CLOUD_CASE=1` starts the Cloudflare adapter (`:1323`) instead of MLX. Set `POLYPUS_ENABLE_MLX=1` to run MLX as well. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`. The gateway extracts W3C `traceparent` from clients, emits OpenInference LLM spans (`service.name=polypus`), injects context onto backend arms, and writes error dumps to `logs/inference-failures/<trace_id>.json`. HTTP hops are named `{service} CLIENT|SERVER METHOD host/path` (`http.io=client|server`). The cf-adapter (`service.name=cf-adapter`) joins the same Phoenix collector and records the Cloudflare hop as `cf-adapter CLIENT POST api.cloudflare.com/.../v1/chat/completions`. Phoenix has no custom HTTP icons. Clients (Consilium, n8n) point `openinference.endpoint` at `localhost:4317` so Phoenix joins client + gateway + adapter spans on the same trace.
 
-Fallback without process-compose: `make serve-legacy`.
+Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_OTLP_ENDPOINT` and dumps with `POLYPUS_FAILURE_DUMP_DIR`. Skip probe noise with `POLYPUS_OTEL_SKIP_PATHS` (default `/health`). Example: `POLYPUS_OTEL_SKIP_PATHS=/health,/v1/models`. Set `POLYPUS_OTEL_SKIP_PATHS=none` to trace every path.
 
 ## Layout
 
@@ -73,7 +75,6 @@ polypus/
   backends/mlx/         # uv + mlx-audio (host only)
   process-compose.yaml  # independent TUI (make serve)
   scripts/pc-up.sh      # process-compose launcher
-  scripts/serve-all.sh  # bash fallback (make serve-legacy)
 ```
 
 ## OpenAI surface
@@ -142,10 +143,9 @@ Multi-backend routing: copy `config.yaml.example` → `config.yaml` for extra lo
 Gateway image (MLX still on the host) and Phoenix:
 
 ```bash
-make mlx-serve                         # host terminal 1 (MLX :1322)
-docker compose up polypus              # gateway image → host.docker.internal:1322
-# or Phoenix only:
-docker compose up phoenix              # UI :6006, OTLP :4317
+make serve                             # host: gateway + MLX :1322 + Phoenix
+docker compose up polypus              # optional gateway image → host.docker.internal:1322
+docker compose up phoenix              # Phoenix only: UI :6006, OTLP :4317
 ```
 
 ## MLX known issues

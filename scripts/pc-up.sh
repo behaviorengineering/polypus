@@ -8,7 +8,6 @@ cd "$POLYPUS_DIR"
 if ! command -v process-compose >/dev/null 2>&1; then
   echo "process-compose not found; install: https://f1bonacc1.github.io/process-compose/installation/" >&2
   echo "  macOS: brew install process-compose" >&2
-  echo "  fallback: make serve-legacy" >&2
   exit 1
 fi
 
@@ -66,7 +65,7 @@ if [[ "$INFERENCE_CLOUD_CASE" == "1" ]]; then
     exit 1
   fi
   if [[ ! -x "$CONSILIUM_ROOT/bin/polypus-cf-adapter" ]]; then
-    echo "missing bin/polypus-cf-adapter; run: make build (repo: $CONSILIUM_ROOT)" >&2
+    echo "missing bin/polypus-cf-adapter; run: make build (Polypus or Consilium: $CONSILIUM_ROOT)" >&2
     exit 1
   fi
   NAMESPACES+=(cloud)
