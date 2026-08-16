@@ -1,4 +1,4 @@
-.PHONY: help build install test vet tidy mlx-sync mlx-serve serve smoke smoke-higgs smoke-stt smoke-all docker-build
+.PHONY: help build install test vet tidy mlx-sync mlx-serve serve serve-down serve-legacy smoke smoke-higgs smoke-stt smoke-all docker-build
 
 include ports.env
 export POLYPUS_HOST POLYPUS_PORT POLYPUS_MLX_HOST POLYPUS_MLX_PORT
@@ -18,7 +18,9 @@ help:
 	@echo ""
 	@echo "  make build         Build $(BINARY)"
 	@echo "  make mlx-sync      uv sync for backends/mlx"
-	@echo "  make serve         Gateway :$(POLYPUS_PORT) + MLX backend :$(POLYPUS_MLX_PORT)"
+	@echo "  make serve         process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 (POLYPUS_PHOENIX=0 to skip)"
+	@echo "  make serve-down    Stop this Polypus process-compose project only"
+	@echo "  make serve-legacy  Bash serve-all.sh (no process-compose)"
 	@echo "  make mlx-serve     MLX backend only (debug)"
 	@echo "  make smoke         curl TTS smoke test via gateway"
 	@echo "  make smoke-higgs   Higgs v2 TTS smoke (narration alternative)"
@@ -44,6 +46,14 @@ mlx-serve:
 	./backends/mlx/scripts/serve.sh
 
 serve: build
+	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-cf-adapter.sh scripts/pc-phoenix.sh
+	./scripts/pc-up.sh
+
+serve-down:
+	chmod +x scripts/pc-down.sh
+	./scripts/pc-down.sh
+
+serve-legacy: build
 	chmod +x scripts/serve-all.sh
 	./scripts/serve-all.sh
 

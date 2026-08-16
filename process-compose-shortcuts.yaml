@@ -1,0 +1,30 @@
+# Polypus process-compose TUI shortcuts (same number keys as Consilium).
+# Loaded by scripts/pc-up.sh via --shortcuts.
+
+shortcuts:
+  help:
+    description: Shortcuts
+    shortcut: "1"
+  process_scale:
+    description: Scale
+    shortcut: "2"
+  process_info:
+    description: Info
+    shortcut: "3"
+  log_screen:
+    shortcut: "4"
+  log_follow:
+    shortcut: "5"
+  log_wrap:
+    shortcut: "6"
+  process_start:
+    description: Start
+    shortcut: "7"
+  process_screen:
+    shortcut: "8"
+  process_stop:
+    description: Stop
+    shortcut: "9"
+  quit:
+    description: Quit
+    shortcut: "0"
