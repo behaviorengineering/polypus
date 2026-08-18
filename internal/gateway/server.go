@@ -25,6 +25,8 @@ type Handler struct {
 	router   *router.Client
 	proxy    http.Handler
 	invCache *modelsInventoryCache
+	timeouts config.Timeouts
+	client   *http.Client
 }
 
 // NewHandler returns the public Polypus HTTP handler.
@@ -43,7 +45,18 @@ func NewHandler(opts config.ServeOptions) (http.Handler, error) {
 		rc.Close()
 		return nil, err
 	}
-	return &Handler{opts: opts, router: rc, proxy: proxy, invCache: newModelsInventoryCache()}, nil
+	timeouts := rcfg.Timeouts
+	if timeouts.Max == 0 {
+		timeouts = config.DefaultTimeouts()
+	}
+	return &Handler{
+		opts:     opts,
+		router:   rc,
+		proxy:    proxy,
+		invCache: newModelsInventoryCache(),
+		timeouts: timeouts,
+		client:   newChatProxyClient(timeouts.Max),
+	}, nil
 }
 
 func newFallbackProxy(backendURL string) (http.Handler, error) {
@@ -132,7 +145,8 @@ func (h *Handler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
 	defer func() { observability.EndSpan(span, err) }()
 	r = r.WithContext(ctx)
-	if err = proxyChatCompletions(w, r, backendURL, rewritten); err != nil {
+	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, vision, chatBodyWantsThinking(body))
+	if err = proxyChatCompletions(w, r, backendURL, rewritten, h.client, hop); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -178,7 +192,8 @@ func (h *Handler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", model, backendID, backendURL, downstream)
 	defer func() { observability.EndSpan(span, err) }()
 	r = r.WithContext(ctx)
-	if err = proxyEmbeddings(w, r, backendURL, rewritten); err != nil {
+	hop := h.timeouts.ResolveEmbed(r.Header.Get(config.TimeoutHeader))
+	if err = proxyEmbeddings(w, r, backendURL, rewritten, h.client, hop); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}

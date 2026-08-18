@@ -134,6 +134,8 @@ POLYPUS_DEFAULT_VOICE=vivian
 POLYPUS_PHOENIX=1
 ```
 
+Hop timeouts live in `config.yaml` `timeouts:` (chat 120s, Cloudflare chat 60s, thinking 600s, vision 300s). Optional client header `X-Polypus-Timeout` (Go duration or integer seconds) is clamped to `min`..`max` (5s–900s). Turning `enable_thinking` on selects the thinking bucket without a header; the client HTTP wait must still cover that hop.
+
 From Consilium repo root: `make polypus-sync`, `make polypus-serve`, `make polypus-down`.
 
 Multi-backend routing: copy `config.yaml.example` → `config.yaml` for extra loopback backends. Model prefix: `backend_id/model` (e.g. `alt_stt/whisper-large-v3`).

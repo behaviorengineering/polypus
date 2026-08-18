@@ -12,6 +12,18 @@ default_chat_backend: cf_local
 default_vision_backend: cf_local
 default_embed_backend: lm_studio
 
+timeouts:
+  min: 5s
+  max: 900s
+  chat: 120s
+  chat_thinking: 600s
+  vision: 300s
+  embed: 60s
+  speech: 180s
+  backends:
+    cf_local:
+      chat: 60s
+
 backends:
   cf_local:
     base_url: http://127.0.0.1:1323

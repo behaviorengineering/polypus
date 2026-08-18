@@ -41,6 +41,20 @@ backends:
 #       - "@cf/deepgram/nova-3"
 # Use config.cloud.yaml.example for cloud-default routing.
 
+# Hop timeouts (optional). Omitted keys use code defaults.
+# Client header X-Polypus-Timeout (e.g. 600s) is clamped to min..max.
+# timeouts:
+#   min: 5s
+#   max: 900s
+#   chat: 120s
+#   chat_thinking: 600s
+#   vision: 300s
+#   embed: 60s
+#   speech: 180s
+#   backends:
+#     cf_local:
+#       chat: 60s
+
 # Model routing: backend_id/downstream-model
 # Example chat: model=cf_local/@cf/zai-org/glm-4.7-flash
 # Example STT: model=alt_stt/whisper-large-v3

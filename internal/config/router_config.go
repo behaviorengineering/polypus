@@ -13,12 +13,12 @@ import (
 type Capability string
 
 const (
-	CapChat    Capability = "chat"
-	CapVision  Capability = "vision"
-	CapEmbed   Capability = "embed"
-	CapTTS     Capability = "tts"
-	CapSTT     Capability = "stt"
-	CapVoices  Capability = "voices"
+	CapChat   Capability = "chat"
+	CapVision Capability = "vision"
+	CapEmbed  Capability = "embed"
+	CapTTS    Capability = "tts"
+	CapSTT    Capability = "stt"
+	CapVoices Capability = "voices"
 )
 
 // BackendDef is one OpenAI-compatible speech worker.
@@ -37,6 +37,7 @@ type RouterConfig struct {
 	DefaultTTSBackend    string                `yaml:"default_tts_backend"`
 	DefaultSTTBackend    string                `yaml:"default_stt_backend"`
 	DefaultProxyBackend  string                `yaml:"default_proxy_backend"`
+	Timeouts             Timeouts              `yaml:"-"`
 	Backends             map[string]BackendDef `yaml:"backends"`
 }
 
@@ -57,6 +58,7 @@ type routerFile struct {
 	DefaultTTSBackend    string                      `yaml:"default_tts_backend"`
 	DefaultSTTBackend    string                      `yaml:"default_stt_backend"`
 	DefaultProxyBackend  string                      `yaml:"default_proxy_backend"`
+	Timeouts             timeoutsFile                `yaml:"timeouts"`
 	Backends             map[string]backendFileEntry `yaml:"backends"`
 }
 
@@ -74,6 +76,9 @@ func LoadRouterConfig(opts ServeOptions) (RouterConfig, error) {
 	}
 	if !fromFile || len(cfg.Backends) == 0 {
 		cfg = defaultRouterFromEnv(opts)
+	}
+	if cfg.Timeouts.Max == 0 {
+		cfg.Timeouts = DefaultTimeouts()
 	}
 	applyRouterEnvOverrides(&cfg, opts)
 	if err := normalizeRouterConfig(&cfg); err != nil {
@@ -105,6 +110,10 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 	if err := yaml.Unmarshal(raw, &file); err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
+	timeouts, err := parseTimeoutsFile(file.Timeouts)
+	if err != nil {
+		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
+	}
 	cfg := RouterConfig{
 		DefaultEmbedBackend:  strings.TrimSpace(file.DefaultEmbedBackend),
 		DefaultChatBackend:   strings.TrimSpace(file.DefaultChatBackend),
@@ -112,6 +121,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 		DefaultTTSBackend:    strings.TrimSpace(file.DefaultTTSBackend),
 		DefaultSTTBackend:    strings.TrimSpace(file.DefaultSTTBackend),
 		DefaultProxyBackend:  strings.TrimSpace(file.DefaultProxyBackend),
+		Timeouts:             timeouts,
 		Backends:             make(map[string]BackendDef, len(file.Backends)),
 	}
 	for id, entry := range file.Backends {
@@ -139,6 +149,7 @@ func defaultRouterFromEnv(opts ServeOptions) RouterConfig {
 		DefaultTTSBackend:   "mlx_local",
 		DefaultSTTBackend:   "mlx_local",
 		DefaultProxyBackend: "mlx_local",
+		Timeouts:            DefaultTimeouts(),
 		Backends: map[string]BackendDef{
 			"mlx_local": {
 				ID:           "mlx_local",

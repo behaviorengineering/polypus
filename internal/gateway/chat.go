@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,15 +10,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
-const chatProxyTimeout = 900 * time.Second
 const chatMaxBody = 32 << 20
 
-var chatProxyClient = &http.Client{
-	Timeout:   chatProxyTimeout,
-	Transport: observability.WrapTransport(http.DefaultTransport),
+func newChatProxyClient(max time.Duration) *http.Client {
+	if max <= 0 {
+		max = config.DefaultTimeouts().Max
+	}
+	return &http.Client{
+		Timeout:   max,
+		Transport: observability.WrapTransport(http.DefaultTransport),
+	}
 }
 
 func extractChatModel(body []byte) (string, error) {
@@ -83,14 +89,20 @@ func chatBodyHasVision(body []byte) bool {
 	return false
 }
 
-func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL string, body []byte) error {
+func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration) error {
 	if patched, ok := disableChatThinkingInRequest(body); ok {
 		body = patched
 	}
 	target := strings.TrimRight(strings.TrimSpace(backendURL), "/") + "/v1/chat/completions"
 	streaming := chatBodyIsStream(body)
 	observability.RecordProxyIO(r.Context(), target, streaming, 0, -1)
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(body))
+	ctx := r.Context()
+	if hopTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, hopTimeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("request: %w", err)
 	}
@@ -99,8 +111,14 @@ func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL str
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
+	if hopTimeout > 0 {
+		req.Header.Set(config.TimeoutHeader, hopTimeout.String())
+	}
 
-	resp, err := chatProxyClient.Do(req)
+	if client == nil {
+		client = newChatProxyClient(0)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("post %s: %w", target, err)
 	}
@@ -140,10 +158,14 @@ func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL str
 	return nil
 }
 
-// disableChatThinkingInRequest asks CF/OpenAI-compat backends not to burn tokens on reasoning.
+// disableChatThinkingInRequest asks CF/OpenAI-compat backends not to burn tokens on reasoning
+// unless the client explicitly enabled thinking.
 func disableChatThinkingInRequest(body []byte) ([]byte, bool) {
 	var root map[string]any
 	if err := json.Unmarshal(body, &root); err != nil {
+		return body, false
+	}
+	if chatMapWantsThinking(root) {
 		return body, false
 	}
 	model := strings.ToLower(strings.TrimSpace(fmt.Sprint(root["model"])))
@@ -251,4 +273,40 @@ func jsonStringField(raw json.RawMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(s)
+}
+
+func chatBodyWantsThinking(body []byte) bool {
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return false
+	}
+	return chatMapWantsThinking(root)
+}
+
+func chatMapWantsThinking(root map[string]any) bool {
+	if boolishTrue(root["enable_thinking"]) {
+		return true
+	}
+	if kwargs, ok := root["chat_template_kwargs"].(map[string]any); ok && boolishTrue(kwargs["enable_thinking"]) {
+		return true
+	}
+	effort := strings.ToLower(strings.TrimSpace(fmt.Sprint(root["reasoning_effort"])))
+	switch effort {
+	case "", "<nil>", "nil", "none", "off", "false", "0":
+		return false
+	default:
+		return true
+	}
+}
+
+func boolishTrue(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		s := strings.ToLower(strings.TrimSpace(t))
+		return s == "true" || s == "1" || s == "yes"
+	default:
+		return false
+	}
 }

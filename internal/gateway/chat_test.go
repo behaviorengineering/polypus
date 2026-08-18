@@ -35,3 +35,25 @@ func TestDisableChatThinkingInRequestGLM(t *testing.T) {
 		t.Fatalf("body=%s", out)
 	}
 }
+
+func TestDisableChatThinkingHonorsExplicitOn(t *testing.T) {
+	in := []byte(`{"model":"@cf/google/gemma-4-26b-a4b-it","enable_thinking":true,"messages":[{"role":"user","content":"hi"}]}`)
+	out, changed := disableChatThinkingInRequest(in)
+	if changed {
+		t.Fatalf("should not rewrite when thinking is on: %s", out)
+	}
+	if !chatBodyWantsThinking(in) {
+		t.Fatal("expected thinking")
+	}
+}
+
+func TestChatBodyWantsThinkingKwargs(t *testing.T) {
+	in := []byte(`{"model":"x","chat_template_kwargs":{"enable_thinking":true}}`)
+	if !chatBodyWantsThinking(in) {
+		t.Fatal("expected kwargs thinking")
+	}
+	off := []byte(`{"model":"x","enable_thinking":false}`)
+	if chatBodyWantsThinking(off) {
+		t.Fatal("expected thinking off")
+	}
+}
