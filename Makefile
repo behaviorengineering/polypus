@@ -1,4 +1,4 @@
-.PHONY: help build build-gateway build-cf-adapter install test vet tidy mlx-sync serve serve-down smoke smoke-higgs smoke-stt smoke-all docker-build
+.PHONY: help build build-gateway build-cf-adapter build-chat-smoke install test vet tidy mlx-sync serve serve-down smoke smoke-chat smoke-higgs smoke-stt smoke-all docker-build
 
 include ports.env
 export POLYPUS_HOST POLYPUS_PORT POLYPUS_MLX_HOST POLYPUS_MLX_PORT
@@ -16,6 +16,8 @@ ifneq ($(wildcard $(abspath $(CURDIR)/../..)/stack/.env.example),)
 CONSILIUM_ROOT := $(abspath $(CURDIR)/../..)
 endif
 CF_ADAPTER_BIN := $(CONSILIUM_ROOT)/bin/polypus-cf-adapter
+CHAT_SMOKE_BIN := $(dir $(BINARY))polypus-chat-smoke
+POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/google/gemma-4-26b-a4b-it
 
 IMAGE_REPO ?= xynova/polypus
 IMAGE_TAG ?= latest
@@ -28,6 +30,7 @@ help:
 	@echo "  make serve         process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 (POLYPUS_PHOENIX=0 to skip)"
 	@echo "  make serve-down    Stop this Polypus process-compose project only"
 	@echo "  make smoke         curl TTS smoke test via gateway"
+	@echo "  make smoke-chat    L1 chat transport smoke (polypus-chat-smoke)"
 	@echo "  make smoke-higgs   Higgs v2 TTS smoke (narration alternative)"
 	@echo "  make smoke-stt     TTS then STT round-trip via gateway"
 	@echo "  make smoke-all     TTS + STT smoke"
@@ -35,11 +38,15 @@ help:
 	@echo "  make test          go test ./..."
 	@echo "  make vet           go vet ./..."
 
-build: build-gateway build-cf-adapter
+build: build-gateway build-cf-adapter build-chat-smoke
 
 build-gateway:
 	@mkdir -p $(dir $(BINARY))
 	go build -o $(BINARY) ./cmd/polypus
+
+build-chat-smoke:
+	@mkdir -p $(dir $(CHAT_SMOKE_BIN))
+	go build -o $(CHAT_SMOKE_BIN) ./cmd/polypus-chat-smoke
 
 # cf-adapter is Consilium code (tool/cmd/polypus-cf-adapter). Skip when this repo is standalone.
 build-cf-adapter:
@@ -68,6 +75,9 @@ serve-down:
 smoke:
 	chmod +x scripts/smoke.sh
 	./scripts/smoke.sh
+
+smoke-chat: build-chat-smoke
+	$(CHAT_SMOKE_BIN) -model $(POLYPUS_CHAT_SMOKE_MODEL)
 
 smoke-higgs:
 	chmod +x scripts/smoke.sh

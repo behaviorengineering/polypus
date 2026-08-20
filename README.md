@@ -154,6 +154,10 @@ docker compose up phoenix              # Phoenix only: UI :6006, OTLP :4317
 
 See Consilium `docs/planned/core-infrastructure/local-tts.md` § Known stack issues (`serve_launcher.py`, transformers pin).
 
+## Operator agent (ai-copilots)
+
+Configure, smoke-test, and troubleshoot Polypus via the operator pack under `ai-copilots/`. Wiring is agent-driven: see [ai-copilots/README.md](ai-copilots/README.md) for example prompts (e.g. Cursor + macOS + Consilium monorepo).
+
 ## License
 
 Part of the Xynova Consilium ecosystem. Breach model: case narration never leaves localhost.
