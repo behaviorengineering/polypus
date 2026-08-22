@@ -10,7 +10,7 @@ else
 BINARY := $(PARENT_ROOT)/bin/polypus
 endif
 
-# Nested as providers/polypus: Consilium is two levels up (adapter lives in tool/).
+# Nested as providers/polypus: Consilium is two levels up (adapter lives in engine/).
 CONSILIUM_ROOT :=
 ifneq ($(wildcard $(abspath $(CURDIR)/../..)/stack/.env.example),)
 CONSILIUM_ROOT := $(abspath $(CURDIR)/../..)
@@ -48,13 +48,13 @@ build-chat-smoke:
 	@mkdir -p $(dir $(CHAT_SMOKE_BIN))
 	go build -o $(CHAT_SMOKE_BIN) ./cmd/polypus-chat-smoke
 
-# cf-adapter is Consilium code (tool/cmd/polypus-cf-adapter). Skip when this repo is standalone.
+# cf-adapter is Consilium code (engine/cmd/polypus-cf-adapter). Skip when this repo is standalone.
 build-cf-adapter:
 ifeq ($(CONSILIUM_ROOT),)
 	@true
 else
 	@mkdir -p $(CONSILIUM_ROOT)/bin
-	cd $(CONSILIUM_ROOT) && go build -o bin/polypus-cf-adapter ./tool/cmd/polypus-cf-adapter
+	cd $(CONSILIUM_ROOT) && go build -o bin/polypus-cf-adapter ./engine/cmd/polypus-cf-adapter
 endif
 
 install:

@@ -53,7 +53,7 @@ If nested in Consilium, also read:
 Optional code references for thinking-policy shard:
 
 - `internal/gateway/chat.go` — thinking disable/merge behavior
-- Consilium `tool/internal/intelligence/cloudrun/reasoning_transport.go` — Consilium force-off for structured XML
+- Consilium `engine/internal/intelligence/cloudrun/reasoning_transport.go` — Consilium force-off for structured XML
 
 ---
 

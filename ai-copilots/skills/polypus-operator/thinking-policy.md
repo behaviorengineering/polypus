@@ -52,4 +52,4 @@ Expect non-empty `content`. If empty, check gateway merge logic and backend resp
 ## Code references (Consilium nested repo)
 
 - Polypus: `internal/gateway/chat.go` (thinking disable/merge)
-- Consilium: `tool/internal/intelligence/cloudrun/reasoning_transport.go` (force off for structured paths)
+- Consilium: `engine/internal/intelligence/cloudrun/reasoning_transport.go` (force off for structured paths)

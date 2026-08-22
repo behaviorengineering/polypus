@@ -1,6 +1,6 @@
 # Polypus model harness (Consilium parent)
 
-The full L1/L2/L3 matrix lives in Consilium `tool/internal/stackdoctor/harness/`. Polypus standalone repo runs L1 via `make smoke-chat` only.
+The full L1/L2/L3 matrix lives in Consilium `engine/internal/stackdoctor/harness/`. Polypus standalone repo runs L1 via `make smoke-chat` only.
 
 ## Prerequisites
 
@@ -55,4 +55,4 @@ Example config: `stack/models.harness.yaml.example`. Auto-discovery reads Polypu
 
 ## Integration test gate
 
-`CONSILIUM_MODEL_HARNESS=1 go test ./tool/internal/stackdoctor/...` runs harness integration when env set.
+`CONSILIUM_MODEL_HARNESS=1 go test ./engine/internal/stackdoctor/...` runs harness integration when env set.
