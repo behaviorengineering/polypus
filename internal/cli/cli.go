@@ -33,6 +33,8 @@ flags:
   --backend URL     MLX or other OpenAI speech backend
 
 env: POLYPUS_HOST, POLYPUS_PORT, POLYPUS_BACKEND_URL, POLYPUS_MLX_HOST, POLYPUS_MLX_PORT
+     POLYPUS_OTEL, POLYPUS_OTLP_ENDPOINT, POLYPUS_FAILURE_DUMP_DIR, POLYPUS_SERVICE_NAME
+     POLYPUS_OTEL_SKIP_PATHS   # comma list; default /health; "none" traces all paths
 
 `)
 }

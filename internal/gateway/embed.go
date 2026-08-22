@@ -2,11 +2,15 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/behaviorengineering/polypus/internal/config"
 )
 
 const embedMaxBody = 8 << 20
@@ -37,20 +41,33 @@ func rewriteEmbedModel(body []byte, model string) ([]byte, error) {
 	return out, nil
 }
 
-func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, body []byte) error {
-	base := strings.TrimRight(strings.TrimSpace(backendURL), "/")
-	target := base + "/embeddings"
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(body))
+func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
+	target := embeddingsURL(backendURL)
+	ctx := r.Context()
+	if hopTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, hopTimeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if auth := r.Header.Get("Authorization"); auth != "" {
+	if backendAuth != "" {
+		req.Header.Set("Authorization", backendAuth)
+	} else if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
+	if hopTimeout > 0 {
+		req.Header.Set(config.TimeoutHeader, hopTimeout.String())
+	}
 
-	resp, err := chatProxyClient.Do(req)
+	if client == nil {
+		client = newChatProxyClient(0)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("post %s: %w", target, err)
 	}
@@ -75,4 +92,12 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 		return fmt.Errorf("write response: %w", err)
 	}
 	return nil
+}
+
+func embeddingsURL(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/embeddings"
+	}
+	return base + "/v1/embeddings"
 }

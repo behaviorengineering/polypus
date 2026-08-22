@@ -27,19 +27,38 @@ backends:
 #       - allenai/olmocr-2-7b
 #       - text-embedding-nomic-embed-text-v1.5
 
-# Optional Cloudflare loopback adapter (INFERENCE_CLOUD_CASE=1):
+# Optional Cloudflare in-process extension (INFERENCE_CLOUD_CASE=1):
 # cf_local:
-#   base_url: http://127.0.0.1:1323
+#   remote: true
+#   extension: cloudflare
+#   base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
+#   auth:
+#     bearer_env: CF_AI_API_KEY
 #   capabilities: [chat, vision, tts, stt, voices]
 #   models:
-#     sync: true   # adapter GET /v1/models → CF Model Search
+#     sync: true
 #     allow:
 #       - "@cf/zai-org/glm-4.7-flash"
-#       - "@cf/ibm-granite/granite-4.0-h-micro"
-#       - "@cf/google/gemma-4-26b-a4b-it"
-#       - "@cf/deepgram/aura-2-en"
-#       - "@cf/deepgram/nova-3"
 # Use config.cloud.yaml.example for cloud-default routing.
+
+# Case-mode breach guardrails (defaults match omission of this block).
+# policy:
+#   reject_non_loopback_backends: true
+#   require_cloud_opt_in: true
+
+# Hop timeouts (optional). Omitted keys use code defaults.
+# Client header X-Polypus-Timeout (e.g. 600s) is clamped to min..max.
+# timeouts:
+#   min: 5s
+#   max: 900s
+#   chat: 120s
+#   chat_thinking: 600s
+#   vision: 300s
+#   embed: 60s
+#   speech: 180s
+#   backends:
+#     cf_local:
+#       chat: 60s
 
 # Model routing: backend_id/downstream-model
 # Example chat: model=cf_local/@cf/zai-org/glm-4.7-flash

@@ -4,22 +4,26 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/maximhq/bifrost/core/schemas"
 )
 
 // Account implements schemas.Account for multi-backend local speech routing.
 type Account struct {
 	backends map[schemas.ModelProvider]config.BackendDef
+	timeouts config.Timeouts
 }
 
-// NewAccount returns a Bifrost account for validated local backends.
+// NewAccount returns a Bifrost account for validated local OpenAI speech backends.
 func NewAccount(cfg config.RouterConfig) *Account {
 	backends := make(map[schemas.ModelProvider]config.BackendDef, len(cfg.Backends))
 	for id, b := range cfg.Backends {
+		if b.Remote || b.IsCloudflareExtension() {
+			continue
+		}
 		backends[schemas.ModelProvider(id)] = b
 	}
-	return &Account{backends: backends}
+	return &Account{backends: backends, timeouts: cfg.Timeouts}
 }
 
 func (a *Account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
@@ -58,7 +62,7 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 	return &schemas.ProviderConfig{
 		NetworkConfig: schemas.NetworkConfig{
 			BaseURL:                        OpenAIBaseURL(b.BaseURL),
-			DefaultRequestTimeoutInSeconds: 300,
+			DefaultRequestTimeoutInSeconds: a.timeouts.SpeechSeconds(),
 			AllowPrivateNetwork:            true,
 		},
 		ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{

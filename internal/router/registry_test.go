@@ -43,6 +43,57 @@ func TestResolveTTSDefaultBackend(t *testing.T) {
 	}
 }
 
+func TestResolveTTSEmptyModelUsesDefaultBackend(t *testing.T) {
+	reg := testRegistry(t)
+	p, m, err := reg.ResolveTTS("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(p) != "mlx_local" || m != "" {
+		t.Fatalf("got %s %q", p, m)
+	}
+}
+
+func TestResolveSTTEmptyModelUsesDefaultBackend(t *testing.T) {
+	reg := testRegistry(t)
+	p, m, err := reg.ResolveSTT("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(p) != "mlx_local" || m != "" {
+		t.Fatalf("got %s %q", p, m)
+	}
+}
+
+func TestNewRegistryRejectsCloudflareWithoutAccountID(t *testing.T) {
+	t.Setenv("INFERENCE_CLOUD_CASE", "1")
+	t.Setenv("CF_AI_API_KEY", "secret")
+	cfg := config.RouterConfig{
+		DefaultTTSBackend:   "mlx_local",
+		DefaultSTTBackend:   "mlx_local",
+		DefaultProxyBackend: "mlx_local",
+		Backends: map[string]config.BackendDef{
+			"mlx_local": {
+				ID:           "mlx_local",
+				BaseURL:      "http://127.0.0.1:1322",
+				Capabilities: []config.Capability{config.CapTTS, config.CapSTT, config.CapVoices},
+			},
+			"cf_local": {
+				ID:           "cf_local",
+				Remote:       true,
+				Extension:    config.ExtensionCloudflare,
+				BaseURL:      "https://api.cloudflare.com/client/v4/accounts//ai/v1",
+				Auth:         config.BackendAuth{BearerEnv: "CF_AI_API_KEY"},
+				Capabilities: []config.Capability{config.CapChat},
+			},
+		},
+	}
+	_, err := NewRegistry(cfg)
+	if err == nil {
+		t.Fatal("expected account id validation error")
+	}
+}
+
 func TestResolveSTTPrefixBackend(t *testing.T) {
 	reg := testRegistry(t)
 	p, m, err := reg.ResolveSTT("alt_stt/whisper-large-v3")

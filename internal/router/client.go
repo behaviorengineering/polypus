@@ -3,11 +3,13 @@ package router
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 	"github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
-	"github.com/behaviorengineering/polypus/internal/config"
 )
 
 // Client wraps Bifrost for Polypus multi-backend speech routing.
@@ -67,9 +69,39 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 	if strings.TrimSpace(req.Input) == "" {
 		return nil, fmt.Errorf("input required")
 	}
-	provider, model, err := c.reg.ResolveTTS(req.Model)
+	backendID, downstream, err := c.reg.ResolveTTS(req.Model)
 	if err != nil {
 		return nil, err
+	}
+	b, ok := c.reg.Backend(string(backendID))
+	if !ok {
+		return nil, fmt.Errorf("backend %q not found", backendID)
+	}
+	if b.IsCloudflareExtension() {
+		cf, err := cloudflare.NewClient(b)
+		if err != nil {
+			return nil, err
+		}
+		model := downstream
+		if model == "" {
+			model = req.Model
+		}
+		audio, _, err := cf.Synthesize(ctx, cloudflare.SpeechRequest{
+			Model:          model,
+			Input:          req.Input,
+			Voice:          req.Voice,
+			ResponseFormat: req.ResponseFormat,
+		})
+		return audio, err
+	}
+
+	provider := backendID
+	model := downstream
+	if model == "" {
+		model = strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_MODEL"))
+	}
+	if model == "" {
+		model = strings.TrimSpace(req.Model)
 	}
 	params := &schemas.SpeechParameters{}
 	if f := strings.TrimSpace(req.ResponseFormat); f != "" {
@@ -102,9 +134,50 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	if len(req.Audio) == 0 {
 		return nil, "", fmt.Errorf("audio file required")
 	}
-	provider, model, err := c.reg.ResolveSTT(req.Model)
+	backendID, downstream, err := c.reg.ResolveSTT(req.Model)
 	if err != nil {
 		return nil, "", err
+	}
+	b, ok := c.reg.Backend(string(backendID))
+	if !ok {
+		return nil, "", fmt.Errorf("backend %q not found", backendID)
+	}
+	if b.IsCloudflareExtension() {
+		cf, err := cloudflare.NewClient(b)
+		if err != nil {
+			return nil, "", err
+		}
+		model := downstream
+		if model == "" {
+			model = req.Model
+		}
+		text, err := cf.Transcribe(ctx, cloudflare.TranscriptionRequest{
+			Model:    model,
+			Audio:    req.Audio,
+			Filename: req.Filename,
+			Language: req.Language,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		format := strings.TrimSpace(req.ResponseFormat)
+		if format == "" {
+			format = "json"
+		}
+		if schemas.IsPlainTextTranscriptionFormat(&format) {
+			return []byte(text), "text/plain; charset=utf-8", nil
+		}
+		body := fmt.Sprintf(`{"text":%q}`, text)
+		return []byte(body), "application/json", nil
+	}
+
+	provider := backendID
+	model := downstream
+	if model == "" {
+		model = strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_STT_MODEL"))
+	}
+	if model == "" {
+		model = strings.TrimSpace(req.Model)
 	}
 	filename := strings.TrimSpace(req.Filename)
 	if filename == "" {
