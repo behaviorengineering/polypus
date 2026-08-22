@@ -1,4 +1,4 @@
-.PHONY: help build build-gateway build-cf-adapter build-chat-smoke install test vet tidy mlx-sync serve serve-down smoke smoke-chat smoke-higgs smoke-stt smoke-all docker-build
+.PHONY: help build build-gateway build-chat-smoke install test vet tidy mlx-sync serve serve-down smoke smoke-chat smoke-higgs smoke-stt smoke-all docker-build
 
 include ports.env
 export POLYPUS_HOST POLYPUS_PORT POLYPUS_MLX_HOST POLYPUS_MLX_PORT
@@ -15,7 +15,7 @@ CONSILIUM_ROOT :=
 ifneq ($(wildcard $(abspath $(CURDIR)/../..)/stack/.env.example),)
 CONSILIUM_ROOT := $(abspath $(CURDIR)/../..)
 endif
-CF_ADAPTER_BIN := $(CONSILIUM_ROOT)/bin/polypus-cf-adapter
+CF_ADAPTER_BIN :=
 CHAT_SMOKE_BIN := $(dir $(BINARY))polypus-chat-smoke
 POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/google/gemma-4-26b-a4b-it
 
@@ -25,7 +25,7 @@ IMAGE_TAG ?= latest
 help:
 	@echo "polypus — local OpenAI speech gateway (TTS/STT backends behind loopback)"
 	@echo ""
-	@echo "  make build         Build $(BINARY)$(if $(CONSILIUM_ROOT), and $(CF_ADAPTER_BIN),)"
+	@echo "  make build         Build $(BINARY)"
 	@echo "  make mlx-sync      uv sync for backends/mlx"
 	@echo "  make serve         process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 (POLYPUS_PHOENIX=0 to skip)"
 	@echo "  make serve-down    Stop this Polypus process-compose project only"
@@ -38,7 +38,7 @@ help:
 	@echo "  make test          go test ./..."
 	@echo "  make vet           go vet ./..."
 
-build: build-gateway build-cf-adapter build-chat-smoke
+build: build-gateway build-chat-smoke
 
 build-gateway:
 	@mkdir -p $(dir $(BINARY))
@@ -48,15 +48,6 @@ build-chat-smoke:
 	@mkdir -p $(dir $(CHAT_SMOKE_BIN))
 	go build -o $(CHAT_SMOKE_BIN) ./cmd/polypus-chat-smoke
 
-# cf-adapter is Consilium code (engine/cmd/polypus-cf-adapter). Skip when this repo is standalone.
-build-cf-adapter:
-ifeq ($(CONSILIUM_ROOT),)
-	@true
-else
-	@mkdir -p $(CONSILIUM_ROOT)/bin
-	cd $(CONSILIUM_ROOT) && go build -o bin/polypus-cf-adapter ./engine/cmd/polypus-cf-adapter
-endif
-
 install:
 	go build -o $(shell go env GOPATH)/bin/polypus ./cmd/polypus
 
@@ -65,7 +56,7 @@ mlx-sync:
 	./backends/mlx/scripts/sync.sh
 
 serve: build
-	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-cf-adapter.sh scripts/pc-phoenix.sh
+	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-phoenix.sh
 	./scripts/pc-up.sh
 
 serve-down:

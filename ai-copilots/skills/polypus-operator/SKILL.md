@@ -26,7 +26,7 @@ description: >-
 
 Detached (scripts only): `./scripts/pc-up.sh -D` (Polypus) or `./providers/polypus/scripts/pc-up.sh -D` (Consilium).
 
-**MUST NOT** start `bin/polypus`, MLX, or cf-adapter in ad-hoc Cursor shells.
+**MUST NOT** start `bin/polypus` or MLX in ad-hoc Cursor shells.
 
 ## Decision flows
 
@@ -82,7 +82,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness. Check Phoenix http
 
 ### 8. cf_local down
 
-- Probe: `curl -sf http://127.0.0.1:1323/v1/models | jq .`
+- Probe: `curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq '.data | length'`
 - Needs: `INFERENCE_CLOUD_CASE=1`, `CF_AI_API_KEY`, `CF_ACCOUNT_ID` in Consilium `stack/.env`.
 
 ### 9. lm_studio down

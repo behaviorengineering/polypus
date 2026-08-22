@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -55,5 +57,37 @@ func TestChatBodyWantsThinkingKwargs(t *testing.T) {
 	off := []byte(`{"model":"x","enable_thinking":false}`)
 	if chatBodyWantsThinking(off) {
 		t.Fatal("expected thinking off")
+	}
+}
+
+func TestProxyChatCompletionsStream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			t.Fatalf("accept: %q", r.Header.Get("Accept"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"test","messages":[],"stream":true}`,
+	))
+	body := []byte(`{"model":"test","messages":[],"stream":true}`)
+	err := proxyChatCompletions(rec, req, upstream.URL, body, upstream.Client(), 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "data: [DONE]") {
+		t.Fatalf("body: %q", rec.Body.String())
 	}
 }

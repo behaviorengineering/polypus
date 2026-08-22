@@ -8,10 +8,11 @@ Paths relative to Polypus repo root unless noted.
 |---------|---------|------|
 | Gateway | `127.0.0.1:1320` | Public OpenAI `/v1/*`; `POLYPUS_BASE_URL` |
 | MLX | `127.0.0.1:1322` | Local TTS/STT (Apple Silicon) |
-| cf-adapter | `127.0.0.1:1323` | Cloudflare Workers AI shim |
 | LM Studio | `127.0.0.1:1234` | External; chat, vision, embed |
 | Phoenix UI | `127.0.0.1:6006` | Trace viewer |
 | Phoenix OTLP | `127.0.0.1:4317` | gRPC collector |
+
+Cloudflare (`cf_local`) has no separate port; it runs in-process when `INFERENCE_CLOUD_CASE=1`.
 
 ## Environment (common)
 
@@ -23,7 +24,7 @@ POLYPUS_MLX_HOST=127.0.0.1
 POLYPUS_MLX_PORT=1322
 POLYPUS_PHOENIX=1
 POLYPUS_OTEL=1
-INFERENCE_CLOUD_CASE=1   # Consilium stack/.env; starts cf-adapter
+INFERENCE_CLOUD_CASE=1   # Consilium stack/.env; enables cf_local remote backend
 CF_AI_API_KEY=...
 CF_ACCOUNT_ID=...
 ```
@@ -53,7 +54,11 @@ timeouts:
 
 backends:
   cf_local:
-    base_url: http://127.0.0.1:1323
+    remote: true
+    extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
+    auth:
+      bearer_env: CF_AI_API_KEY
     capabilities: [chat, vision, tts, stt, voices]
     models:
       sync: true
@@ -65,6 +70,8 @@ backends:
       sync: true
       allow: [...]
 ```
+
+When `INFERENCE_CLOUD_CASE` is unset, remote backends are stripped at load time so local-only dev still works.
 
 Client header `X-Polypus-Timeout` (duration or seconds) clamps to `timeouts.min`..`timeouts.max` (5s to 900s).
 
@@ -98,7 +105,14 @@ Router picks: (1) model prefix `backend_id/...`, else (2) `default_*_backend`.
 
 ## Policy
 
-- `reject_non_loopback_backends: true` in case mode.
-- `require_cloud_opt_in: true` for `cf_local` when cloud profile active.
+Optional `policy:` block (defaults shown):
+
+```yaml
+policy:
+  reject_non_loopback_backends: true   # local backends must bind loopback
+  require_cloud_opt_in: true           # remote backends need INFERENCE_CLOUD_CASE=1
+```
+
+When `require_cloud_opt_in: false`, remote backends stay loaded without `INFERENCE_CLOUD_CASE=1` (non-case / dev profiles only). When `reject_non_loopback_backends: false`, local backends may use LAN URLs; direct OpenAI/Anthropic hosts remain blocked.
 
 Consilium `stack/ai.yaml` points at gateway only; backend table stays in Polypus.

@@ -132,7 +132,7 @@ description: >-
 | **Full matrix** | Consilium only: `make model-harness`, `bin/stack-doctor model-harness --discover`, `--tier L1\|L2\|L3 --model '...'` |
 | **model_not_allowed** | Model id missing from allow-list or wrong prefix (`cf_local/`, `lm_studio/`) |
 | **Empty content / XML fail** | Load `thinking-policy.md`; run L2 harness; check Phoenix `:6006` and `logs/inference-failures/` |
-| **cf_local down** | Adapter `:1323`, `INFERENCE_CLOUD_CASE=1`, `CF_AI_API_KEY`, `CF_ACCOUNT_ID` |
+| **cf_local down** | In-process extension, `INFERENCE_CLOUD_CASE=1`, `CF_AI_API_KEY`, `CF_ACCOUNT_ID` |
 | **lm_studio down** | External `:1234`; user starts LM Studio; probe `curl -sf http://127.0.0.1:1234/v1/models` |
 | **stack/ai.yaml drift** | Consilium: `bin/stack-doctor diagnose`; model id must appear in Polypus allow-list |
 
@@ -144,7 +144,7 @@ Link to shards (one level deep only). **MUST NOT** paste full router.md into SKI
 
 ### `config-reference.md`
 
-- Ports table: `:1320` gateway, `:1322` MLX, `:1323` cf-adapter, `:1234` LM Studio, `:6006` Phoenix, `:4317` OTLP
+- Ports table: `:1320` gateway, `:1322` MLX, `:1234` LM Studio, `:6006` Phoenix, `:4317` OTLP (cf_local in-process when cloud opt-in)
 - Key env: `POLYPUS_BASE_URL`, `INFERENCE_CLOUD_CASE`, `POLYPUS_PHOENIX`, `POLYPUS_OTEL`
 - `config.yaml` fields: `default_*_backend`, `backends.*.models.allow`, `timeouts`
 - Inventory vs enabled: `/v1/models` vs `?view=inventory`
@@ -159,7 +159,7 @@ Symptom → cause → fix table. Include at minimum:
 | `model_not_allowed` | Not in allow-list | Add to `config.yaml` or use prefixed id |
 | Empty `message.content` | Thinking on; answer in `reasoning_content` | See thinking-policy; Polypus merges on success |
 | Chat routed to MLX | Wrong default backend or missing prefix | Fix `default_chat_backend` |
-| cf-adapter exit | Missing opt-in or keys | `INFERENCE_CLOUD_CASE=1`, CF env |
+| cf_local auth error | Missing opt-in or keys | `INFERENCE_CLOUD_CASE=1`, CF env |
 | Timeout | Hop too short | `timeouts.chat_thinking`, `X-Polypus-Timeout` |
 | Consilium job fails, smoke passes | L3 fixture or stack/ai.yaml model | L3 harness; diagnose |
 

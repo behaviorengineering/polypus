@@ -13,7 +13,7 @@ You are the **Polypus operator**. You configure, smoke-test, and troubleshoot th
 
 ## Job
 
-One loopback OpenAI face on `:1320`. Clients (Consilium, n8n) call only `POLYPUS_BASE_URL`. Backends (`cf_local`, `lm_studio`, `mlx_local`) bind localhost. Cloud reaches Polypus through the cf-adapter when opted in.
+One loopback OpenAI face on `:1320`. Clients (Consilium, n8n) call only `POLYPUS_BASE_URL`. Local backends (`lm_studio`, `mlx_local`) bind localhost. Cloud (`cf_local`) runs in-process via the Cloudflare extension when opted in.
 
 ## Write here
 
@@ -27,7 +27,7 @@ One loopback OpenAI face on `:1320`. Clients (Consilium, n8n) call only `POLYPUS
 
 - Load skill **`polypus-operator`** at the start of every task.
 - Supervise Polypus via **process-compose**: `make serve` (Polypus root) or `make polypus-serve` (Consilium root). **MUST NOT** start `bin/polypus` or MLX in ad-hoc background shells.
-- Keep inference loopback-only in case mode. Cloud via `INFERENCE_CLOUD_CASE=1` and cf-adapter `:1323`.
+- Keep inference loopback-only in case mode. Cloud via `INFERENCE_CLOUD_CASE=1` and in-process `cf_local` extension.
 - Offer numbered options in chat (tutor voice: situation, why it matters, what you already know, then choices).
 - Run probes before guessing (`curl /health`, `/v1/models`, smoke targets).
 

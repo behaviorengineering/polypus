@@ -89,11 +89,18 @@ func chatBodyHasVision(body []byte) bool {
 	return false
 }
 
-func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration) error {
+// chatCompletionsURL joins base (with or without trailing /v1) to the OpenAI chat path.
+func chatCompletionsURL(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	base = strings.TrimSuffix(base, "/v1")
+	return base + "/v1/chat/completions"
+}
+
+func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
 	if patched, ok := disableChatThinkingInRequest(body); ok {
 		body = patched
 	}
-	target := strings.TrimRight(strings.TrimSpace(backendURL), "/") + "/v1/chat/completions"
+	target := chatCompletionsURL(backendURL)
 	streaming := chatBodyIsStream(body)
 	observability.RecordProxyIO(r.Context(), target, streaming, 0, -1)
 	ctx := r.Context()
@@ -107,8 +114,14 @@ func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL str
 		return fmt.Errorf("request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if auth := r.Header.Get("Authorization"); auth != "" {
+	if streaming {
+		req.Header.Set("Accept", "text/event-stream, application/json")
+	} else {
+		req.Header.Set("Accept", "application/json")
+	}
+	if backendAuth != "" {
+		req.Header.Set("Authorization", backendAuth)
+	} else if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
 	if hopTimeout > 0 {
@@ -124,6 +137,10 @@ func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL str
 	}
 	defer resp.Body.Close()
 
+	if streaming {
+		return writeChatStreamResponse(w, r, resp, target, streaming)
+	}
+
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, chatMaxBody))
 	if err != nil {
 		observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, -1)
@@ -136,7 +153,32 @@ func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL str
 		}
 	}
 
-	for k, vals := range resp.Header {
+	copyChatResponseHeaders(w, resp.Header)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(raw)))
+	w.WriteHeader(resp.StatusCode)
+	_, err = w.Write(raw)
+	if err != nil {
+		return fmt.Errorf("write response: %w", err)
+	}
+	return nil
+}
+
+func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string, streaming bool) error {
+	copyChatResponseHeaders(w, resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	n, err := io.Copy(w, io.LimitReader(resp.Body, chatMaxBody))
+	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, int(n))
+	if err != nil {
+		return fmt.Errorf("write stream: %w", err)
+	}
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return nil
+}
+
+func copyChatResponseHeaders(w http.ResponseWriter, header http.Header) {
+	for k, vals := range header {
 		if len(vals) == 0 {
 			continue
 		}
@@ -149,13 +191,6 @@ func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL str
 			w.Header().Add(k, v)
 		}
 	}
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(raw)))
-	w.WriteHeader(resp.StatusCode)
-	_, err = w.Write(raw)
-	if err != nil {
-		return fmt.Errorf("write response: %w", err)
-	}
-	return nil
 }
 
 // disableChatThinkingInRequest asks CF/OpenAI-compat backends not to burn tokens on reasoning

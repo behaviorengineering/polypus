@@ -38,8 +38,6 @@ export POLYPUS_HOST="${POLYPUS_HOST:-127.0.0.1}"
 export POLYPUS_PORT="${POLYPUS_PORT:-1320}"
 export POLYPUS_MLX_HOST="${POLYPUS_MLX_HOST:-127.0.0.1}"
 export POLYPUS_MLX_PORT="${POLYPUS_MLX_PORT:-1322}"
-export POLYPUS_CF_HOST="${POLYPUS_CF_HOST:-127.0.0.1}"
-export POLYPUS_CF_PORT="${POLYPUS_CF_PORT:-1323}"
 export INFERENCE_CLOUD_CASE="${INFERENCE_CLOUD_CASE:-0}"
 export POLYPUS_CONFIG="${POLYPUS_CONFIG:-}"
 export POLYPUS_BACKEND_URL="${POLYPUS_BACKEND_URL:-}"
@@ -60,15 +58,6 @@ export POLYPUS_BIN
 
 NAMESPACES=(core)
 if [[ "$INFERENCE_CLOUD_CASE" == "1" ]]; then
-  if [[ -z "$CONSILIUM_ROOT" ]]; then
-    echo "INFERENCE_CLOUD_CASE=1 needs a Consilium repo for polypus-cf-adapter" >&2
-    exit 1
-  fi
-  if [[ ! -x "$CONSILIUM_ROOT/bin/polypus-cf-adapter" ]]; then
-    echo "missing bin/polypus-cf-adapter; run: make build (Polypus or Consilium: $CONSILIUM_ROOT)" >&2
-    exit 1
-  fi
-  NAMESPACES+=(cloud)
   if [[ -z "$POLYPUS_CONFIG" ]]; then
     if [[ -f "$POLYPUS_DIR/config.yaml" ]]; then
       export POLYPUS_CONFIG="$POLYPUS_DIR/config.yaml"

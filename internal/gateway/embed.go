@@ -41,9 +41,8 @@ func rewriteEmbedModel(body []byte, model string) ([]byte, error) {
 	return out, nil
 }
 
-func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration) error {
-	base := strings.TrimRight(strings.TrimSpace(backendURL), "/")
-	target := base + "/embeddings"
+func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
+	target := embeddingsURL(backendURL)
 	ctx := r.Context()
 	if hopTimeout > 0 {
 		var cancel context.CancelFunc
@@ -56,7 +55,9 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if auth := r.Header.Get("Authorization"); auth != "" {
+	if backendAuth != "" {
+		req.Header.Set("Authorization", backendAuth)
+	} else if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
 	if hopTimeout > 0 {
@@ -91,4 +92,12 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 		return fmt.Errorf("write response: %w", err)
 	}
 	return nil
+}
+
+func embeddingsURL(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/embeddings"
+	}
+	return base + "/v1/embeddings"
 }

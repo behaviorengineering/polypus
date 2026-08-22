@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/router"
 )
@@ -137,6 +138,12 @@ func (h *Handler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "polypus: backend not found", http.StatusBadGateway)
 		return
 	}
+	backend, _ := reg.Backend(backendID)
+	backendAuth, authErr := mustBackendAuth(backend)
+	if authErr != nil {
+		http.Error(w, authErr.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	rewritten, err := rewriteChatModel(body, downstream)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -146,7 +153,7 @@ func (h *Handler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 	defer func() { observability.EndSpan(span, err) }()
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, vision, chatBodyWantsThinking(body))
-	if err = proxyChatCompletions(w, r, backendURL, rewritten, h.client, hop); err != nil {
+	if err = proxyChatCompletions(w, r, backendURL, rewritten, h.client, hop, backendAuth); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -184,6 +191,12 @@ func (h *Handler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "polypus: backend not found", http.StatusBadGateway)
 		return
 	}
+	backend, _ := reg.Backend(backendID)
+	backendAuth, authErr := mustBackendAuth(backend)
+	if authErr != nil {
+		http.Error(w, authErr.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	rewritten, err := rewriteEmbedModel(body, downstream)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -193,7 +206,7 @@ func (h *Handler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	defer func() { observability.EndSpan(span, err) }()
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveEmbed(r.Header.Get(config.TimeoutHeader))
-	if err = proxyEmbeddings(w, r, backendURL, rewritten, h.client, hop); err != nil {
+	if err = proxyEmbeddings(w, r, backendURL, rewritten, h.client, hop, backendAuth); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -220,7 +233,22 @@ func (h *Handler) serveHealth(w http.ResponseWriter, r *http.Request) {
 	for _, id := range cfg.BackendIDs() {
 		b := cfg.Backends[id]
 		entry := healthBackend{ID: id, URL: b.BaseURL}
-		if err := pingBackend(r, b.BaseURL); err != nil {
+		if b.Remote {
+			if b.IsCloudflareExtension() {
+				cf, err := cloudflare.NewClient(b)
+				if err != nil {
+					entry.Error = err.Error()
+				} else if err := cf.Ping(r.Context()); err != nil {
+					entry.Error = err.Error()
+				} else {
+					entry.OK = true
+				}
+			} else if _, err := b.Auth.ResolveBearerToken(); err != nil {
+				entry.Error = err.Error()
+			} else {
+				entry.OK = true
+			}
+		} else if err := pingBackend(r, b.BaseURL); err != nil {
 			entry.Error = err.Error()
 		} else {
 			entry.OK = true
@@ -260,7 +288,7 @@ func (h *Handler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	backendID, downstream, resolveErr := h.router.Registry().ResolveTTS(req.Model)
-	if resolveErr == nil {
+	if resolveErr == nil && strings.TrimSpace(req.Model) != "" {
 		if !h.ensureModelAllowed(string(backendID), req.Model) {
 			writeModelNotAllowed(w, req.Model)
 			return
@@ -314,7 +342,7 @@ func (h *Handler) serveTranscription(w http.ResponseWriter, r *http.Request) {
 	}
 	sttModel := r.FormValue("model")
 	backendID, downstream, resolveErr := h.router.Registry().ResolveSTT(sttModel)
-	if resolveErr == nil {
+	if resolveErr == nil && strings.TrimSpace(sttModel) != "" {
 		if !h.ensureModelAllowed(string(backendID), sttModel) {
 			writeModelNotAllowed(w, sttModel)
 			return

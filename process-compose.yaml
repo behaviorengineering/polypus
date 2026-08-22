@@ -1,7 +1,7 @@
 # Polypus gateway + backends (independent of Consilium make serve).
 # Start: make serve  (or: scripts/pc-up.sh)
 # Stop:  make serve-down
-# Namespaces: pc-up.sh selects core plus mlx, cloud, and obs (Phoenix).
+# Namespaces: pc-up.sh selects core plus mlx and obs (Phoenix).
 
 version: "0.5"
 
@@ -15,8 +15,6 @@ environment:
   - "POLYPUS_PORT=${POLYPUS_PORT}"
   - "POLYPUS_MLX_HOST=${POLYPUS_MLX_HOST}"
   - "POLYPUS_MLX_PORT=${POLYPUS_MLX_PORT}"
-  - "POLYPUS_CF_HOST=${POLYPUS_CF_HOST}"
-  - "POLYPUS_CF_PORT=${POLYPUS_CF_PORT}"
   - "POLYPUS_BACKEND_URL=${POLYPUS_BACKEND_URL}"
   - "POLYPUS_CONFIG=${POLYPUS_CONFIG}"
   - "POLYPUS_ROOT=${POLYPUS_ROOT}"
@@ -48,24 +46,6 @@ processes:
     shutdown:
       signal: 15
       timeout_seconds: 30
-
-  cf-adapter:
-    namespace: cloud
-    command: "${POLYPUS_DIR}/scripts/pc-cf-adapter.sh"
-    working_dir: "${POLYPUS_DIR}"
-    readiness_probe:
-      http_get:
-        host: 127.0.0.1
-        port: 1323
-        path: /health
-      period_seconds: 5
-      failure_threshold: 12
-    availability:
-      restart: on_failure
-      backoff_seconds: 2
-    shutdown:
-      signal: 15
-      timeout_seconds: 10
 
   phoenix:
     namespace: obs

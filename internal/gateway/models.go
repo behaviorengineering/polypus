@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 )
 
 const modelsListTimeout = 5 * time.Second
@@ -88,20 +89,20 @@ func (c *modelsInventoryCache) loadDisk() {
 	}
 }
 
-func (c *modelsInventoryCache) persist() {
+func (c *modelsInventoryCache) persist() error {
 	if c == nil || c.path == "" {
-		return
+		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
-		return
+		return err
 	}
 	raw, err := json.MarshalIndent(c.byKey, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
-	_ = os.WriteFile(c.path, raw, 0o644)
+	return os.WriteFile(c.path, raw, 0o644)
 }
 
 func (c *modelsInventoryCache) get(key string) ([]openaiModel, bool) {
@@ -129,7 +130,8 @@ func (c *modelsInventoryCache) put(key string, models []openaiModel) {
 	c.mu.Lock()
 	c.byKey[key] = modelsCacheEntry{At: time.Now(), Models: append([]openaiModel(nil), models...)}
 	c.mu.Unlock()
-	c.persist()
+	// Best-effort disk cache; in-memory entry remains when persist fails.
+	_ = c.persist()
 }
 
 func inventoryView(r *http.Request) bool {
@@ -270,10 +272,27 @@ func (h *Handler) collectModels(r *http.Request, asInventory bool) []openaiModel
 
 func (h *Handler) inventoryForBackend(r *http.Request, b config.BackendDef) []openaiModel {
 	modelsCfg := b.Models
+	if b.IsCloudflareExtension() && (modelsCfg == nil || modelsCfg.ShouldSync()) {
+		if live := h.cloudflareInventory(r, b); len(live) > 0 {
+			if h.invCache != nil {
+				h.invCache.put(b.ID, live)
+			}
+			return live
+		}
+		if h.invCache != nil {
+			if cached, ok := h.invCache.get(b.ID); ok {
+				return cached
+			}
+		}
+		if modelsCfg != nil && modelsCfg.HasAllowGate() {
+			return syntheticModels(b.ID, modelsCfg.Allow)
+		}
+		return nil
+	}
 	if modelsCfg != nil && !modelsCfg.ShouldSync() {
 		return syntheticModels(b.ID, modelsCfg.Allow)
 	}
-	live := fetchBackendModels(r, b.BaseURL, b.ID)
+	live := fetchBackendModels(r, b)
 	if len(live) > 0 {
 		if h.invCache != nil {
 			h.invCache.put(b.ID, live)
@@ -307,15 +326,35 @@ func syntheticModels(backendID string, allow []string) []openaiModel {
 	return out
 }
 
-func fetchBackendModels(r *http.Request, baseURL, backendID string) []openaiModel {
-	target := openAIModelsURL(baseURL)
+func (h *Handler) cloudflareInventory(r *http.Request, b config.BackendDef) []openaiModel {
+	client, err := cloudflare.NewClient(b)
+	if err != nil {
+		return nil
+	}
+	list := client.ListModels(r.Context())
+	out := make([]openaiModel, 0, len(list.Data))
+	for _, m := range list.Data {
+		out = append(out, openaiModel{
+			ID:      prefixModelID(b.ID, m.ID),
+			Object:  "model",
+			Created: m.Created,
+			OwnedBy: firstNonEmpty(m.OwnedBy, b.ID),
+		})
+	}
+	return out
+}
+
+func fetchBackendModels(r *http.Request, b config.BackendDef) []openaiModel {
+	target := openAIModelsURL(b.BaseURL)
 	ctx := r.Context()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil
 	}
 	req.Header.Set("Accept", "application/json")
-	if auth := r.Header.Get("Authorization"); auth != "" {
+	if auth, err := bearerAuthHeader(b); err == nil && auth != "" {
+		req.Header.Set("Authorization", auth)
+	} else if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
 	client := &http.Client{Timeout: modelsListTimeout}
@@ -332,7 +371,7 @@ func fetchBackendModels(r *http.Request, baseURL, backendID string) []openaiMode
 	if err != nil {
 		return nil
 	}
-	return rewriteBackendModelList(raw, backendID)
+	return rewriteBackendModelList(raw, b.ID)
 }
 
 func rewriteBackendModelList(raw []byte, backendID string) []openaiModel {

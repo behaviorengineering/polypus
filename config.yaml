@@ -1,5 +1,5 @@
-# Polypus hybrid router (local): Cloudflare chat via cf adapter + LM Studio for OCR/embeddings.
-# INFERENCE_CLOUD_CASE=1 in stack/.env starts polypus-cf-adapter :1323.
+# Polypus hybrid router (local): Cloudflare chat via in-process extension + LM Studio for OCR/embeddings.
+# INFERENCE_CLOUD_CASE=1 in stack/.env enables cf_local remote backend.
 # Consilium calls Polypus gateway :1320 only.
 #
 # models.allow is the enable list (GET /v1/models + inference POSTs).
@@ -24,9 +24,17 @@ timeouts:
     cf_local:
       chat: 60s
 
+policy:
+  reject_non_loopback_backends: true
+  require_cloud_opt_in: true
+
 backends:
   cf_local:
-    base_url: http://127.0.0.1:1323
+    remote: true
+    extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
+    auth:
+      bearer_env: CF_AI_API_KEY
     capabilities: [chat, vision, tts, stt, voices]
     models:
       sync: true

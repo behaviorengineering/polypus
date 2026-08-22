@@ -14,10 +14,13 @@ type Account struct {
 	timeouts config.Timeouts
 }
 
-// NewAccount returns a Bifrost account for validated local backends.
+// NewAccount returns a Bifrost account for validated local OpenAI speech backends.
 func NewAccount(cfg config.RouterConfig) *Account {
 	backends := make(map[schemas.ModelProvider]config.BackendDef, len(cfg.Backends))
 	for id, b := range cfg.Backends {
+		if b.Remote || b.IsCloudflareExtension() {
+			continue
+		}
 		backends[schemas.ModelProvider(id)] = b
 	}
 	return &Account{backends: backends, timeouts: cfg.Timeouts}
