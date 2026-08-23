@@ -1,0 +1,58 @@
+# Standard Go quality jobs for behaviorengineering GitLab modules.
+# Include from .gitlab-ci.yml: local: .gitlab/ci/golang-quality.yml
+
+.go-cache:
+  cache:
+    key:
+      files:
+        - go.sum
+    paths:
+      - .gomodcache/
+      - .gocache/
+
+.go-base:
+  stage: quality
+  image: golang:${GO_VERSION}-bookworm
+  variables:
+    GOPATH: $CI_PROJECT_DIR/.go
+    GOMODCACHE: $CI_PROJECT_DIR/.gomodcache
+    GOCACHE: $CI_PROJECT_DIR/.gocache
+  extends: .go-cache
+  before_script:
+    - go version
+
+go:mod:
+  extends: .go-base
+  script:
+    - go mod download
+    - go mod verify
+    - cp go.mod go.mod.bak && cp go.sum go.sum.bak
+    - go mod tidy
+    - diff -u go.mod.bak go.mod
+    - diff -u go.sum.bak go.sum
+
+go:fmt:
+  extends: .go-base
+  script:
+    - |
+      unformatted=$(gofmt -l .)
+      if [ -n "$unformatted" ]; then
+        echo "gofmt needed:"
+        echo "$unformatted"
+        exit 1
+      fi
+
+go:vet:
+  extends: .go-base
+  script:
+    - go vet ./...
+
+go:test:
+  extends: .go-base
+  script:
+    - go test -race -count=1 ./...
+
+go:build:
+  extends: .go-base
+  script:
+    - go build ./...

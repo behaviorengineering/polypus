@@ -41,7 +41,7 @@ func TestLoadConfigDisabled(t *testing.T) {
 
 func TestParseSkipPaths(t *testing.T) {
 	got := parseSkipPaths("")
-	if len(got) != 1 || got[0] != "/health" {
+	if len(got) != 2 || got[0] != "/health" || got[1] != "/health/backends" {
 		t.Fatalf("default skip=%v", got)
 	}
 	got = parseSkipPaths("health, /ready/")

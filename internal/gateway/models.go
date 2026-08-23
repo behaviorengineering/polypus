@@ -35,10 +35,10 @@ type openaiModelList struct {
 }
 
 type modelsInventoryCache struct {
-	mu      sync.Mutex
-	byKey   map[string]modelsCacheEntry
-	ttl     time.Duration
-	path    string
+	mu    sync.Mutex
+	byKey map[string]modelsCacheEntry
+	ttl   time.Duration
+	path  string
 }
 
 type modelsCacheEntry struct {
