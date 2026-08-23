@@ -2,29 +2,10 @@
 # Round-trip smoke: TTS via gateway, then STT on the same audio file.
 set -euo pipefail
 
-POLYPUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PARENT_ROOT="$(cd "$POLYPUS_DIR/.." && pwd)"
-
-if [[ -f "$PARENT_ROOT/stack/.env.example" ]]; then
-  CONSILIUM_ROOT="$PARENT_ROOT"
-else
-  CONSILIUM_ROOT=""
-fi
-
-if [[ -n "$CONSILIUM_ROOT" && -f "$CONSILIUM_ROOT/stack/.env" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "$CONSILIUM_ROOT/stack/.env"
-  set +a
-elif [[ -f "$POLYPUS_DIR/.env" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "$POLYPUS_DIR/.env"
-  set +a
-fi
-
-# shellcheck source=/dev/null
-source "$POLYPUS_DIR/ports.env"
+# shellcheck source=scripts/smoke-env.sh
+source "$(cd "$(dirname "$0")" && pwd)/smoke-env.sh"
+load_polypus_smoke_env
+apply_smoke_speech_defaults
 
 HOST="${POLYPUS_HOST:-127.0.0.1}"
 PORT="${POLYPUS_PORT:-1320}"

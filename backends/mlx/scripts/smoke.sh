@@ -16,7 +16,7 @@ PORT="${TTS_PORT:-1320}"
 VOICE="${TTS_VOICE:-vivian}"
 MODEL="${TTS_MODEL:-mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16}"
 FORMAT="${TTS_SMOKE_FORMAT:-mp3}"
-OUT="${TTS_SMOKE_OUT:-/tmp/consilium-tts-smoke.${FORMAT}}"
+OUT="${TTS_SMOKE_OUT:-/tmp/polypus-tts-smoke.${FORMAT}}"
 TEXT="${TTS_SMOKE_TEXT:-Here is what the file shows for this episode.}"
 
 URL="http://${HOST}:${PORT}/v1/audio/speech"

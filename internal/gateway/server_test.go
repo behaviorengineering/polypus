@@ -344,6 +344,29 @@ func TestHealthOKWhenBackendUp(t *testing.T) {
 	}
 }
 
+func TestHealthOKWhenBackendDown(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(backend.Close)
+
+	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %q", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Fatalf("health must not probe upstreams: %q", rec.Body.String())
+	}
+}
+
 func TestBifrostTranscriptionPath(t *testing.T) {
 	var gotPath string
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -619,6 +642,62 @@ backends:
 	}
 }
 
+func TestVisionRoutesImageOnly(t *testing.T) {
+	var gotBody []byte
+	cf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(cf.Close)
+
+	dir := t.TempDir()
+	content := fmt.Sprintf(`
+default_chat_backend: cf_local
+default_vision_backend: cf_local
+default_tts_backend: mlx_local
+default_stt_backend: mlx_local
+default_proxy_backend: mlx_local
+backends:
+  mlx_local:
+    base_url: http://127.0.0.1:1322
+    capabilities: [tts, stt, voices]
+  cf_local:
+    base_url: %s
+    capabilities: [chat, vision]
+`, cf.URL)
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+
+	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"@cf/google/gemma-4-26b-a4b-it","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d body %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(string(gotBody), `"type":"image_url"`) {
+		t.Fatalf("forwarded body missing image_url: %q", gotBody)
+	}
+	if strings.Contains(string(gotBody), `"type":"text"`) {
+		t.Fatalf("image-only request should not invent a text part: %q", gotBody)
+	}
+	if !strings.Contains(string(gotBody), "gemma-4-26b") {
+		t.Fatalf("body: %q", gotBody)
+	}
+}
+
 func TestEmbedNotProxiedToMLXWhenUnconfigured(t *testing.T) {
 	mlx := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mlx must not receive embed", http.StatusTeapot)
@@ -695,5 +774,126 @@ backends:
 	}
 	if strings.Contains(string(gotBody), "lm_studio/") {
 		t.Fatalf("backend prefix should be stripped: %q", gotBody)
+	}
+}
+
+func TestCloudflareExtensionGatewayInventory(t *testing.T) {
+	mlx := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(mlx.Close)
+
+	cf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/ai/models/search"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"success": true,
+				"result": [{"name": "@cf/zai-org/glm-4.7-flash"}],
+				"result_info": {"page": 1, "total_pages": 1}
+			}`))
+		case r.URL.Path == "/client/v4/accounts/acct-test/ai/v1/chat/completions":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(cf.Close)
+
+	dir := t.TempDir()
+	content := fmt.Sprintf(`
+default_chat_backend: cf_local
+default_vision_backend: cf_local
+default_tts_backend: mlx_local
+default_stt_backend: mlx_local
+default_proxy_backend: mlx_local
+backends:
+  mlx_local:
+    base_url: %s
+    capabilities: [tts, stt, voices]
+  cf_local:
+    remote: true
+    extension: cloudflare
+    base_url: %s/client/v4/accounts/acct-test/ai/v1
+    auth:
+      bearer_env: CF_AI_API_KEY
+    capabilities: [chat, vision]
+    models:
+      allow:
+        - "@cf/zai-org/glm-4.7-flash"
+`, mlx.URL, cf.URL)
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+	t.Setenv("INFERENCE_CLOUD_CASE", "1")
+	t.Setenv("CF_AI_API_KEY", "secret")
+
+	handler, err := NewHandler(config.ServeOptions{BackendURL: mlx.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models?view=inventory", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inventory status: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "cf_local/@cf/zai-org/glm-4.7-flash") {
+		t.Fatalf("inventory body: %s", rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"cf_local/@cf/zai-org/glm-4.7-flash","messages":[{"role":"user","content":"hi"}]}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat status: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"id":"cf_local"`) {
+		t.Fatalf("health body: %s", rec.Body.String())
+	}
+}
+
+func TestSpeechEmptyModelUsesDefaultBackend(t *testing.T) {
+	var gotPath string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "audio/mp3")
+		_, _ = w.Write([]byte("fake-audio"))
+	}))
+	t.Cleanup(backend.Close)
+
+	t.Setenv("POLYPUS_DEFAULT_MODEL", "tts-test")
+	opts := config.ServeOptions{BackendURL: backend.URL}
+	handler, err := NewHandler(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(
+		`{"input":"hello","voice":"vivian","response_format":"mp3"}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %q", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v1/audio/speech" {
+		t.Fatalf("backend path: got %q", gotPath)
 	}
 }

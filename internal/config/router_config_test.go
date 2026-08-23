@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadRouterYAMLModelsAllow(t *testing.T) {
@@ -99,6 +100,9 @@ func TestDefaultRouterFromEnv(t *testing.T) {
 	if b.BaseURL != "http://127.0.0.1:1322" {
 		t.Fatalf("url: %q", b.BaseURL)
 	}
+	if cfg.Timeouts.Chat != 120*time.Second || cfg.Timeouts.Max != 900*time.Second {
+		t.Fatalf("default timeouts: %+v", cfg.Timeouts)
+	}
 }
 
 func TestLoadRouterYAML(t *testing.T) {
@@ -129,5 +133,41 @@ backends:
 	}
 	if len(cfg.Backends) != 2 {
 		t.Fatalf("backends: %d", len(cfg.Backends))
+	}
+	if cfg.Timeouts.Chat != 120*time.Second {
+		t.Fatalf("yaml omitted timeouts should default chat: %s", cfg.Timeouts.Chat)
+	}
+}
+
+func TestLoadRouterYAMLTimeouts(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+default_tts_backend: mlx_local
+default_stt_backend: mlx_local
+default_proxy_backend: mlx_local
+timeouts:
+  chat: 90s
+  backends:
+    cf_local:
+      chat: 30s
+backends:
+  mlx_local:
+    base_url: http://127.0.0.1:1322
+    capabilities: [tts, stt, voices]
+`
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+	cfg, err := LoadRouterConfig(ServeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Timeouts.Chat != 90*time.Second {
+		t.Fatalf("chat: %s", cfg.Timeouts.Chat)
+	}
+	if cfg.Timeouts.ResolveChat("", "cf_local", false, false) != 30*time.Second {
+		t.Fatalf("cf chat: %s", cfg.Timeouts.ResolveChat("", "cf_local", false, false))
 	}
 }

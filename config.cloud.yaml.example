@@ -1,5 +1,5 @@
-# Polypus router: Cloudflare Workers AI via loopback cf adapter (:1323).
-# Use when INFERENCE_CLOUD_CASE=1. Consilium still calls Polypus gateway :1320 only.
+# Polypus router: Cloudflare Workers AI via in-process extension.
+# Use when INFERENCE_CLOUD_CASE=1. Clients call Polypus gateway :1320 only.
 # Copy to providers/polypus/config.yaml or set POLYPUS_CONFIG.
 
 default_tts_backend: cf_local
@@ -8,9 +8,25 @@ default_proxy_backend: cf_local
 default_chat_backend: cf_local
 default_vision_backend: cf_local
 
+timeouts:
+  min: 5s
+  max: 900s
+  chat: 120s
+  chat_thinking: 600s
+  vision: 300s
+  embed: 60s
+  speech: 180s
+  backends:
+    cf_local:
+      chat: 60s
+
 backends:
   cf_local:
-    base_url: http://127.0.0.1:1323
+    remote: true
+    extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
+    auth:
+      bearer_env: CF_AI_API_KEY
     capabilities: [chat, vision, tts, stt, voices]
     models:
       sync: true

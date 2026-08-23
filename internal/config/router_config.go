@@ -13,20 +13,33 @@ import (
 type Capability string
 
 const (
-	CapChat    Capability = "chat"
-	CapVision  Capability = "vision"
-	CapEmbed   Capability = "embed"
-	CapTTS     Capability = "tts"
-	CapSTT     Capability = "stt"
-	CapVoices  Capability = "voices"
+	CapChat   Capability = "chat"
+	CapVision Capability = "vision"
+	CapEmbed  Capability = "embed"
+	CapTTS    Capability = "tts"
+	CapSTT    Capability = "stt"
+	CapVoices Capability = "voices"
 )
 
-// BackendDef is one OpenAI-compatible speech worker.
+// BackendDef is one OpenAI-compatible inference worker.
 type BackendDef struct {
 	ID           string         `yaml:"-"`
+	Remote       bool           `yaml:"remote"`
+	Extension    string         `yaml:"extension"`
 	BaseURL      string         `yaml:"base_url"`
+	Auth         BackendAuth    `yaml:"auth"`
 	Capabilities []Capability   `yaml:"capabilities"`
 	Models       *BackendModels `yaml:"models"`
+}
+
+// HasExtension reports whether the backend uses a named extension module.
+func (b BackendDef) HasExtension(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(b.Extension), strings.TrimSpace(name))
+}
+
+// IsCloudflareExtension reports whether the backend uses the Cloudflare extension.
+func (b BackendDef) IsCloudflareExtension() bool {
+	return b.HasExtension(ExtensionCloudflare)
 }
 
 // RouterConfig holds multi-backend routing for the Polypus gateway.
@@ -37,6 +50,8 @@ type RouterConfig struct {
 	DefaultTTSBackend    string                `yaml:"default_tts_backend"`
 	DefaultSTTBackend    string                `yaml:"default_stt_backend"`
 	DefaultProxyBackend  string                `yaml:"default_proxy_backend"`
+	Timeouts             Timeouts              `yaml:"-"`
+	Policy               RouterPolicy          `yaml:"policy"`
 	Backends             map[string]BackendDef `yaml:"backends"`
 }
 
@@ -57,11 +72,16 @@ type routerFile struct {
 	DefaultTTSBackend    string                      `yaml:"default_tts_backend"`
 	DefaultSTTBackend    string                      `yaml:"default_stt_backend"`
 	DefaultProxyBackend  string                      `yaml:"default_proxy_backend"`
+	Timeouts             timeoutsFile                `yaml:"timeouts"`
+	Policy               routerPolicyFile            `yaml:"policy"`
 	Backends             map[string]backendFileEntry `yaml:"backends"`
 }
 
 type backendFileEntry struct {
+	Remote       bool           `yaml:"remote"`
+	Extension    string         `yaml:"extension"`
 	BaseURL      string         `yaml:"base_url"`
+	Auth         BackendAuth    `yaml:"auth"`
 	Capabilities []string       `yaml:"capabilities"`
 	Models       *BackendModels `yaml:"models"`
 }
@@ -75,11 +95,46 @@ func LoadRouterConfig(opts ServeOptions) (RouterConfig, error) {
 	if !fromFile || len(cfg.Backends) == 0 {
 		cfg = defaultRouterFromEnv(opts)
 	}
+	if cfg.Timeouts.Max == 0 {
+		cfg.Timeouts = DefaultTimeouts()
+	}
+	stripRemoteBackendsWhenDisabled(&cfg)
 	applyRouterEnvOverrides(&cfg, opts)
 	if err := normalizeRouterConfig(&cfg); err != nil {
 		return RouterConfig{}, err
 	}
 	return cfg, nil
+}
+
+// stripRemoteBackendsWhenDisabled removes remote backends when cloud opt-in is off.
+func stripRemoteBackendsWhenDisabled(cfg *RouterConfig) {
+	if !cfg.Policy.RequireCloudOptIn {
+		return
+	}
+	if InferenceCloudCaseAllowed() {
+		return
+	}
+	removed := make(map[string]struct{})
+	for id, b := range cfg.Backends {
+		if b.Remote {
+			delete(cfg.Backends, id)
+			removed[id] = struct{}{}
+		}
+	}
+	if len(removed) == 0 {
+		return
+	}
+	clearIfRemoved := func(field *string) {
+		if _, ok := removed[*field]; ok {
+			*field = ""
+		}
+	}
+	clearIfRemoved(&cfg.DefaultEmbedBackend)
+	clearIfRemoved(&cfg.DefaultChatBackend)
+	clearIfRemoved(&cfg.DefaultVisionBackend)
+	clearIfRemoved(&cfg.DefaultTTSBackend)
+	clearIfRemoved(&cfg.DefaultSTTBackend)
+	clearIfRemoved(&cfg.DefaultProxyBackend)
 }
 
 func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
@@ -105,6 +160,10 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 	if err := yaml.Unmarshal(raw, &file); err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
+	timeouts, err := parseTimeoutsFile(file.Timeouts)
+	if err != nil {
+		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
+	}
 	cfg := RouterConfig{
 		DefaultEmbedBackend:  strings.TrimSpace(file.DefaultEmbedBackend),
 		DefaultChatBackend:   strings.TrimSpace(file.DefaultChatBackend),
@@ -112,6 +171,8 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 		DefaultTTSBackend:    strings.TrimSpace(file.DefaultTTSBackend),
 		DefaultSTTBackend:    strings.TrimSpace(file.DefaultSTTBackend),
 		DefaultProxyBackend:  strings.TrimSpace(file.DefaultProxyBackend),
+		Timeouts:             timeouts,
+		Policy:               file.Policy.merge(),
 		Backends:             make(map[string]BackendDef, len(file.Backends)),
 	}
 	for id, entry := range file.Backends {
@@ -123,9 +184,13 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 		for _, c := range entry.Capabilities {
 			caps = append(caps, Capability(strings.TrimSpace(c)))
 		}
+		baseURL := ExpandEnv(strings.TrimSpace(entry.BaseURL))
 		cfg.Backends[id] = BackendDef{
 			ID:           id,
-			BaseURL:      strings.TrimRight(strings.TrimSpace(entry.BaseURL), "/"),
+			Remote:       entry.Remote,
+			Extension:    strings.TrimSpace(entry.Extension),
+			BaseURL:      strings.TrimRight(baseURL, "/"),
+			Auth:         entry.Auth,
 			Capabilities: caps,
 			Models:       entry.Models,
 		}
@@ -139,6 +204,8 @@ func defaultRouterFromEnv(opts ServeOptions) RouterConfig {
 		DefaultTTSBackend:   "mlx_local",
 		DefaultSTTBackend:   "mlx_local",
 		DefaultProxyBackend: "mlx_local",
+		Policy:              DefaultRouterPolicy(),
+		Timeouts:            DefaultTimeouts(),
 		Backends: map[string]BackendDef{
 			"mlx_local": {
 				ID:           "mlx_local",
@@ -196,6 +263,14 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 		}
 		if b.BaseURL == "" {
 			return fmt.Errorf("router: backends.%s.base_url required", id)
+		}
+		if b.Remote && cfg.Policy.RequireCloudOptIn && !InferenceCloudCaseAllowed() {
+			return fmt.Errorf("router: backends.%s.remote requires INFERENCE_CLOUD_CASE=1", id)
+		}
+		if b.Remote {
+			if _, err := b.Auth.ResolveBearerToken(); err != nil {
+				return fmt.Errorf("router: backends.%s: %w", id, err)
+			}
 		}
 		if len(b.Capabilities) == 0 {
 			return fmt.Errorf("router: backends.%s.capabilities required", id)

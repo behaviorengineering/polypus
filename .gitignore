@@ -9,6 +9,9 @@ dist/
 # Local env overrides
 .env
 
+# OTEL inference failure dumps
+logs/
+
 # Model inventory disk cache
 .polypus/
 

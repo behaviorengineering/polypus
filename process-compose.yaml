@@ -1,0 +1,84 @@
+# Polypus gateway + backends (standalone process-compose project).
+# Start: make serve  (or: scripts/pc-up.sh)
+# Stop:  make serve-down
+# Namespaces: pc-up.sh selects core plus mlx and obs (Phoenix).
+
+version: "0.5"
+
+log_level: info
+log_length: 500
+
+environment:
+  - "POLYPUS_DIR=${POLYPUS_DIR}"
+  - "POLYPUS_BIN=${POLYPUS_BIN}"
+  - "POLYPUS_HOST=${POLYPUS_HOST}"
+  - "POLYPUS_PORT=${POLYPUS_PORT}"
+  - "POLYPUS_MLX_HOST=${POLYPUS_MLX_HOST}"
+  - "POLYPUS_MLX_PORT=${POLYPUS_MLX_PORT}"
+  - "POLYPUS_BACKEND_URL=${POLYPUS_BACKEND_URL}"
+  - "POLYPUS_CONFIG=${POLYPUS_CONFIG}"
+  - "POLYPUS_ROOT=${POLYPUS_ROOT}"
+  - "PARENT_MONOREPO_ROOT=${PARENT_MONOREPO_ROOT}"
+  - "INFERENCE_CLOUD_CASE=${INFERENCE_CLOUD_CASE}"
+  - "PHOENIX_PORT=${PHOENIX_PORT}"
+  - "PHOENIX_OTLP_PORT=${PHOENIX_OTLP_PORT}"
+  - "POLYPUS_OTEL=${POLYPUS_OTEL}"
+  - "POLYPUS_OTLP_ENDPOINT=${POLYPUS_OTLP_ENDPOINT}"
+  - "POLYPUS_FAILURE_DUMP_DIR=${POLYPUS_FAILURE_DUMP_DIR}"
+  - "POLYPUS_SERVICE_NAME=${POLYPUS_SERVICE_NAME}"
+  - "POLYPUS_OTEL_SKIP_PATHS=${POLYPUS_OTEL_SKIP_PATHS}"
+
+processes:
+  mlx:
+    namespace: mlx
+    command: "${POLYPUS_DIR}/backends/mlx/scripts/serve.sh"
+    working_dir: "${POLYPUS_DIR}"
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 1322
+        path: /
+      period_seconds: 5
+      failure_threshold: 72
+    availability:
+      restart: on_failure
+      backoff_seconds: 5
+    shutdown:
+      signal: 15
+      timeout_seconds: 30
+
+  phoenix:
+    namespace: obs
+    command: "${POLYPUS_DIR}/scripts/pc-phoenix.sh"
+    working_dir: "${POLYPUS_DIR}"
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 6006
+        path: /
+      period_seconds: 5
+      failure_threshold: 24
+    availability:
+      restart: on_failure
+      backoff_seconds: 5
+    shutdown:
+      signal: 15
+      timeout_seconds: 30
+
+  gateway:
+    namespace: core
+    command: "${POLYPUS_DIR}/scripts/pc-gateway.sh"
+    working_dir: "${POLYPUS_DIR}"
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 1320
+        path: /health
+      period_seconds: 5
+      failure_threshold: 12
+    availability:
+      restart: on_failure
+      backoff_seconds: 2
+    shutdown:
+      signal: 15
+      timeout_seconds: 15

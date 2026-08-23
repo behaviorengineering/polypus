@@ -4,8 +4,7 @@ Python **uv** project for **mlx-audio** on Apple Silicon. Polypus gateway (`poly
 
 ```bash
 make -C polypus mlx-sync
-make -C polypus mlx-serve    # backend only (debug)
-make -C polypus serve        # gateway + backend
+make -C polypus serve        # process-compose: gateway + MLX :1322
 ```
 
 See `scripts/serve_launcher.py` for mlx-audio 0.4.4 compatibility patches.

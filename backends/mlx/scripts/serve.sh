@@ -5,9 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MLX_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 POLYPUS_ROOT="$(cd "$MLX_DIR/../.." && pwd)"
-CONSILIUM_ROOT="$(cd "$POLYPUS_ROOT/../.." && pwd)"
-if [[ ! -f "$CONSILIUM_ROOT/stack/.env.example" ]]; then
-  CONSILIUM_ROOT=""
+PARENT_MONOREPO_ROOT="$(cd "$POLYPUS_ROOT/../.." && pwd)"
+if [[ ! -f "$PARENT_MONOREPO_ROOT/stack/.env.example" ]]; then
+  PARENT_MONOREPO_ROOT=""
 fi
 PARENT_ROOT="$(cd "$POLYPUS_ROOT/.." && pwd)"
 
@@ -23,10 +23,10 @@ if [[ ! -d "$MLX_DIR/.venv" ]]; then
   exit 1
 fi
 
-if [[ -n "$CONSILIUM_ROOT" && -f "$CONSILIUM_ROOT/stack/.env" ]]; then
+if [[ -n "$PARENT_MONOREPO_ROOT" && -f "$PARENT_MONOREPO_ROOT/stack/.env" ]]; then
   set -a
   # shellcheck source=/dev/null
-  source "$CONSILIUM_ROOT/stack/.env"
+  source "$PARENT_MONOREPO_ROOT/stack/.env"
   set +a
 elif [[ -f "$POLYPUS_ROOT/.env" ]]; then
   set -a
