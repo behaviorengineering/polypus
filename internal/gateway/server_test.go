@@ -344,6 +344,29 @@ func TestHealthOKWhenBackendUp(t *testing.T) {
 	}
 }
 
+func TestHealthOKWhenBackendDown(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(backend.Close)
+
+	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %q", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Fatalf("health must not probe upstreams: %q", rec.Body.String())
+	}
+}
+
 func TestBifrostTranscriptionPath(t *testing.T) {
 	var gotPath string
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -839,7 +862,7 @@ backends:
 	if rec.Code != http.StatusOK {
 		t.Fatalf("health status: %d %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"id":"cf_local"`) || !strings.Contains(rec.Body.String(), `"ok":true`) {
+	if !strings.Contains(rec.Body.String(), `"id":"cf_local"`) {
 		t.Fatalf("health body: %s", rec.Body.String())
 	}
 }

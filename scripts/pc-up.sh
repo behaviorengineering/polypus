@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start Polypus via process-compose (independent of Consilium make serve).
+# Start Polypus via process-compose (standalone stack).
 set -euo pipefail
 
 POLYPUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,15 +11,15 @@ if ! command -v process-compose >/dev/null 2>&1; then
   exit 1
 fi
 
-CONSILIUM_ROOT="$(cd "$POLYPUS_DIR/../.." && pwd)"
-if [[ ! -f "$CONSILIUM_ROOT/stack/.env.example" ]]; then
-  CONSILIUM_ROOT=""
+PARENT_MONOREPO_ROOT="$(cd "$POLYPUS_DIR/../.." && pwd)"
+if [[ ! -f "$PARENT_MONOREPO_ROOT/stack/.env.example" ]]; then
+  PARENT_MONOREPO_ROOT=""
 fi
 
-if [[ -n "$CONSILIUM_ROOT" && -f "$CONSILIUM_ROOT/stack/.env" ]]; then
+if [[ -n "$PARENT_MONOREPO_ROOT" && -f "$PARENT_MONOREPO_ROOT/stack/.env" ]]; then
   set -a
   # shellcheck source=/dev/null
-  source "$CONSILIUM_ROOT/stack/.env"
+  source "$PARENT_MONOREPO_ROOT/stack/.env"
   set +a
 elif [[ -f "$POLYPUS_DIR/.env" ]]; then
   set -a
@@ -33,7 +33,7 @@ source "$POLYPUS_DIR/ports.env"
 
 export POLYPUS_DIR
 export POLYPUS_ROOT="$POLYPUS_DIR"
-export CONSILIUM_ROOT
+export PARENT_MONOREPO_ROOT
 export POLYPUS_HOST="${POLYPUS_HOST:-127.0.0.1}"
 export POLYPUS_PORT="${POLYPUS_PORT:-1320}"
 export POLYPUS_MLX_HOST="${POLYPUS_MLX_HOST:-127.0.0.1}"
@@ -47,8 +47,8 @@ export PHOENIX_OTLP_PORT="${PHOENIX_OTLP_PORT:-4317}"
 POLYPUS_BIN=""
 if [[ -x "$POLYPUS_DIR/bin/polypus" ]]; then
   POLYPUS_BIN="$POLYPUS_DIR/bin/polypus"
-elif [[ -n "$CONSILIUM_ROOT" && -x "$CONSILIUM_ROOT/bin/polypus" ]]; then
-  POLYPUS_BIN="$CONSILIUM_ROOT/bin/polypus"
+elif [[ -n "$PARENT_MONOREPO_ROOT" && -x "$PARENT_MONOREPO_ROOT/bin/polypus" ]]; then
+  POLYPUS_BIN="$PARENT_MONOREPO_ROOT/bin/polypus"
 fi
 if [[ -z "$POLYPUS_BIN" ]]; then
   echo "missing polypus binary; run: make build" >&2
@@ -113,7 +113,7 @@ echo "Polypus gateway: http://${POLYPUS_HOST}:${POLYPUS_PORT}/  namespaces: ${NA
 if [[ " ${NAMESPACES[*]} " == *" obs "* ]]; then
   echo "Phoenix UI: http://127.0.0.1:${PHOENIX_PORT}/  OTLP gRPC: 127.0.0.1:${PHOENIX_OTLP_PORT}"
 fi
-echo "process-compose TUI (this project only); 0 quit. Consilium viewer is a separate TUI (make serve)."
+echo "process-compose TUI (this project only); 0 quit."
 
 exec process-compose up \
   --config "$POLYPUS_DIR/process-compose.yaml" \

@@ -1,6 +1,6 @@
 # Polypus hybrid router (local): Cloudflare chat via in-process extension + LM Studio for OCR/embeddings.
 # INFERENCE_CLOUD_CASE=1 in stack/.env enables cf_local remote backend.
-# Consilium calls Polypus gateway :1320 only.
+# HTTP clients call Polypus gateway :1320 only.
 #
 # models.allow is the enable list (GET /v1/models + inference POSTs).
 # Use GET /v1/models?view=inventory for full upstream inventory (pre-allow).

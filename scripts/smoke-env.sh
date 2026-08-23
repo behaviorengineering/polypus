@@ -17,15 +17,15 @@ load_polypus_smoke_env() {
   PARENT_ROOT="$(cd "$POLYPUS_DIR/.." && pwd)"
 
   if [[ -f "$PARENT_ROOT/stack/.env.example" ]]; then
-    CONSILIUM_ROOT="$PARENT_ROOT"
+    PARENT_MONOREPO_ROOT="$PARENT_ROOT"
   else
-    CONSILIUM_ROOT=""
+    PARENT_MONOREPO_ROOT=""
   fi
 
-  if [[ -n "$CONSILIUM_ROOT" && -f "$CONSILIUM_ROOT/stack/.env" ]]; then
+  if [[ -n "$PARENT_MONOREPO_ROOT" && -f "$PARENT_MONOREPO_ROOT/stack/.env" ]]; then
     set -a
     # shellcheck source=/dev/null
-    source "$CONSILIUM_ROOT/stack/.env"
+    source "$PARENT_MONOREPO_ROOT/stack/.env"
     set +a
   elif [[ -f "$POLYPUS_DIR/.env" ]]; then
     set -a

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop the Polypus process-compose project only (not Consilium make serve).
+# Stop the Polypus process-compose project only.
 set -euo pipefail
 
 POLYPUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"

@@ -2,8 +2,6 @@
 
 Local **OpenAI-compatible inference gateway**: one loopback face on `:1320`, many backend arms (chat, vision, embeddings, TTS/STT). Clients never talk to Cloudflare, MLX, or LM Studio directly.
 
-**Consilium integration:** submodule at `providers/polypus/` in the Consilium case repo; `make polypus-serve` from that repo root (own process-compose TUI).
-
 ## Services
 
 Apps call **only** `http://127.0.0.1:1320`. The gateway routes by model prefix (`cf_local/…`, `lm_studio/…`) or capability default in `config.yaml`.
@@ -11,7 +9,7 @@ Apps call **only** `http://127.0.0.1:1320`. The gateway routes by model prefix (
 ```mermaid
 flowchart TB
   subgraph clients [Clients]
-    C[Consilium]
+    C[HTTP clients]
     N[n8n and other apps]
   end
 
@@ -62,7 +60,7 @@ make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
 
 `INFERENCE_CLOUD_CASE=1` in `stack/.env` enables the `cf_local` remote backend (requires `CF_AI_API_KEY`, `CF_ACCOUNT_ID`). Set `POLYPUS_ENABLE_MLX=1` to run MLX as well when cloud is default for speech. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`.
 
-Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_OTLP_ENDPOINT` and dumps with `POLYPUS_FAILURE_DUMP_DIR`. Skip probe noise with `POLYPUS_OTEL_SKIP_PATHS` (default `/health`).
+Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_OTLP_ENDPOINT` and dumps with `POLYPUS_FAILURE_DUMP_DIR`. Skip probe noise with `POLYPUS_OTEL_SKIP_PATHS` (default `/health,/health/backends`).
 
 ## Live smoke (cloud)
 
@@ -75,16 +73,17 @@ CF_ACCOUNT_ID=...
 ```
 
 ```bash
-make -C providers/polypus build
-make polypus-serve
-make polypus-smoke-chat     # cf_local/@cf/google/gemma-4-26b-a4b-it
-make polypus-smoke-stt      # when cf_local is default TTS/STT
+make build
+make serve
+make smoke-chat     # cf_local/@cf/google/gemma-4-26b-a4b-it
+make smoke-stt      # when cf_local is default TTS/STT
 ```
 
-Optional deeper probe from Consilium repo root:
+Optional deeper model probe (when your workspace ships a harness):
 
 ```bash
-make model-harness -- --tier L1 --model 'cf_local/@cf/zai-org/glm-4.7-flash'
+# example: tier L1 chat probe against a cf_local model id
+make smoke-chat
 ```
 
 ## Layout
@@ -105,7 +104,8 @@ polypus/
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/health` | Liveness + backend summary |
+| `GET` | `/health` | Gateway liveness; lists configured backends (no upstream probe) |
+| `GET` | `/health/backends` | Upstream reachability probe; `503` when any backend fails |
 | `GET` | `/v1/models` | Aggregate catalog (OpenAI Models API) |
 | `GET` | `/v1/models/{id}` | Retrieve one model |
 | `POST` | `/v1/chat/completions` | Chat + vision |
@@ -134,7 +134,7 @@ curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq .
 | Service | Default | Notes |
 |---------|---------|-------|
 | Gateway | `127.0.0.1:1320` | Public OpenAI `/v1/*` surface |
-| MLX backend | `127.0.0.1:1322` | Internal; not for Consilium callers |
+| MLX backend | `127.0.0.1:1322` | Internal; gateway proxies only |
 | Phoenix UI | `127.0.0.1:6006` | Arize traces |
 | Phoenix OTLP | `127.0.0.1:4317` | OTLP gRPC (OpenInference) |
 
@@ -156,8 +156,6 @@ POLYPUS_CF_VOICE=luna
 
 Hop timeouts live in `config.yaml` `timeouts:` (chat 120s, Cloudflare chat 60s, thinking 600s, vision 300s). Optional client header `X-Polypus-Timeout` (Go duration or integer seconds) is clamped to `min`..`max` (5s–900s).
 
-From Consilium repo root: `make polypus-sync`, `make polypus-serve`, `make polypus-down`.
-
 Multi-backend routing: see `config.yaml.example`. Model prefix: `backend_id/model` (e.g. `cf_local/@cf/zai-org/glm-4.7-flash`).
 
 ## Docker
@@ -176,4 +174,4 @@ Configure, smoke-test, and troubleshoot Polypus via the operator pack under `ai-
 
 ## License
 
-Part of the Xynova Consilium ecosystem. Breach model: case narration never leaves localhost unless `INFERENCE_CLOUD_CASE=1`.
+See repository license. Cloud speech (`cf_local`) sends audio/text to Cloudflare only when `INFERENCE_CLOUD_CASE=1` and keys are set.

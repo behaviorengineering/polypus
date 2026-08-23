@@ -10,10 +10,10 @@ else
 BINARY := $(PARENT_ROOT)/bin/polypus
 endif
 
-# Nested as providers/polypus: Consilium is two levels up (adapter lives in engine/).
-CONSILIUM_ROOT :=
+# Nested as providers/polypus: optional parent monorepo is two levels up.
+PARENT_MONOREPO_ROOT :=
 ifneq ($(wildcard $(abspath $(CURDIR)/../..)/stack/.env.example),)
-CONSILIUM_ROOT := $(abspath $(CURDIR)/../..)
+PARENT_MONOREPO_ROOT := $(abspath $(CURDIR)/../..)
 endif
 CF_ADAPTER_BIN :=
 CHAT_SMOKE_BIN := $(dir $(BINARY))polypus-chat-smoke

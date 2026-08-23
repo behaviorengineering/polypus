@@ -64,7 +64,7 @@ type smokeRow struct {
 }
 
 func defaultChatModels() []string {
-	// Standalone defaults when no Consilium manifest is present.
+	// Standalone defaults when no host harness manifest is present.
 	return []string{
 		"cf_local/@cf/google/gemma-4-26b-a4b-it",
 		"cf_local/@cf/zai-org/glm-4.7-flash",
@@ -81,7 +81,7 @@ func envOr(key, def string) string {
 func runProbe(ctx context.Context, defaults smokeDefaults, model, probe string) smokeRow {
 	start := time.Now()
 	row := smokeRow{Model: model, Tier: "L1", Probe: probe, Status: "pass"}
-	// Minimal inline probes (mirrors Consilium harness L1 without cross-module import).
+	// Minimal inline probes (L1 transport without cross-module import).
 	switch probe {
 	case "ping":
 		if err := pingHealth(ctx, defaults.BaseURL); err != nil {

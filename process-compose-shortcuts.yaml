@@ -1,4 +1,4 @@
-# Polypus process-compose TUI shortcuts (same number keys as Consilium).
+# Polypus process-compose TUI shortcuts.
 # Loaded by scripts/pc-up.sh via --shortcuts.
 
 shortcuts:

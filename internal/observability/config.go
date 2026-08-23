@@ -13,7 +13,7 @@ const (
 	defaultDumpDir      = "logs/inference-failures"
 )
 
-var defaultSkipPaths = []string{"/health"}
+var defaultSkipPaths = []string{"/health", "/health/backends"}
 
 // Config controls Polypus OpenTelemetry export and local failure dumps.
 type Config struct {

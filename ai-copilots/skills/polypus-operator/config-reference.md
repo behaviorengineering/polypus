@@ -24,7 +24,7 @@ POLYPUS_MLX_HOST=127.0.0.1
 POLYPUS_MLX_PORT=1322
 POLYPUS_PHOENIX=1
 POLYPUS_OTEL=1
-INFERENCE_CLOUD_CASE=1   # Consilium stack/.env; enables cf_local remote backend
+INFERENCE_CLOUD_CASE=1   # enables cf_local remote backend (set in host environment)
 CF_AI_API_KEY=...
 CF_ACCOUNT_ID=...
 ```
@@ -115,4 +115,4 @@ policy:
 
 When `require_cloud_opt_in: false`, remote backends stay loaded without `INFERENCE_CLOUD_CASE=1` (non-case / dev profiles only). When `reject_non_loopback_backends: false`, local backends may use LAN URLs; direct OpenAI/Anthropic hosts remain blocked.
 
-Consilium `stack/ai.yaml` points at gateway only; backend table stays in Polypus.
+Host applications point `POLYPUS_BASE_URL` at the gateway only; backend tables stay in Polypus `config.yaml`.

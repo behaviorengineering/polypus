@@ -28,13 +28,13 @@ Tell your copilot to run [BOOTSTRAP.md](BOOTSTRAP.md) in **wire mode**. It will 
 
 **Example (recommended — fewer questions):**
 
-> Execute `providers/polypus/ai-copilots/BOOTSTRAP.md` in wire mode. I'm on Cursor on macOS, Consilium monorepo. Wire the skill under `providers/polypus/` and the agent at Consilium root so `/polypus-operator` works.
+> Execute `ai-copilots/BOOTSTRAP.md` in wire mode. I'm on Cursor on macOS. Workspace root is the Polypus repo. Wire the skill and `/polypus-operator` agent.
 
 Other examples:
 
 | Situation | Example prompt |
 |-----------|----------------|
-| Polypus repo alone, VS Code Copilot, Windows | Execute `ai-copilots/BOOTSTRAP.md` wire mode. GitHub Copilot on Windows 11. Use junction if symlinks need admin. |
+| Nested under `providers/polypus/`, VS Code Copilot, Windows | Execute `ai-copilots/BOOTSTRAP.md` wire mode. GitHub Copilot on Windows 11. Use junction if symlinks need admin. |
 | Cursor, Linux, Polypus standalone | Execute `ai-copilots/BOOTSTRAP.md` wire mode. Cursor on Linux. Workspace root is the Polypus repo. |
 | Refresh content only | Execute `ai-copilots/BOOTSTRAP.md` refresh content only. Do not wire yet. |
 

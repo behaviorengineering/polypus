@@ -1,5 +1,5 @@
 # Polypus router: Cloudflare Workers AI via in-process extension.
-# Use when INFERENCE_CLOUD_CASE=1. Consilium still calls Polypus gateway :1320 only.
+# Use when INFERENCE_CLOUD_CASE=1. Clients call Polypus gateway :1320 only.
 # Copy to providers/polypus/config.yaml or set POLYPUS_CONFIG.
 
 default_tts_backend: cf_local

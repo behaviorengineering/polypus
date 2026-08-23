@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/router"
 )
@@ -81,6 +80,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/health" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		h.serveHealth(w, r)
+	case r.URL.Path == "/health/backends" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		h.serveBackendHealth(w, r)
 	case r.URL.Path == "/v1/models" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		h.serveModelsList(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/models/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
@@ -212,64 +213,6 @@ func (h *Handler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type healthBackend struct {
-	ID    string `json:"id"`
-	URL   string `json:"url"`
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
-}
-
-type healthResponse struct {
-	Status   string          `json:"status"`
-	Router   string          `json:"router"`
-	Backends []healthBackend `json:"backends"`
-}
-
-func (h *Handler) serveHealth(w http.ResponseWriter, r *http.Request) {
-	reg := h.router.Registry()
-	cfg := reg.Config()
-	backends := make([]healthBackend, 0, len(cfg.Backends))
-	defaultOK := false
-	for _, id := range cfg.BackendIDs() {
-		b := cfg.Backends[id]
-		entry := healthBackend{ID: id, URL: b.BaseURL}
-		if b.Remote {
-			if b.IsCloudflareExtension() {
-				cf, err := cloudflare.NewClient(b)
-				if err != nil {
-					entry.Error = err.Error()
-				} else if err := cf.Ping(r.Context()); err != nil {
-					entry.Error = err.Error()
-				} else {
-					entry.OK = true
-				}
-			} else if _, err := b.Auth.ResolveBearerToken(); err != nil {
-				entry.Error = err.Error()
-			} else {
-				entry.OK = true
-			}
-		} else if err := pingBackend(r, b.BaseURL); err != nil {
-			entry.Error = err.Error()
-		} else {
-			entry.OK = true
-		}
-		if id == cfg.DefaultTTSBackend {
-			defaultOK = entry.OK
-		}
-		backends = append(backends, entry)
-	}
-	if !defaultOK {
-		http.Error(w, "default TTS backend unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(healthResponse{
-		Status:   "ok",
-		Router:   "bifrost",
-		Backends: backends,
-	})
-}
-
 func (h *Handler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -383,25 +326,6 @@ func speechContentType(format string) string {
 	default:
 		return "audio/mpeg"
 	}
-}
-
-func pingBackend(r *http.Request, backendURL string) error {
-	ctx := r.Context()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(backendURL, "/")+"/", nil)
-	if err != nil {
-		return err
-	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode >= 500 {
-		return fmt.Errorf("status %d", resp.StatusCode)
-	}
-	return nil
 }
 
 // Close releases router resources.

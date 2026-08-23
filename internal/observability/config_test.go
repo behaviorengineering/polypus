@@ -26,7 +26,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.DumpDir != defaultDumpDir {
 		t.Fatalf("dump=%s", cfg.DumpDir)
 	}
-	if len(cfg.SkipPaths) != 1 || cfg.SkipPaths[0] != "/health" {
+	if len(cfg.SkipPaths) != 2 || cfg.SkipPaths[0] != "/health" || cfg.SkipPaths[1] != "/health/backends" {
 		t.Fatalf("skip=%v", cfg.SkipPaths)
 	}
 }
