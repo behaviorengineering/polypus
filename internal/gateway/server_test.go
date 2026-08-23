@@ -619,6 +619,62 @@ backends:
 	}
 }
 
+func TestVisionRoutesImageOnly(t *testing.T) {
+	var gotBody []byte
+	cf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(cf.Close)
+
+	dir := t.TempDir()
+	content := fmt.Sprintf(`
+default_chat_backend: cf_local
+default_vision_backend: cf_local
+default_tts_backend: mlx_local
+default_stt_backend: mlx_local
+default_proxy_backend: mlx_local
+backends:
+  mlx_local:
+    base_url: http://127.0.0.1:1322
+    capabilities: [tts, stt, voices]
+  cf_local:
+    base_url: %s
+    capabilities: [chat, vision]
+`, cf.URL)
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+
+	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"@cf/google/gemma-4-26b-a4b-it","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d body %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(string(gotBody), `"type":"image_url"`) {
+		t.Fatalf("forwarded body missing image_url: %q", gotBody)
+	}
+	if strings.Contains(string(gotBody), `"type":"text"`) {
+		t.Fatalf("image-only request should not invent a text part: %q", gotBody)
+	}
+	if !strings.Contains(string(gotBody), "gemma-4-26b") {
+		t.Fatalf("body: %q", gotBody)
+	}
+}
+
 func TestEmbedNotProxiedToMLXWhenUnconfigured(t *testing.T) {
 	mlx := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mlx must not receive embed", http.StatusTeapot)

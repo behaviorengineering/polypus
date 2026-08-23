@@ -27,6 +27,17 @@ func TestChatBodyIsStream(t *testing.T) {
 	}
 }
 
+func TestChatBodyHasVisionImageOnly(t *testing.T) {
+	imageOnly := []byte(`{"model":"x","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}`)
+	if !chatBodyHasVision(imageOnly) {
+		t.Fatal("expected vision for image-only content")
+	}
+	textOnly := []byte(`{"model":"x","messages":[{"role":"user","content":"hi"}]}`)
+	if chatBodyHasVision(textOnly) {
+		t.Fatal("expected no vision for string content")
+	}
+}
+
 func TestDisableChatThinkingInRequestGLM(t *testing.T) {
 	in := []byte(`{"model":"@cf/zai-org/glm-4.7-flash","messages":[{"role":"user","content":"hi"}]}`)
 	out, changed := disableChatThinkingInRequest(in)
