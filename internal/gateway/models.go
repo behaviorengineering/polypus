@@ -53,14 +53,7 @@ func newModelsInventoryCache() *modelsInventoryCache {
 			ttl = d
 		}
 	}
-	path := strings.TrimSpace(os.Getenv("POLYPUS_MODELS_CACHE"))
-	if path == "" {
-		root := strings.TrimSpace(os.Getenv("POLYPUS_ROOT"))
-		if root == "" {
-			root = "."
-		}
-		path = filepath.Join(root, ".polypus", "models-inventory.json")
-	}
+	path := config.ResolveModelsInventoryCachePath()
 	c := &modelsInventoryCache{
 		byKey: make(map[string]modelsCacheEntry),
 		ttl:   ttl,

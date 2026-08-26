@@ -1,18 +1,6 @@
-# Gateway image (optional) + Phoenix OTLP (started by process-compose obs namespace).
-# Host gateway: make serve. Phoenix: docker compose up phoenix (or make serve with POLYPUS_PHOENIX=1).
+# Phoenix OTLP (started by process-compose obs namespace via scripts/pc-phoenix.sh).
+# Host gateway: make serve (process-compose). Phoenix: make serve with POLYPUS_PHOENIX=1.
 services:
-  polypus:
-    build: .
-    image: xynova/polypus:latest
-    ports:
-      - "${POLYPUS_PORT:-1320}:1320"
-    environment:
-      POLYPUS_HOST: 0.0.0.0
-      POLYPUS_PORT: "1320"
-      POLYPUS_BACKEND_URL: "${POLYPUS_BACKEND_URL:-http://host.docker.internal:1322}"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
   phoenix:
     image: ${PHOENIX_IMAGE:-arizephoenix/phoenix:latest}
     container_name: polypus-phoenix
@@ -27,4 +15,3 @@ services:
 
 volumes:
   phoenix_data:
-

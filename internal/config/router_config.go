@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -138,14 +137,7 @@ func stripRemoteBackendsWhenDisabled(cfg *RouterConfig) {
 }
 
 func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
-	path := strings.TrimSpace(os.Getenv("POLYPUS_CONFIG"))
-	if path == "" {
-		if root := strings.TrimSpace(os.Getenv("POLYPUS_ROOT")); root != "" {
-			path = filepath.Join(root, "config.yaml")
-		} else if _, err := os.Stat("config.yaml"); err == nil {
-			path = "config.yaml"
-		}
-	}
+	path := ResolveConfigPath()
 	if path == "" {
 		return RouterConfig{}, false, nil
 	}

@@ -2,8 +2,14 @@
 # Stop the Polypus process-compose project only.
 set -euo pipefail
 
-POLYPUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SOCK="${PROCESS_COMPOSE_POLYPUS_SOCK:-$POLYPUS_DIR/.polypus/process-compose.sock}"
+if [[ -z "${PROCESS_COMPOSE_POLYPUS_SOCK:-}" ]]; then
+  if [[ -n "${XDG_STATE_HOME:-}" ]]; then
+    PROCESS_COMPOSE_POLYPUS_SOCK="${XDG_STATE_HOME}/polypus/process-compose.sock"
+  else
+    PROCESS_COMPOSE_POLYPUS_SOCK="${HOME}/.local/state/polypus/process-compose.sock"
+  fi
+fi
+SOCK="$PROCESS_COMPOSE_POLYPUS_SOCK"
 
 if ! command -v process-compose >/dev/null 2>&1; then
   echo "process-compose not installed" >&2

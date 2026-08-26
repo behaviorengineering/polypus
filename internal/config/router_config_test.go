@@ -88,6 +88,11 @@ backends:
 }
 
 func TestDefaultRouterFromEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("POLYPUS_CONFIG", "")
+	t.Setenv("POLYPUS_ROOT", "")
 	opts := ServeOptions{BackendURL: "http://127.0.0.1:1322"}
 	cfg, err := LoadRouterConfig(opts)
 	if err != nil {

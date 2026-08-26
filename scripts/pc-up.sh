@@ -44,6 +44,27 @@ export POLYPUS_BACKEND_URL="${POLYPUS_BACKEND_URL:-}"
 export PHOENIX_PORT="${PHOENIX_PORT:-6006}"
 export PHOENIX_OTLP_PORT="${PHOENIX_OTLP_PORT:-4317}"
 
+# Machine-wide config: ~/.config/polypus/config.yaml (XDG_CONFIG_HOME when set).
+if [[ -z "$POLYPUS_CONFIG" ]]; then
+  if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+    _polypus_home_cfg="${XDG_CONFIG_HOME}/polypus/config.yaml"
+  else
+    _polypus_home_cfg="${HOME}/.config/polypus/config.yaml"
+  fi
+  if [[ -f "$_polypus_home_cfg" ]]; then
+    export POLYPUS_CONFIG="$_polypus_home_cfg"
+  elif [[ -f "$POLYPUS_DIR/config.yaml" ]]; then
+    export POLYPUS_CONFIG="$POLYPUS_DIR/config.yaml"
+  elif [[ "$INFERENCE_CLOUD_CASE" == "1" ]]; then
+    if [[ -f "$POLYPUS_DIR/config.cloud.yaml" ]]; then
+      export POLYPUS_CONFIG="$POLYPUS_DIR/config.cloud.yaml"
+    else
+      export POLYPUS_CONFIG="$POLYPUS_DIR/config.cloud.yaml.example"
+    fi
+  fi
+  unset _polypus_home_cfg
+fi
+
 POLYPUS_BIN=""
 if [[ -x "$POLYPUS_DIR/bin/polypus" ]]; then
   POLYPUS_BIN="$POLYPUS_DIR/bin/polypus"
@@ -57,17 +78,6 @@ fi
 export POLYPUS_BIN
 
 NAMESPACES=(core)
-if [[ "$INFERENCE_CLOUD_CASE" == "1" ]]; then
-  if [[ -z "$POLYPUS_CONFIG" ]]; then
-    if [[ -f "$POLYPUS_DIR/config.yaml" ]]; then
-      export POLYPUS_CONFIG="$POLYPUS_DIR/config.yaml"
-    elif [[ -f "$POLYPUS_DIR/config.cloud.yaml" ]]; then
-      export POLYPUS_CONFIG="$POLYPUS_DIR/config.cloud.yaml"
-    else
-      export POLYPUS_CONFIG="$POLYPUS_DIR/config.cloud.yaml.example"
-    fi
-  fi
-fi
 
 ENABLE_MLX="${POLYPUS_ENABLE_MLX:-}"
 if [[ -z "$ENABLE_MLX" ]]; then
@@ -100,9 +110,20 @@ fi
 
 chmod +x "$POLYPUS_DIR/scripts/"*.sh "$POLYPUS_DIR/backends/mlx/scripts/"*.sh 2>/dev/null || true
 
-mkdir -p "$POLYPUS_DIR/.polypus"
-SOCK="${PROCESS_COMPOSE_POLYPUS_SOCK:-$POLYPUS_DIR/.polypus/process-compose.sock}"
-export PROCESS_COMPOSE_POLYPUS_SOCK="$SOCK"
+# Runtime state: ~/.local/state/polypus (XDG_STATE_HOME when set).
+if [[ -z "${PROCESS_COMPOSE_POLYPUS_SOCK:-}" ]]; then
+  if [[ -n "${XDG_STATE_HOME:-}" ]]; then
+    _polypus_state="${XDG_STATE_HOME}/polypus"
+  else
+    _polypus_state="${HOME}/.local/state/polypus"
+  fi
+  mkdir -p "$_polypus_state"
+  export PROCESS_COMPOSE_POLYPUS_SOCK="${_polypus_state}/process-compose.sock"
+  unset _polypus_state
+else
+  mkdir -p "$(dirname "$PROCESS_COMPOSE_POLYPUS_SOCK")"
+fi
+SOCK="$PROCESS_COMPOSE_POLYPUS_SOCK"
 
 NS_FLAGS=()
 for ns in "${NAMESPACES[@]}"; do

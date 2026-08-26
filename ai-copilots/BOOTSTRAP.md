@@ -37,7 +37,7 @@ Before writing files, read these (paths relative to Polypus repo root):
 |------|-----|
 | `README.md` | Ports, process-compose, OpenAI surface, env vars |
 | `config.yaml.example` | Backends, `models.allow`, timeouts |
-| `config.yaml` | Live allow-list if present (may differ from example) |
+| `~/.config/polypus/config.yaml` | Live allow-list (machine-wide; may differ from example) |
 | `Makefile` | `serve`, `smoke`, `smoke-chat` targets |
 | `process-compose.yaml` | Supervised processes |
 

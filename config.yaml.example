@@ -1,4 +1,5 @@
-# Polypus multi-backend router. Copy to config.yaml or set POLYPUS_CONFIG.
+# Polypus multi-backend router.
+# Copy to ~/.config/polypus/config.yaml (or set POLYPUS_CONFIG).
 # Env-only single backend works without this file (mlx_local from POLYPUS_MLX_*).
 
 default_tts_backend: mlx_local
