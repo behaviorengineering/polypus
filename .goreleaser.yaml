@@ -34,6 +34,22 @@ changelog:
   use: github
   sort: asc
   abbrev: -1
+  groups:
+    - title: Features
+      regexp: '(?i)^.*?feat(\(.+\))?!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '(?i)^.*?(fix|bug)(\(.+\))?!?:.+$'
+      order: 1
+    - title: Docs
+      regexp: '(?i)^.*?docs?.+$'
+      order: 2
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - '(?i)^.*?chore(\(.+\))?!?:.+$'
+      - '(?i)^.*?ci(\(.+\))?!?:.+$'
 
 release:
   name_template: "v{{.Version}}"
