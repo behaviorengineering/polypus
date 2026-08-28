@@ -14,6 +14,8 @@ func Run(args []string) int {
 	switch args[0] {
 	case "serve":
 		return runServe(args[1:])
+	case "switchyard-render":
+		return runSwitchyardRender(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
@@ -25,7 +27,8 @@ func Run(args []string) int {
 
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `usage:
-  polypus serve [flags]   # OpenAI speech API gateway (loopback)
+  polypus serve [flags]              # OpenAI speech API gateway (loopback)
+  polypus switchyard-render [flags]  # render Switchyard routes.toml from config
 
 flags:
   --host HOST       gateway listen host

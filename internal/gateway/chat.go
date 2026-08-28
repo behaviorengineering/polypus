@@ -97,8 +97,14 @@ func chatCompletionsURL(base string) string {
 }
 
 func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
-	if patched, ok := disableChatThinkingInRequest(body); ok {
-		body = patched
+	return proxyChatCompletionsOpts(w, r, backendURL, body, client, hopTimeout, backendAuth, true)
+}
+
+func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string, patchThinking bool) error {
+	if patchThinking {
+		if patched, ok := disableChatThinkingInRequest(body); ok {
+			body = patched
+		}
 	}
 	target := chatCompletionsURL(backendURL)
 	streaming := chatBodyIsStream(body)

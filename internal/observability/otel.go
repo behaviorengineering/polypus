@@ -144,6 +144,20 @@ func WrapTransport(base http.RoundTripper) http.RoundTripper {
 	)
 }
 
+// StartRouterSpan starts an OpenInference span for a composed router hop via Switchyard.
+func StartRouterSpan(ctx context.Context, operation, model, routerName, switchyardURL string) (context.Context, trace.Span) {
+	ctx, span := Tracer().Start(ctx, operation, trace.WithSpanKind(trace.SpanKindInternal))
+	span.SetAttributes(
+		attribute.String("openinference.span.kind", "LLM"),
+		attribute.String("llm.model_name", model),
+		attribute.String("llm.provider", "polypus"),
+		attribute.String("polypus.backend_id", "switchyard"),
+		attribute.String("polypus.backend_url", switchyardURL),
+		attribute.String("polypus.router_name", routerName),
+	)
+	return ctx, span
+}
+
 // StartLLMSpan starts an OpenInference LLM span for a routed inference call.
 func StartLLMSpan(ctx context.Context, operation, model, backendID, backendURL, downstream string) (context.Context, trace.Span) {
 	ctx, span := Tracer().Start(ctx, operation, trace.WithSpanKind(trace.SpanKindInternal))

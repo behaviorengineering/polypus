@@ -27,6 +27,8 @@ environment:
   - "POLYPUS_FAILURE_DUMP_DIR=${POLYPUS_FAILURE_DUMP_DIR}"
   - "POLYPUS_SERVICE_NAME=${POLYPUS_SERVICE_NAME}"
   - "POLYPUS_OTEL_SKIP_PATHS=${POLYPUS_OTEL_SKIP_PATHS}"
+  - "POLYPUS_SWITCHYARD_HOST=${POLYPUS_SWITCHYARD_HOST}"
+  - "POLYPUS_SWITCHYARD_PORT=${POLYPUS_SWITCHYARD_PORT}"
 
 processes:
   mlx:
@@ -82,3 +84,21 @@ processes:
     shutdown:
       signal: 15
       timeout_seconds: 15
+
+  switchyard:
+    namespace: switchyard
+    command: "${POLYPUS_DIR}/scripts/pc-switchyard.sh"
+    working_dir: "${POLYPUS_DIR}"
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 4000
+        path: /health
+      period_seconds: 5
+      failure_threshold: 24
+    availability:
+      restart: on_failure
+      backoff_seconds: 5
+    shutdown:
+      signal: 15
+      timeout_seconds: 30

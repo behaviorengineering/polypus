@@ -20,10 +20,15 @@ type healthBackend struct {
 	URL string `json:"url"`
 }
 
+type healthSwitchyard struct {
+	URL string `json:"url"`
+}
+
 type healthResponse struct {
-	Status   string          `json:"status"`
-	Router   string          `json:"router"`
-	Backends []healthBackend `json:"backends"`
+	Status     string            `json:"status"`
+	Router     string            `json:"router"`
+	Switchyard *healthSwitchyard `json:"switchyard,omitempty"`
+	Backends   []healthBackend   `json:"backends"`
 }
 
 type backendProbeResult struct {
@@ -48,13 +53,19 @@ func (h *Handler) serveHealth(w http.ResponseWriter, _ *http.Request) {
 		b := cfg.Backends[id]
 		backends = append(backends, healthBackend{ID: id, URL: b.BaseURL})
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(healthResponse{
+	resp := healthResponse{
 		Status:   "ok",
 		Router:   "bifrost",
 		Backends: backends,
-	})
+	}
+	if config.SwitchyardEnabled() {
+		resp.Switchyard = &healthSwitchyard{
+			URL: cfg.EffectiveSwitchyardBaseURL(),
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // serveBackendHealth probes configured upstream backends (manual / stack-doctor use).
@@ -70,6 +81,18 @@ func (h *Handler) serveBackendHealth(w http.ResponseWriter, r *http.Request) {
 		b := cfg.Backends[id]
 		entry := backendProbeResult{ID: id, URL: b.BaseURL}
 		if err := probeBackend(ctx, b); err != nil {
+			entry.Error = err.Error()
+			allOK = false
+		} else {
+			entry.OK = true
+		}
+		backends = append(backends, entry)
+	}
+
+	if config.SwitchyardEnabled() {
+		switchyardURL := cfg.EffectiveSwitchyardBaseURL()
+		entry := backendProbeResult{ID: "switchyard", URL: switchyardURL}
+		if err := probeSwitchyard(ctx, switchyardURL); err != nil {
 			entry.Error = err.Error()
 			allOK = false
 		} else {

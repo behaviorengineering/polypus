@@ -57,6 +57,21 @@ make smoke-chat
 
 Default model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
 
+### 3b. Smoke named router (when `routers:` configured)
+
+Run after step 3 when `/v1/models` lists `router/…` ids or `~/.config/polypus/config.yaml` has `routers:` with a composed (`stage_router`) entry:
+
+```bash
+make smoke-router
+```
+
+Default model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`).
+
+- **503 / switchyard unavailable** → check `/health/backends` for `"id":"switchyard"`; ensure Switchyard is in the stack (`POLYPUS_SWITCHYARD=1`, default). Restart with `make serve-down && make serve`.
+- **Passthrough only** (e.g. `router/scribe`) → `POLYPUS_ROUTER_SMOKE_MODEL=router/scribe make smoke-router`; Switchyard not required (`POLYPUS_SWITCHYARD=0` OK).
+
+`/health/backends` probing Switchyard is **not** a substitute for this smoke; it only checks `:4000/health`.
+
 ### 4. Smoke audio
 
 ```bash

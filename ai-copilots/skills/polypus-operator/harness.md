@@ -12,6 +12,8 @@ Polypus ships **L1 transport smoke** in this repo. Deeper L2/L3 XML and job-fixt
 ```bash
 make smoke-chat
 POLYPUS_CHAT_SMOKE_MODEL='cf_local/@cf/zai-org/glm-4.7-flash' make smoke-chat
+make smoke-router
+POLYPUS_ROUTER_SMOKE_MODEL='router/investigator' make smoke-router
 make smoke
 make smoke-stt
 ```
@@ -19,6 +21,8 @@ make smoke-stt
 Binary: `bin/polypus-chat-smoke` (built with `make build`).
 
 Default chat model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
+
+Default router model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`). Run when `routers:` is configured — especially composed (`stage_router`) routes that need Switchyard.
 
 ## Tier summary (when host provides harness)
 
@@ -33,6 +37,7 @@ Default chat model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POL
 | User report | Start with |
 |-------------|------------|
 | Gateway down / connection errors | Health + `make smoke-chat` |
+| Named router / `router/…` fails | Health + `/health/backends` (switchyard) + `make smoke-router` |
 | Empty content / parse errors | L1 + host L2 if available |
 | Specific downstream job fails | Host L3 for that job's model |
 | New model on allow-list | L1 on that model, then L2 if used for XML |

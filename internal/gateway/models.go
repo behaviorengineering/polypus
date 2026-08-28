@@ -182,6 +182,23 @@ func (h *Handler) collectModels(r *http.Request, asInventory bool) []openaiModel
 	cfg := reg.Config()
 	ids := cfg.BackendIDs()
 
+	out := make([]openaiModel, 0)
+	if !asInventory {
+		routerNames := make([]string, 0, len(cfg.Routers))
+		for name := range cfg.Routers {
+			routerNames = append(routerNames, name)
+		}
+		sort.Strings(routerNames)
+		for _, name := range routerNames {
+			out = append(out, openaiModel{
+				ID:      config.RouterPublicID(name),
+				Object:  "model",
+				Created: 0,
+				OwnedBy: "polypus",
+			})
+		}
+	}
+
 	type result struct {
 		backend string
 		models  []openaiModel
@@ -253,7 +270,6 @@ func (h *Handler) collectModels(r *http.Request, asInventory bool) []openaiModel
 		}
 	}
 
-	out := make([]openaiModel, 0, len(byID))
 	for _, m := range byID {
 		out = append(out, m)
 	}
