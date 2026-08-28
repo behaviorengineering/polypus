@@ -1,4 +1,4 @@
-.PHONY: help build build-gateway build-chat-smoke install test vet tidy mlx-sync serve serve-down smoke smoke-chat smoke-higgs smoke-stt smoke-all docker-build
+.PHONY: help build build-gateway build-chat-smoke install test vet tidy ci mlx-sync serve serve-down smoke smoke-chat smoke-higgs smoke-stt smoke-all docker-build
 
 include ports.env
 export POLYPUS_HOST POLYPUS_PORT POLYPUS_MLX_HOST POLYPUS_MLX_PORT
@@ -37,6 +37,7 @@ help:
 	@echo "  make docker-build  Build $(IMAGE_REPO):$(IMAGE_TAG)"
 	@echo "  make test          go test ./..."
 	@echo "  make vet           go vet ./..."
+	@echo "  make ci            tidy + gofmt + vet + race tests + build"
 
 build: build-gateway build-chat-smoke
 
@@ -94,3 +95,13 @@ vet:
 
 tidy:
 	go mod tidy
+
+ci:
+	@cp go.mod go.mod.bak && cp go.sum go.sum.bak
+	go mod tidy
+	@diff -u go.mod.bak go.mod && diff -u go.sum.bak go.sum
+	@rm -f go.mod.bak go.sum.bak
+	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
+	go vet ./...
+	go test -race -count=1 ./...
+	go build ./...

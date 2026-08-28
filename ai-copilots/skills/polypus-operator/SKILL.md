@@ -90,7 +90,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 
 ## Config edits
 
-- Copy `config.yaml.example` → `config.yaml` when bootstrapping backends.
+- Copy `config.yaml.example` → `~/.config/polypus/config.yaml` when bootstrapping backends.
 - After allow-list change: restart gateway in process-compose TUI (or serve-down + serve).
 - **MUST NOT** add non-loopback backend URLs when `reject_non_loopback_backends` applies.
 
@@ -103,7 +103,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 
 ## Client contract
 
-Downstream apps should use `POLYPUS_BASE_URL` only (`http://127.0.0.1:1320`). Backend tables live in Polypus `config.yaml`, not in client repos. Model ids in client job configs must match allow-list entries with the correct prefix.
+Downstream apps should use `POLYPUS_BASE_URL` only (`http://127.0.0.1:1320`). Backend tables live in `~/.config/polypus/config.yaml`, not in client repos. Model ids in client job configs must match allow-list entries with the correct prefix.
 
 ## Refresh this pack
 

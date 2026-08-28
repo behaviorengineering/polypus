@@ -136,9 +136,9 @@ func TestResolveChatRequiresDefaultBackend(t *testing.T) {
 
 func TestResolveChatPrefixBackend(t *testing.T) {
 	cfg := config.RouterConfig{
-		DefaultChatBackend: "cf_local",
-		DefaultTTSBackend:  "mlx_local",
-		DefaultSTTBackend:  "mlx_local",
+		DefaultChatBackend:  "cf_local",
+		DefaultTTSBackend:   "mlx_local",
+		DefaultSTTBackend:   "mlx_local",
 		DefaultProxyBackend: "mlx_local",
 		Backends: map[string]config.BackendDef{
 			"mlx_local": {
@@ -200,10 +200,10 @@ func TestResolveEmbedPrefixBackend(t *testing.T) {
 
 func TestResolveChatRejectsMLXBackend(t *testing.T) {
 	cfg := config.RouterConfig{
-		DefaultChatBackend: "mlx_local",
-		DefaultTTSBackend:    "mlx_local",
-		DefaultSTTBackend:    "mlx_local",
-		DefaultProxyBackend:  "mlx_local",
+		DefaultChatBackend:  "mlx_local",
+		DefaultTTSBackend:   "mlx_local",
+		DefaultSTTBackend:   "mlx_local",
+		DefaultProxyBackend: "mlx_local",
 		Backends: map[string]config.BackendDef{
 			"mlx_local": {
 				ID:           "mlx_local",

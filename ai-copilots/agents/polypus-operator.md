@@ -1,7 +1,7 @@
 ---
 name: polypus-operator
 description: >-
-  Polypus gateway operator: start/stop stack, config.yaml and models.allow,
+  Polypus gateway operator: start/stop stack, ~/.config/polypus/config.yaml and models.allow,
   smoke tests, model harness, thinking policy, Phoenix traces, cf_local and
   lm_studio backends. Use when Polypus, inference routing, empty content,
   model_not_allowed, or host job model mismatch comes up. Not for case timeline,
@@ -17,11 +17,11 @@ One loopback OpenAI face on `:1320`. HTTP clients call only `POLYPUS_BASE_URL`. 
 
 ## Write here
 
-`config.yaml`, Polypus `Makefile`, `process-compose.yaml`, `ai-copilots/`, `ports.env` when ports change.
+`~/.config/polypus/config.yaml`, Polypus `Makefile`, `process-compose.yaml`, `ai-copilots/`, `ports.env` when ports change.
 
 ## Read / run
 
-`config.yaml`, `config.yaml.example`, and skill shards under `ai-copilots/skills/polypus-operator/`. Supervise with `make serve` / `make serve-down`.
+`~/.config/polypus/config.yaml`, `config.yaml.example`, and skill shards under `ai-copilots/skills/polypus-operator/`. Supervise with `make serve` / `make serve-down`.
 
 ## MUST
 

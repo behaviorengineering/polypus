@@ -49,6 +49,8 @@ flowchart TB
 ## Quick start (Apple Silicon)
 
 ```bash
+mkdir -p ~/.config/polypus
+cp config.yaml.example ~/.config/polypus/config.yaml   # once; edit allow-lists there
 make mlx-sync
 make build        # gateway bin/polypus
 make serve        # process-compose TUI: gateway :1320 + backends + Phoenix :6006
@@ -57,6 +59,8 @@ make smoke        # → /tmp/polypus-smoke.mp3
 make smoke-stt    # TTS then STT round-trip
 make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
 ```
+
+Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/polypus/config.yaml`). Override with `POLYPUS_CONFIG`. Repo `config.yaml` is a local fallback only (gitignored). Cache: `~/.cache/polypus/`; process-compose socket: `~/.local/state/polypus/`.
 
 `INFERENCE_CLOUD_CASE=1` in `stack/.env` enables the `cf_local` remote backend (requires `CF_AI_API_KEY`, `CF_ACCOUNT_ID`). Set `POLYPUS_ENABLE_MLX=1` to run MLX as well when cloud is default for speech. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`.
 
@@ -94,7 +98,7 @@ polypus/
   internal/gateway/               # HTTP surface (/health, /v1/models, chat/embed/audio)
   internal/router/                # Bifrost SDK + registry + policy
   internal/extension/cloudflare/  # Model Search + /ai/run speech (P7)
-  config.yaml.example             # optional multi-backend table
+  config.yaml.example             # template → ~/.config/polypus/config.yaml
   backends/mlx/                   # uv + mlx-audio (host only)
   process-compose.yaml            # independent TUI (make serve)
   scripts/pc-up.sh                # process-compose launcher
@@ -160,17 +164,28 @@ Multi-backend routing: see `config.yaml.example`. Model prefix: `backend_id/mode
 
 ## Docker
 
-Gateway image (MLX still on the host) and Phoenix:
+Phoenix only (gateway runs on the host via `make serve`):
 
 ```bash
-make serve                             # host: gateway + MLX :1322 + Phoenix
-docker compose up polypus              # optional gateway image → host.docker.internal:1322
-docker compose up phoenix              # Phoenix only: UI :6006, OTLP :4317
+make serve                             # host: gateway + backends + Phoenix
+docker compose up phoenix              # Phoenix alone: UI :6006, OTLP :4317
+make docker-build                      # optional gateway image (Dockerfile)
 ```
 
 ## Operator agent (ai-copilots)
 
 Configure, smoke-test, and troubleshoot Polypus via the operator pack under `ai-copilots/`. See [ai-copilots/README.md](ai-copilots/README.md).
+
+## Shared Cursor packs
+
+Go quality / review skills come from [xynova/cursor-packs](https://github.com/xynova/cursor-packs) at `.cursor/packs/shared`.
+
+```bash
+git submodule update --init --recursive
+.cursor/packs/shared/scripts/link-into-project.sh --project .
+```
+
+Product skill `polypus-operator` stays under `ai-copilots/` (symlinked into `.cursor/skills/`).
 
 ## License
 

@@ -1,6 +1,14 @@
 # Polypus config reference
 
-Paths relative to Polypus repo root unless noted.
+## Config path
+
+| Priority | Path |
+|----------|------|
+| 1 | `POLYPUS_CONFIG` (explicit) |
+| 2 | `~/.config/polypus/config.yaml` (`$XDG_CONFIG_HOME/polypus/config.yaml` when set) |
+| 3 | `$POLYPUS_ROOT/config.yaml` or cwd `config.yaml` (dev fallback) |
+
+Bootstrap: `cp config.yaml.example ~/.config/polypus/config.yaml`
 
 ## Ports
 
@@ -89,7 +97,15 @@ Client header `X-Polypus-Timeout` (duration or seconds) clamps to `timeouts.min`
 | `GET /v1/models?view=inventory` | Full synced upstream catalog |
 | POST inference | 400 `model_not_allowed` if not in allow list |
 
-Optional cache: `POLYPUS_MODELS_CACHE` or `.polypus/models-inventory.json`.
+Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.json`.
+
+## Data directories (XDG)
+
+| Path | Role |
+|------|------|
+| `~/.config/polypus/config.yaml` | Router config |
+| `~/.cache/polypus/models-inventory.json` | Model inventory cache |
+| `~/.local/state/polypus/process-compose.sock` | process-compose control socket |
 
 ## Capabilities routing
 
@@ -115,4 +131,4 @@ policy:
 
 When `require_cloud_opt_in: false`, remote backends stay loaded without `INFERENCE_CLOUD_CASE=1` (non-case / dev profiles only). When `reject_non_loopback_backends: false`, local backends may use LAN URLs; direct OpenAI/Anthropic hosts remain blocked.
 
-Host applications point `POLYPUS_BASE_URL` at the gateway only; backend tables stay in Polypus `config.yaml`.
+Host applications point `POLYPUS_BASE_URL` at the gateway only; backend tables stay in `~/.config/polypus/config.yaml`.

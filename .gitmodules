@@ -1,0 +1,3 @@
+[submodule ".cursor/packs/shared"]
+	path = .cursor/packs/shared
+	url = https://github.com/xynova/cursor-packs.git

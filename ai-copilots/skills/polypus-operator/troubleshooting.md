@@ -18,7 +18,7 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 |---------|--------------|-----|
 | Connection refused on `:1320` | Gateway not running | `make serve` |
 | process-compose shows gateway crash | Config error, port in use | Read TUI logs; check `POLYPUS_PORT`; `make serve-down` then retry |
-| `model_not_allowed` on POST | Id not in `models.allow` | Add to `config.yaml` or use correct `backend_id/` prefix |
+| `model_not_allowed` on POST | Id not in `models.allow` | Add to `~/.config/polypus/config.yaml` or use correct `backend_id/` prefix |
 | Model in host job config but smoke fails | Allow-list drift | Align Polypus `models.allow` with host job model ids |
 | Empty `message.content`, job XML fail | Thinking on; text in `reasoning_content` | [thinking-policy.md](thinking-policy.md); host L2 harness if available |
 | Chat hits MLX `:1322` | Wrong `default_chat_backend` or missing prefix | Set `default_chat_backend`; use `cf_local/` or `lm_studio/` prefix |
@@ -40,7 +40,7 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 
 ## Restart after config change
 
-1. Edit `config.yaml` (allow-list, defaults, timeouts).
+1. Edit `~/.config/polypus/config.yaml` (allow-list, defaults, timeouts).
 2. In process-compose TUI: restart `gateway`.
 3. Or: `make serve-down` then `make serve`.
 

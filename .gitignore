@@ -9,6 +9,10 @@ dist/
 # Local env overrides
 .env
 
+# Live router config lives in ~/.config/polypus/config.yaml (see config.yaml.example)
+config.yaml
+config.cloud.yaml
+
 # OTEL inference failure dumps
 logs/
 
