@@ -5,6 +5,9 @@ import (
 	"os"
 )
 
+// version is set by GoReleaser via -ldflags -X .../internal/cli.version=...
+var version = "dev"
+
 // Run dispatches polypus subcommands. Returns a process exit code.
 func Run(args []string) int {
 	if len(args) == 0 {
@@ -12,6 +15,9 @@ func Run(args []string) int {
 		return 2
 	}
 	switch args[0] {
+	case "version", "-version", "--version":
+		fmt.Printf("polypus %s\n", version)
+		return 0
 	case "serve":
 		return runServe(args[1:])
 	case "switchyard-render":
