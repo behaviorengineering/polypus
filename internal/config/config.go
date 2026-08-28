@@ -62,3 +62,17 @@ func LoadServeOptions() ServeOptions {
 func (o ServeOptions) ListenAddr() string {
 	return fmt.Sprintf("%s:%d", o.Host, o.Port)
 }
+
+// GatewayBaseURL returns the HTTP base URL Switchyard and render use to call back into Polypus.
+// Wildcard bind addresses map to loopback so outbound clients can connect.
+func (o ServeOptions) GatewayBaseURL() string {
+	host := strings.TrimSpace(o.Host)
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = DefaultHost
+	}
+	port := o.Port
+	if port <= 0 {
+		port = DefaultPort
+	}
+	return fmt.Sprintf("http://%s:%d", host, port)
+}

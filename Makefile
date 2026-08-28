@@ -1,7 +1,7 @@
-.PHONY: help build build-gateway build-chat-smoke install test vet tidy ci mlx-sync serve serve-down smoke smoke-chat smoke-higgs smoke-stt smoke-all docker-build
+.PHONY: help build build-gateway build-chat-smoke install test vet tidy ci mlx-sync serve serve-down smoke smoke-chat smoke-router smoke-higgs smoke-stt smoke-all switchyard-build docker-build
 
 include ports.env
-export POLYPUS_HOST POLYPUS_PORT POLYPUS_MLX_HOST POLYPUS_MLX_PORT
+export POLYPUS_HOST POLYPUS_PORT POLYPUS_MLX_HOST POLYPUS_MLX_PORT POLYPUS_SWITCHYARD_HOST POLYPUS_SWITCHYARD_PORT
 
 PARENT_ROOT := $(abspath $(CURDIR)/..)
 ifeq ($(wildcard $(PARENT_ROOT)/stack/.env.example),)
@@ -18,6 +18,7 @@ endif
 CF_ADAPTER_BIN :=
 CHAT_SMOKE_BIN := $(dir $(BINARY))polypus-chat-smoke
 POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/google/gemma-4-26b-a4b-it
+POLYPUS_ROUTER_SMOKE_MODEL ?= router/investigator
 
 IMAGE_REPO ?= xynova/polypus
 IMAGE_TAG ?= latest
@@ -31,6 +32,7 @@ help:
 	@echo "  make serve-down    Stop this Polypus process-compose project only"
 	@echo "  make smoke         curl TTS smoke test via gateway"
 	@echo "  make smoke-chat    L1 chat transport smoke (polypus-chat-smoke)"
+	@echo "  make smoke-router  Named router smoke (router/investigator by default)"
 	@echo "  make smoke-higgs   Higgs v2 TTS smoke (narration alternative)"
 	@echo "  make smoke-stt     TTS then STT round-trip via gateway"
 	@echo "  make smoke-all     TTS + STT smoke"
@@ -57,7 +59,7 @@ mlx-sync:
 	./backends/mlx/scripts/sync.sh
 
 serve: build
-	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-phoenix.sh
+	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-phoenix.sh scripts/pc-switchyard.sh
 	./scripts/pc-up.sh
 
 serve-down:
@@ -70,6 +72,13 @@ smoke:
 
 smoke-chat: build-chat-smoke
 	$(CHAT_SMOKE_BIN) -model $(POLYPUS_CHAT_SMOKE_MODEL)
+
+smoke-router: build-chat-smoke
+	$(CHAT_SMOKE_BIN) -model $(POLYPUS_ROUTER_SMOKE_MODEL)
+
+switchyard-build:
+	@mkdir -p bin
+	cargo install --locked --path providers/switchyard/crates/switchyard-server --root ./bin
 
 smoke-higgs:
 	chmod +x scripts/smoke.sh

@@ -17,16 +17,18 @@ import (
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/router"
+	"github.com/behaviorengineering/polypus/internal/switchyard"
 )
 
 // Handler is the Polypus HTTP gateway (Bifrost router + capability proxies).
 type Handler struct {
-	opts     config.ServeOptions
-	router   *router.Client
-	proxy    http.Handler
-	invCache *modelsInventoryCache
-	timeouts config.Timeouts
-	client   *http.Client
+	opts       config.ServeOptions
+	router     *router.Client
+	proxy      http.Handler
+	invCache   *modelsInventoryCache
+	timeouts   config.Timeouts
+	client     *http.Client
+	swProbe    switchyardProbeCache
 }
 
 // NewHandler returns the public Polypus HTTP handler.
@@ -38,6 +40,10 @@ func NewHandler(opts config.ServeOptions) (http.Handler, error) {
 	rc, err := router.NewClient(rcfg)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: %w", err)
+	}
+	if _, err := switchyard.WriteConfigIfNeeded(rcfg, opts.GatewayBaseURL()); err != nil {
+		rc.Close()
+		return nil, fmt.Errorf("gateway: switchyard render: %w", err)
 	}
 	proxyURL := rc.Registry().ProxyBackendURL()
 	proxy, err := newFallbackProxy(proxyURL)
@@ -116,6 +122,12 @@ func (h *Handler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	vision := chatBodyHasVision(body)
+
+	if routerName, ok := parseNamedRouterModel(model); ok {
+		h.serveNamedRouterChat(w, r, body, model, routerName, vision)
+		return
+	}
+
 	var backendID, downstream string
 	if vision {
 		backendID, downstream, err = reg.ResolveVision(model)
@@ -158,6 +170,114 @@ func (h *Handler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+}
+
+func (h *Handler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request, body []byte, model, routerName string, vision bool) {
+	reg := h.router.Registry()
+	cfg := reg.Config()
+	router, ok := lookupRouter(cfg, routerName)
+	if !ok {
+		http.Error(w, fmt.Sprintf("polypus: unknown router %q", model), http.StatusBadRequest)
+		return
+	}
+	if router.Capability != config.CapChat {
+		http.Error(w, fmt.Sprintf("polypus: router %q does not support chat", model), http.StatusBadRequest)
+		return
+	}
+	if vision {
+		http.Error(w, fmt.Sprintf("polypus: router %q does not support vision (v1 chat-only)", model), http.StatusBadRequest)
+		return
+	}
+
+	var err error
+	switch router.Route.Type {
+	case config.RoutePassthrough:
+		backendID, downstream, resolveErr := reg.ResolveChat(router.Route.Target)
+		if resolveErr != nil {
+			http.Error(w, resolveErr.Error(), http.StatusBadRequest)
+			return
+		}
+		if !h.ensureModelAllowed(backendID, router.Route.Target) {
+			writeModelNotAllowed(w, router.Route.Target)
+			return
+		}
+		backendURL, ok := reg.BackendURL(backendID)
+		if !ok {
+			http.Error(w, "polypus: backend not found", http.StatusBadGateway)
+			return
+		}
+		backend, _ := reg.Backend(backendID)
+		backendAuth, authErr := mustBackendAuth(backend)
+		if authErr != nil {
+			http.Error(w, authErr.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		rewritten, rewriteErr := rewriteChatModel(body, downstream)
+		if rewriteErr != nil {
+			http.Error(w, rewriteErr.Error(), http.StatusBadRequest)
+			return
+		}
+		ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
+		defer func() { observability.EndSpan(span, err) }()
+		r = r.WithContext(ctx)
+		hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, chatBodyWantsThinking(body))
+		if err = proxyChatCompletions(w, r, backendURL, rewritten, h.client, hop, backendAuth); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+		}
+	case config.RouteStageRouter:
+		switchyardURL := cfg.EffectiveSwitchyardBaseURL()
+		if probeErr := h.swProbe.available(r.Context(), switchyardURL); probeErr != nil {
+			http.Error(w, "polypus: switchyard unavailable: "+probeErr.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		ctx, span := observability.StartRouterSpan(r.Context(), "polypus.router", model, routerName, switchyardURL)
+		defer func() { observability.EndSpan(span, err) }()
+		r = r.WithContext(ctx)
+		hop := h.timeouts.Max
+		if hop <= 0 {
+			hop = config.DefaultTimeouts().Max
+		}
+		if err = proxyChatCompletionsOpts(w, r, switchyardURL, body, h.client, hop, "", false); err != nil {
+			h.swProbe.invalidate()
+			code := http.StatusBadGateway
+			if isSwitchyardUnreachable(err) {
+				code = http.StatusServiceUnavailable
+			}
+			http.Error(w, err.Error(), code)
+		}
+	default:
+		http.Error(w, fmt.Sprintf("polypus: router %q has unsupported route type", model), http.StatusBadRequest)
+	}
+}
+
+func probeSwitchyard(ctx context.Context, baseURL string) error {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/health", nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: backendProbeTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func isSwitchyardUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connect: connection refused") ||
+		strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "connection reset")
 }
 
 func (h *Handler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {

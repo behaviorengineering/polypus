@@ -43,6 +43,9 @@ func runServe(args []string) int {
 		b := rcfg.Backends[id]
 		fmt.Fprintf(os.Stderr, "  backend %s: %s (%v)\n", id, b.BaseURL, b.Capabilities)
 	}
+	if len(rcfg.Routers) > 0 {
+		fmt.Fprintf(os.Stderr, "  routers: %d configured (routes written at gateway startup)\n", len(rcfg.Routers))
+	}
 	otelCfg := observability.LoadConfig()
 	shutdownOTEL, err := observability.Init(otelCfg)
 	if err != nil {

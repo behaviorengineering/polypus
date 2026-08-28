@@ -26,6 +26,15 @@ func DefaultCacheDir() (string, error) {
 	return xdgDir("XDG_CACHE_HOME", ".cache")
 }
 
+// DefaultSwitchyardRoutesPath returns the generated Switchyard TOML path.
+func DefaultSwitchyardRoutesPath() (string, error) {
+	dir, err := DefaultCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "switchyard", "routes.toml"), nil
+}
+
 // DefaultModelsInventoryCachePath returns the default models inventory disk cache path.
 func DefaultModelsInventoryCachePath() (string, error) {
 	dir, err := DefaultCacheDir()

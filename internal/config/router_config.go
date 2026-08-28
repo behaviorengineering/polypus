@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -52,6 +53,8 @@ type RouterConfig struct {
 	Timeouts             Timeouts              `yaml:"-"`
 	Policy               RouterPolicy          `yaml:"policy"`
 	Backends             map[string]BackendDef `yaml:"backends"`
+	Routers              map[string]NamedRouter
+	Switchyard           SwitchyardConfig
 }
 
 // HasCapability reports whether the backend supports a capability.
@@ -74,6 +77,8 @@ type routerFile struct {
 	Timeouts             timeoutsFile                `yaml:"timeouts"`
 	Policy               routerPolicyFile            `yaml:"policy"`
 	Backends             map[string]backendFileEntry `yaml:"backends"`
+	Switchyard           switchyardFile              `yaml:"switchyard"`
+	Routers              map[string]namedRouterFile  `yaml:"routers"`
 }
 
 type backendFileEntry struct {
@@ -99,6 +104,7 @@ func LoadRouterConfig(opts ServeOptions) (RouterConfig, error) {
 	}
 	stripRemoteBackendsWhenDisabled(&cfg)
 	applyRouterEnvOverrides(&cfg, opts)
+	applySwitchyardEnvOverrides(&cfg)
 	if err := normalizeRouterConfig(&cfg); err != nil {
 		return RouterConfig{}, err
 	}
@@ -149,10 +155,16 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
 	var file routerFile
-	if err := yaml.Unmarshal(raw, &file); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&file); err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
 	timeouts, err := parseTimeoutsFile(file.Timeouts)
+	if err != nil {
+		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
+	}
+	routers, err := parseNamedRouters(file.Routers)
 	if err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
@@ -166,6 +178,8 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 		Timeouts:             timeouts,
 		Policy:               file.Policy.merge(),
 		Backends:             make(map[string]BackendDef, len(file.Backends)),
+		Routers:              routers,
+		Switchyard:           mergeSwitchyardFile(file.Switchyard),
 	}
 	for id, entry := range file.Backends {
 		id = strings.TrimSpace(id)
@@ -236,6 +250,29 @@ func applyRouterEnvOverrides(cfg *RouterConfig, opts ServeOptions) {
 	}
 }
 
+func applySwitchyardEnvOverrides(cfg *RouterConfig) {
+	if v := strings.TrimSpace(os.Getenv("POLYPUS_SWITCHYARD_BASE_URL")); v != "" {
+		cfg.Switchyard.BaseURL = strings.TrimRight(v, "/")
+	}
+	if v := strings.TrimSpace(os.Getenv("POLYPUS_SWITCHYARD_CONFIG")); v != "" {
+		cfg.Switchyard.ConfigPath = v
+	}
+}
+
+// SwitchyardEnabled reports whether the stack expects a Switchyard process (POLYPUS_SWITCHYARD, default on).
+func SwitchyardEnabled() bool {
+	v := strings.TrimSpace(os.Getenv("POLYPUS_SWITCHYARD"))
+	if v == "" {
+		return true
+	}
+	switch strings.ToLower(v) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
 func normalizeRouterConfig(cfg *RouterConfig) error {
 	if len(cfg.Backends) == 0 {
 		return fmt.Errorf("router: no backends configured")
@@ -296,7 +333,7 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 			return err
 		}
 	}
-	return nil
+	return validateRouters(cfg)
 }
 
 func requireBackend(cfg *RouterConfig, id string, cap Capability, field string) error {

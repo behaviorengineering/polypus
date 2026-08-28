@@ -15,6 +15,7 @@ Bootstrap: `cp config.yaml.example ~/.config/polypus/config.yaml`
 | Service | Default | Role |
 |---------|---------|------|
 | Gateway | `127.0.0.1:1320` | Public OpenAI `/v1/*`; `POLYPUS_BASE_URL` |
+| Switchyard | `127.0.0.1:4000` | Composed named routers (`stage_router`) |
 | MLX | `127.0.0.1:1322` | Local TTS/STT (Apple Silicon) |
 | LM Studio | `127.0.0.1:1234` | External; chat, vision, embed |
 | Phoenix UI | `127.0.0.1:6006` | Trace viewer |
@@ -32,6 +33,9 @@ POLYPUS_MLX_HOST=127.0.0.1
 POLYPUS_MLX_PORT=1322
 POLYPUS_PHOENIX=1
 POLYPUS_OTEL=1
+POLYPUS_SWITCHYARD=1          # 0 skips Switchyard process in make serve
+POLYPUS_SWITCHYARD_BASE_URL=  # override Switchyard probe/render target (tests/ops)
+POLYPUS_SWITCHYARD_CONFIG=    # override generated routes.toml path
 INFERENCE_CLOUD_CASE=1   # enables cf_local remote backend (set in host environment)
 CF_AI_API_KEY=...
 CF_ACCOUNT_ID=...
@@ -87,7 +91,43 @@ Client header `X-Polypus-Timeout` (duration or seconds) clamps to `timeouts.min`
 
 - Gateway rewrites ids as `backend_id/downstream-model`.
 - Examples: `cf_local/@cf/google/gemma-4-26b-a4b-it`, `lm_studio/allenai/olmocr-2-7b`.
+- Named routers: `router/<name>` (e.g. `router/investigator`, `router/scribe`).
 - No prefix → capability default backend applies.
+
+## Named routers
+
+Configure under `routers:` in `config.yaml`. Public model id is always `router/<yaml-key>`.
+
+| Route type | Handler | Switchyard TOML |
+|------------|---------|-----------------|
+| `passthrough` | Polypus leaf proxy | omitted |
+| `stage_router` | HTTP to Switchyard `:4000` | emitted |
+
+Generated Switchyard config: `~/.cache/polypus/switchyard/routes.toml` (override with `switchyard.config_path`). Regenerated at gateway startup and by `polypus switchyard-render`.
+
+```yaml
+switchyard:
+  base_url: http://127.0.0.1:4000
+
+routers:
+  investigator:
+    capability: chat
+    route:
+      type: stage_router
+      picker: efficient_first
+      confidence_threshold: 0.5
+      capable: cf_local/@cf/zai-org/glm-4.7-flash
+      efficient: lm_studio/qwen2.5-7b
+  scribe:
+    capability: chat
+    route:
+      type: passthrough
+      target: cf_local/@cf/google/gemma-4-26b-a4b-it
+```
+
+Backend id `router` is reserved. Composed routers return **503** when Switchyard is down (no fallback).
+
+Build Switchyard: `make switchyard-build` (Rust toolchain per `providers/switchyard/rust-toolchain.toml`).
 
 ## Inventory vs enabled
 
@@ -105,6 +145,7 @@ Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.jso
 |------|------|
 | `~/.config/polypus/config.yaml` | Router config |
 | `~/.cache/polypus/models-inventory.json` | Model inventory cache |
+| `~/.cache/polypus/switchyard/routes.toml` | Generated Switchyard routes (from `routers:`) |
 | `~/.local/state/polypus/process-compose.sock` | process-compose control socket |
 
 ## Capabilities routing

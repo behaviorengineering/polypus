@@ -40,6 +40,7 @@ flowchart TB
 | Process-compose | Port | What it is |
 |-----------------|------|------------|
 | `gateway` (`core`) | `:1320` | Public OpenAI API. This is `POLYPUS_BASE_URL`. |
+| `switchyard` (`switchyard`) | `:4000` | Composed router engine (stage_router). Always-on when routers are configured. |
 | `mlx` (`mlx`) | `:1322` | Local Apple Silicon speech (Qwen3 TTS, Whisper STT). |
 | `phoenix` (`obs`) | `:6006` / `:4317` | Arize trace UI and OTLP collector. Clients set `openinference.endpoint` to `localhost:4317`. |
 | (external) | `:1234` | LM Studio. Not started by Polypus. |
@@ -61,6 +62,8 @@ make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
 ```
 
 Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/polypus/config.yaml`). Override with `POLYPUS_CONFIG`. Repo `config.yaml` is a local fallback only (gitignored). Cache: `~/.cache/polypus/`; process-compose socket: `~/.local/state/polypus/`.
+
+**Switchyard (composed routers):** git submodule at `providers/switchyard` (tag `v0.2.0`). Requires **Rust stable** (see `providers/switchyard/rust-toolchain.toml`, currently 1.96.1). Pre-build for faster restarts: `make switchyard-build` → `bin/switchyard-server`. Generated routes TOML: `~/.cache/polypus/switchyard/routes.toml`. Set `POLYPUS_SWITCHYARD=0` to skip the Switchyard process when using `make serve`.
 
 `INFERENCE_CLOUD_CASE=1` in `stack/.env` enables the `cf_local` remote backend (requires `CF_AI_API_KEY`, `CF_ACCOUNT_ID`). Set `POLYPUS_ENABLE_MLX=1` to run MLX as well when cloud is default for speech. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`.
 
