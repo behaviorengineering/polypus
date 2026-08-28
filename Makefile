@@ -22,6 +22,8 @@ POLYPUS_ROUTER_SMOKE_MODEL ?= router/investigator
 
 IMAGE_REPO ?= xynova/polypus
 IMAGE_TAG ?= latest
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X github.com/behaviorengineering/polypus/internal/cli.version=$(VERSION)
 
 help:
 	@echo "polypus — local OpenAI speech gateway (TTS/STT backends behind loopback)"
@@ -45,14 +47,14 @@ build: build-gateway build-chat-smoke
 
 build-gateway:
 	@mkdir -p $(dir $(BINARY))
-	go build -o $(BINARY) ./cmd/polypus
+	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/polypus
 
 build-chat-smoke:
 	@mkdir -p $(dir $(CHAT_SMOKE_BIN))
 	go build -o $(CHAT_SMOKE_BIN) ./cmd/polypus-chat-smoke
 
 install:
-	go build -o $(shell go env GOPATH)/bin/polypus ./cmd/polypus
+	go build -ldflags "$(LDFLAGS)" -o $(shell go env GOPATH)/bin/polypus ./cmd/polypus
 
 mlx-sync:
 	chmod +x backends/mlx/scripts/sync.sh

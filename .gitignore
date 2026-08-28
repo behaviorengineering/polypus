@@ -23,6 +23,7 @@ logs/
 .DS_Store
 **/.DS_Store
 tmp/
+tmp/Switchyard/
 
 # Test / coverage
 coverage.out

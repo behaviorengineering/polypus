@@ -175,6 +175,16 @@ docker compose up phoenix              # Phoenix alone: UI :6006, OTLP :4317
 make docker-build                      # optional gateway image (Dockerfile)
 ```
 
+## Releases
+
+Pushing an annotated tag `v*` on `main` triggers [GoReleaser](https://goreleaser.com) via `.github/workflows/release.yml`. Each release ships `polypus` binaries for linux/darwin/windows (amd64/arm64), `checksums.txt`, and a grouped changelog.
+
+```bash
+polypus version   # print installed build version
+```
+
+Download release assets from GitHub Releases, or build locally with `make build`.
+
 ## Operator agent (ai-copilots)
 
 Configure, smoke-test, and troubleshoot Polypus via the operator pack under `ai-copilots/`. See [ai-copilots/README.md](ai-copilots/README.md).

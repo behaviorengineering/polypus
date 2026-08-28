@@ -35,6 +35,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `usage:
   polypus serve [flags]              # OpenAI speech API gateway (loopback)
   polypus switchyard-render [flags]  # render Switchyard routes.toml from config
+  polypus version                    # print release version
 
 flags:
   --host HOST       gateway listen host
