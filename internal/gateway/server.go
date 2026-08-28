@@ -22,13 +22,13 @@ import (
 
 // Handler is the Polypus HTTP gateway (Bifrost router + capability proxies).
 type Handler struct {
-	opts       config.ServeOptions
-	router     *router.Client
-	proxy      http.Handler
-	invCache   *modelsInventoryCache
-	timeouts   config.Timeouts
-	client     *http.Client
-	swProbe    switchyardProbeCache
+	opts     config.ServeOptions
+	router   *router.Client
+	proxy    http.Handler
+	invCache *modelsInventoryCache
+	timeouts config.Timeouts
+	client   *http.Client
+	swProbe  switchyardProbeCache
 }
 
 // NewHandler returns the public Polypus HTTP handler.

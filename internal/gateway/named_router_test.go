@@ -340,20 +340,20 @@ func readBody(t *testing.T, r *http.Request) string {
 }
 
 func extractJSONField(body, key string) string {
- needle := `"` + key + `":`
- i := strings.Index(body, needle)
- if i < 0 {
-  return ""
- }
- rest := body[i+len(needle):]
- rest = strings.TrimSpace(rest)
- if !strings.HasPrefix(rest, `"`) {
-  return ""
- }
- rest = rest[1:]
- end := strings.Index(rest, `"`)
- if end < 0 {
-  return ""
- }
- return rest[:end]
+	needle := `"` + key + `":`
+	i := strings.Index(body, needle)
+	if i < 0 {
+		return ""
+	}
+	rest := body[i+len(needle):]
+	rest = strings.TrimSpace(rest)
+	if !strings.HasPrefix(rest, `"`) {
+		return ""
+	}
+	rest = rest[1:]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
 }

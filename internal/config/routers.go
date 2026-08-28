@@ -56,8 +56,8 @@ type switchyardFile struct {
 }
 
 type namedRouterFile struct {
-	Capability string           `yaml:"capability"`
-	Route      routerRouteFile  `yaml:"route"`
+	Capability string          `yaml:"capability"`
+	Route      routerRouteFile `yaml:"route"`
 }
 
 type routerRouteFile struct {

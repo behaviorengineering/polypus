@@ -25,10 +25,10 @@ type healthSwitchyard struct {
 }
 
 type healthResponse struct {
-	Status     string           `json:"status"`
-	Router     string           `json:"router"`
+	Status     string            `json:"status"`
+	Router     string            `json:"router"`
 	Switchyard *healthSwitchyard `json:"switchyard,omitempty"`
-	Backends   []healthBackend  `json:"backends"`
+	Backends   []healthBackend   `json:"backends"`
 }
 
 type backendProbeResult struct {
