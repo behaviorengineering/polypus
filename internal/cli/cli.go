@@ -22,6 +22,8 @@ func Run(args []string) int {
 		return runServe(args[1:])
 	case "switchyard-render":
 		return runSwitchyardRender(args[1:])
+	case "processes":
+		return runProcesses(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
@@ -35,6 +37,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `usage:
   polypus serve [flags]              # OpenAI speech API gateway (loopback)
   polypus switchyard-render [flags]  # render Switchyard routes.toml from config
+  polypus processes [--print mlx]    # process-compose toggles from config processes.*
   polypus version                    # print release version
 
 flags:
@@ -45,6 +48,9 @@ flags:
 env: POLYPUS_HOST, POLYPUS_PORT, POLYPUS_BACKEND_URL, POLYPUS_MLX_HOST, POLYPUS_MLX_PORT
      POLYPUS_OTEL, POLYPUS_OTLP_ENDPOINT, POLYPUS_FAILURE_DUMP_DIR, POLYPUS_SERVICE_NAME
      POLYPUS_OTEL_SKIP_PATHS   # comma list; default /health; "none" traces all paths
+
+config processes.mlx (bool) drives whether make serve starts the MLX process.
+POLYPUS_ENABLE_MLX still overrides when set.
 
 `)
 }

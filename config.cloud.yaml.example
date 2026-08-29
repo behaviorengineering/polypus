@@ -2,6 +2,9 @@
 # Use when INFERENCE_CLOUD_CASE=1. Clients call Polypus gateway :1320 only.
 # Copy to ~/.config/polypus/config.yaml or set POLYPUS_CONFIG.
 
+processes:
+  mlx: false
+
 default_tts_backend: cf_local
 default_stt_backend: cf_local
 default_proxy_backend: cf_local

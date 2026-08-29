@@ -135,7 +135,7 @@ func inventoryView(r *http.Request) bool {
 	return r.URL.Query().Get("inventory") == "1"
 }
 
-func (h *Handler) serveModelsList(w http.ResponseWriter, r *http.Request) {
+func (h modelsHandler) serveModelsList(w http.ResponseWriter, r *http.Request) {
 	models := h.collectModels(r, inventoryView(r))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(openaiModelList{
@@ -144,7 +144,7 @@ func (h *Handler) serveModelsList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) serveModelRetrieve(w http.ResponseWriter, r *http.Request) {
+func (h modelsHandler) serveModelRetrieve(w http.ResponseWriter, r *http.Request) {
 	rawID := strings.TrimPrefix(r.URL.Path, "/v1/models/")
 	rawID = strings.Trim(rawID, "/")
 	if rawID == "" {
@@ -177,7 +177,7 @@ func (h *Handler) serveModelRetrieve(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) collectModels(r *http.Request, asInventory bool) []openaiModel {
+func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openaiModel {
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	ids := cfg.BackendIDs()
@@ -279,7 +279,7 @@ func (h *Handler) collectModels(r *http.Request, asInventory bool) []openaiModel
 	return out
 }
 
-func (h *Handler) inventoryForBackend(r *http.Request, b config.BackendDef) []openaiModel {
+func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef) []openaiModel {
 	modelsCfg := b.Models
 	if b.IsCloudflareExtension() && (modelsCfg == nil || modelsCfg.ShouldSync()) {
 		if live := h.cloudflareInventory(r, b); len(live) > 0 {
@@ -335,7 +335,7 @@ func syntheticModels(backendID string, allow []string) []openaiModel {
 	return out
 }
 
-func (h *Handler) cloudflareInventory(r *http.Request, b config.BackendDef) []openaiModel {
+func (h modelsHandler) cloudflareInventory(r *http.Request, b config.BackendDef) []openaiModel {
 	client, err := cloudflare.NewClient(b)
 	if err != nil {
 		return nil
@@ -518,8 +518,11 @@ func writeModelNotAllowed(w http.ResponseWriter, model string) {
 	})
 }
 
-func (h *Handler) ensureModelAllowed(backendID, model string) bool {
-	reg := h.router.Registry()
+func (s *shared) ensureModelAllowed(backendID, model string) bool {
+	if s == nil || s.router == nil {
+		return true
+	}
+	reg := s.router.Registry()
 	b, ok := reg.Config().Backends[backendID]
 	if !ok {
 		return true

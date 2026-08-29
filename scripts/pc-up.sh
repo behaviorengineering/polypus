@@ -11,10 +11,17 @@ if ! command -v process-compose >/dev/null 2>&1; then
   exit 1
 fi
 
-PARENT_MONOREPO_ROOT="$(cd "$POLYPUS_DIR/../.." && pwd)"
-if [[ ! -f "$PARENT_MONOREPO_ROOT/stack/.env.example" ]]; then
-  PARENT_MONOREPO_ROOT=""
-fi
+PARENT_MONOREPO_ROOT=""
+# Nested as providers/polypus → ../..; standalone sibling of the monorepo → ../cr-case-intake.
+for _polypus_parent_candidate in \
+  "$(cd "$POLYPUS_DIR/../.." && pwd)" \
+  "$(cd "$POLYPUS_DIR/../cr-case-intake" 2>/dev/null && pwd)"; do
+  if [[ -n "$_polypus_parent_candidate" && -f "$_polypus_parent_candidate/stack/.env.example" ]]; then
+    PARENT_MONOREPO_ROOT="$_polypus_parent_candidate"
+    break
+  fi
+done
+unset _polypus_parent_candidate
 
 if [[ -n "$PARENT_MONOREPO_ROOT" && -f "$PARENT_MONOREPO_ROOT/stack/.env" ]]; then
   set -a
@@ -88,11 +95,20 @@ fi
 
 ENABLE_MLX="${POLYPUS_ENABLE_MLX:-}"
 if [[ -z "$ENABLE_MLX" ]]; then
-  if [[ "$INFERENCE_CLOUD_CASE" == "1" ]]; then
+  # Config processes.mlx is source of truth when set; else cloud-case default.
+  _cfg_mlx=""
+  set +e
+  _cfg_mlx="$("$POLYPUS_BIN" processes --print mlx 2>/dev/null)"
+  _cfg_mlx_rc=$?
+  set -e
+  if [[ "$_cfg_mlx_rc" -eq 0 && ( "$_cfg_mlx" == "0" || "$_cfg_mlx" == "1" ) ]]; then
+    ENABLE_MLX="$_cfg_mlx"
+  elif [[ "$INFERENCE_CLOUD_CASE" == "1" ]]; then
     ENABLE_MLX=0
   else
     ENABLE_MLX=1
   fi
+  unset _cfg_mlx _cfg_mlx_rc
 fi
 
 if [[ "$ENABLE_MLX" == "1" ]]; then

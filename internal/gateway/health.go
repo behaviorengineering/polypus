@@ -45,7 +45,7 @@ type backendHealthResponse struct {
 }
 
 // serveHealth reports gateway liveness only (no upstream probes).
-func (h *Handler) serveHealth(w http.ResponseWriter, _ *http.Request) {
+func (h healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	backends := make([]healthBackend, 0, len(cfg.Backends))
@@ -69,7 +69,7 @@ func (h *Handler) serveHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 // serveBackendHealth probes configured upstream backends (manual / stack-doctor use).
-func (h *Handler) serveBackendHealth(w http.ResponseWriter, r *http.Request) {
+func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), backendProbeTimeout)
 	defer cancel()
 
