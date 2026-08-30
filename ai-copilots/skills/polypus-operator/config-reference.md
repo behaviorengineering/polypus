@@ -102,8 +102,9 @@ Configure under `routers:` in `config.yaml`. Public model id is always `router/<
 |------------|---------|-----------------|
 | `passthrough` | Polypus leaf proxy | omitted |
 | `stage_router` | HTTP to Switchyard `:4000` | emitted |
+| `llm_classifier` (`mode: custom`) | HTTP to Switchyard `:4000` | emitted |
 
-Generated Switchyard config: `~/.cache/polypus/switchyard/routes.toml` (override with `switchyard.config_path`). Regenerated at gateway startup and by `polypus switchyard-render`.
+Generated Switchyard config: `~/.cache/polypus/switchyard/routes.toml` (override with `switchyard.config_path`). Regenerated at gateway startup and by `polypus switchyard-render`. See [docs/switchyard/llm-classifier-custom.md](../../../docs/switchyard/llm-classifier-custom.md) for custom classifier fields.
 
 ```yaml
 switchyard:

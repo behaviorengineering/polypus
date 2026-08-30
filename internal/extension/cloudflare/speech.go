@@ -12,13 +12,28 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 const speechTimeout = 300 * time.Second
 
-// SpeechRequest is OpenAI-compatible TTS input.
+// doSpeech runs /run over the shared speech client. If ctx has no deadline,
+// a fallback speechTimeout is applied so calls cannot hang forever.
+func (c *Client) doSpeech(ctx context.Context, req *http.Request) (*http.Response, error) {
+	if c == nil || c.speechClient == nil {
+		return nil, fmt.Errorf("cloudflare speech: not configured")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, speechTimeout)
+		defer cancel()
+		req = req.WithContext(ctx)
+	}
+	return c.speechClient.Do(req)
+}
+
+// SpeechRequest is OpenAI-compatible TTS input for the Cloudflare Workers AI path.
+// Kept separate from router.SpeechRequest so CF-only fields can diverge without
+// coupling the Bifrost speech surface.
 type SpeechRequest struct {
 	Model          string
 	Input          string
@@ -69,11 +84,7 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, str
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "audio/mpeg,application/octet-stream,application/json")
 
-	client := &http.Client{
-		Timeout:   speechTimeout,
-		Transport: observability.WrapTransport(http.DefaultTransport),
-	}
-	resp, err := client.Do(httpReq)
+	resp, err := c.doSpeech(ctx, httpReq)
 	if err != nil {
 		return nil, "", fmt.Errorf("cloudflare speech: post %s: %w", target, err)
 	}
@@ -127,11 +138,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 	httpReq.Header.Set("Content-Type", mime)
 	httpReq.Header.Set("Accept", "application/json")
 
-	client := &http.Client{
-		Timeout:   speechTimeout,
-		Transport: observability.WrapTransport(http.DefaultTransport),
-	}
-	resp, err := client.Do(httpReq)
+	resp, err := c.doSpeech(ctx, httpReq)
 	if err != nil {
 		return "", fmt.Errorf("cloudflare speech: post %s: %w", target, err)
 	}

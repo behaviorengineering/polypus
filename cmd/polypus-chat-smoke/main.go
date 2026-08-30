@@ -125,7 +125,7 @@ func pingHealth(ctx context.Context, baseURL string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("health status %d", resp.StatusCode)
 	}
@@ -143,7 +143,7 @@ func chatPing(ctx context.Context, defaults smokeDefaults, model string) (conten
 	if err != nil {
 		return "", "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := ioReadAllLimit(resp.Body, 1<<20)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", "", fmt.Errorf("chat status %d: %s", resp.StatusCode, string(raw))

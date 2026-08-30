@@ -211,11 +211,34 @@ func (t Timeouts) ResolveEmbed(header string) time.Duration {
 	return t.Clamp(t.Embed)
 }
 
-// SpeechSeconds is the Bifrost per-provider request timeout.
+// ResolveSpeech returns the TTS/STT hop timeout (header or speech bucket).
+func (t Timeouts) ResolveSpeech(header string) time.Duration {
+	if raw := strings.TrimSpace(header); raw != "" {
+		if d, err := ParseTimeoutValue(raw); err == nil {
+			return t.Clamp(d)
+		}
+	}
+	return t.Clamp(t.Speech)
+}
+
+// SpeechSeconds is the Bifrost per-provider request timeout for speech-only configs.
 func (t Timeouts) SpeechSeconds() int {
 	d := t.Speech
 	if d <= 0 {
 		d = defaultTimeoutSpeech
+	}
+	sec := int(t.Clamp(d).Seconds())
+	if sec < 1 {
+		return 1
+	}
+	return sec
+}
+
+// ProviderSeconds is the Bifrost network timeout covering chat/embed/speech hops.
+func (t Timeouts) ProviderSeconds() int {
+	d := t.Max
+	if d <= 0 {
+		d = defaultTimeoutMax
 	}
 	sec := int(t.Clamp(d).Seconds())
 	if sec < 1 {

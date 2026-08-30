@@ -12,9 +12,11 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/behaviorengineering/polypus/internal/upstream"
 )
 
 const chatMaxBody = 32 << 20
+const errBackendNotFound = "polypus: backend not found"
 
 func newChatProxyClient(max time.Duration) *http.Client {
 	if max <= 0 {
@@ -26,13 +28,32 @@ func newChatProxyClient(max time.Duration) *http.Client {
 	}
 }
 
+// newStreamProxyClient returns a client for SSE: no Client.Timeout (that covers the
+// entire body read). Bound connect/TTFB via request context; cancel on client disconnect.
+func newStreamProxyClient() *http.Client {
+	return &http.Client{
+		Transport: observability.WrapTransport(http.DefaultTransport),
+	}
+}
+
+func streamSafeClient(client *http.Client) *http.Client {
+	if client == nil {
+		return newStreamProxyClient()
+	}
+	if client.Timeout == 0 {
+		return client
+	}
+	return &http.Client{Transport: client.Transport}
+}
+
 func extractChatModel(body []byte) (string, error) {
-	var payload map[string]any
+	var payload struct {
+		Model string `json:"model"`
+	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return "", fmt.Errorf("invalid json: %w", err)
 	}
-	model, _ := payload["model"].(string)
-	model = strings.TrimSpace(model)
+	model := strings.TrimSpace(payload.Model)
 	if model == "" {
 		return "", fmt.Errorf("model required")
 	}
@@ -110,7 +131,9 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 	streaming := chatBodyIsStream(body)
 	observability.RecordProxyIO(r.Context(), target, streaming, 0, -1)
 	ctx := r.Context()
-	if hopTimeout > 0 {
+	// Non-stream: hop wall-clock via context. Stream: only client cancel (r.Context);
+	// Client.Timeout must also stay unset for streams (see streamSafeClient).
+	if hopTimeout > 0 && !streaming {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, hopTimeout)
 		defer cancel()
@@ -134,14 +157,16 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 		req.Header.Set(config.TimeoutHeader, hopTimeout.String())
 	}
 
-	if client == nil {
+	if streaming {
+		client = streamSafeClient(client)
+	} else if client == nil {
 		client = newChatProxyClient(0)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("post %s: %w", target, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if streaming {
 		return writeChatStreamResponse(w, r, resp, target, streaming)
@@ -166,7 +191,7 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 	if err != nil {
 		return fmt.Errorf("write response: %w", err)
 	}
-	return nil
+	return upstream.StatusFailure(resp.StatusCode)
 }
 
 func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string, streaming bool) error {
@@ -180,7 +205,7 @@ func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
-	return nil
+	return upstream.StatusFailure(resp.StatusCode)
 }
 
 func copyChatResponseHeaders(w http.ResponseWriter, header http.Header) {
@@ -347,6 +372,13 @@ func boolishTrue(v any) bool {
 	case string:
 		s := strings.ToLower(strings.TrimSpace(t))
 		return s == "true" || s == "1" || s == "yes"
+	case float64:
+		return t != 0
+	case json.Number:
+		n, err := t.Float64()
+		return err == nil && n != 0
+	case int:
+		return t != 0
 	default:
 		return false
 	}

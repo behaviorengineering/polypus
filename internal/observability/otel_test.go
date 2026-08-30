@@ -41,7 +41,7 @@ func TestWrapTransportInjectsTraceparent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	span.End()
 
 	if gotParent == "" {

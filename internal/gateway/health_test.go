@@ -149,6 +149,40 @@ func TestBackendHealthSkipsSwitchyardWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestBackendHealthHonorsRequestCancel(t *testing.T) {
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+
+	block := make(chan struct{})
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-block:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() {
+		close(block)
+		backend.Close()
+	})
+
+	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/health/backends", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status: got %d body %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"degraded"`) {
+		t.Fatalf("body: %q", rec.Body.String())
+	}
+}
+
 func TestProbeSwitchyardRejectsNon2xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)

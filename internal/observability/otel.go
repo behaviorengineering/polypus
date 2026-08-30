@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -21,7 +22,12 @@ import (
 
 const instrumentationName = "github.com/behaviorengineering/polypus"
 
-var skipHTTPPaths = append([]string(nil), defaultSkipPaths...)
+// skipHTTPPaths holds the active SERVER skip list (set by Init; read by WrapHandler).
+var skipHTTPPaths atomic.Value // []string
+
+func init() {
+	skipHTTPPaths.Store(append([]string(nil), defaultSkipPaths...))
+}
 
 // Init installs the global tracer provider, W3C propagator, and optional dump processor.
 func Init(cfg Config) (func(context.Context) error, error) {
@@ -29,7 +35,7 @@ func Init(cfg Config) (func(context.Context) error, error) {
 	if skip == nil {
 		skip = defaultSkipPaths
 	}
-	skipHTTPPaths = append([]string(nil), skip...)
+	skipHTTPPaths.Store(append([]string(nil), skip...))
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},
@@ -92,8 +98,11 @@ func Tracer() trace.Tracer {
 // WrapHandler extracts incoming W3C context and creates SERVER spans for each request.
 // Paths in SkipPaths (default /health) are not traced.
 func WrapHandler(h http.Handler) http.Handler {
-	skip := append([]string(nil), skipHTTPPaths...)
-	return wrapHandler(h, skip)
+	skip, _ := skipHTTPPaths.Load().([]string)
+	if skip == nil {
+		skip = defaultSkipPaths
+	}
+	return wrapHandler(h, append([]string(nil), skip...))
 }
 
 func wrapHandler(h http.Handler, skip []string) http.Handler {

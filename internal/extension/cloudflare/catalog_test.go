@@ -115,6 +115,47 @@ func TestCatalogFailureEmpty(t *testing.T) {
 	if list.Object != "list" || len(list.Data) != 0 {
 		t.Fatalf("want empty list, got %+v", list)
 	}
+	_, strictErr := client.ListModelsStrict(context.Background())
+	if strictErr == nil {
+		t.Fatal("expected strict error with no cache")
+	}
+}
+
+func TestCatalogFailureUsesStaleCache(t *testing.T) {
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if n == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"success":true,"result":[{"id":"@cf/cached","task":"text"}],"result_info":{"page":1,"total_pages":1}}`))
+			return
+		}
+		http.Error(w, "boom", http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv("CF_TEST_KEY", "secret")
+	client, err := NewClient(config.BackendDef{
+		ID:        "cf_local",
+		Remote:    true,
+		Extension: config.ExtensionCloudflare,
+		BaseURL:   srv.URL + "/client/v4/accounts/test-acc/ai/v1",
+		Auth:      config.BackendAuth{BearerEnv: "CF_TEST_KEY"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := client.ListModelsStrict(context.Background())
+	if err != nil || len(first.Data) != 1 {
+		t.Fatalf("first: %+v err=%v", first, err)
+	}
+	second, err := client.ListModelsStrict(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Data) != 1 || second.Data[0].ID != "@cf/cached" {
+		t.Fatalf("stale: %+v", second)
+	}
 }
 
 func TestNormalizeWorkersAIModelName(t *testing.T) {

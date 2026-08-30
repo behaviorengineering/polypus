@@ -11,17 +11,19 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/upstream"
 )
 
 const embedMaxBody = 8 << 20
 
 func extractEmbedModel(body []byte) (string, error) {
-	var payload map[string]any
+	var payload struct {
+		Model string `json:"model"`
+	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return "", fmt.Errorf("invalid json: %w", err)
 	}
-	model, _ := payload["model"].(string)
-	model = strings.TrimSpace(model)
+	model := strings.TrimSpace(payload.Model)
 	if model == "" {
 		return "", fmt.Errorf("model required")
 	}
@@ -71,7 +73,7 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 	if err != nil {
 		return fmt.Errorf("post %s: %w", target, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	for k, vals := range resp.Header {
 		if len(vals) == 0 {
@@ -91,7 +93,7 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 	if err != nil {
 		return fmt.Errorf("write response: %w", err)
 	}
-	return nil
+	return upstream.StatusFailure(resp.StatusCode)
 }
 
 func embeddingsURL(base string) string {

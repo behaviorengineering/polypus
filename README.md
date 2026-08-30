@@ -45,7 +45,9 @@ flowchart TB
 | `phoenix` (`obs`) | `:6006` / `:4317` | Arize trace UI and OTLP collector. Clients set `openinference.endpoint` to `localhost:4317`. |
 | (external) | `:1234` | LM Studio. Not started by Polypus. |
 
-**Cloudflare (`cf_local`):** When `INFERENCE_CLOUD_CASE=1`, the gateway calls Workers AI in-process via a **Cloudflare extension** (Model Search catalog + `/ai/run` audio). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` only.
+**Cloudflare (`cf_local`):** When `INFERENCE_CLOUD_CASE=1`, the gateway uses Workers AI. **OpenAI-shaped** chat and embeddings dial through Bifrost to the Workers AI `/ai/v1` base URL. **TTS/STT** stay on the in-process Cloudflare extension via `/ai/run` (Workers AI has no `/ai/v1/audio/*` OpenAI-compat routes; live spike returned `400 No route for that URI`). Model Search catalog also stays on the extension. Extension HTTP clients are process-scoped (keyed by backend id + bearer). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` only.
+
+**Bifrost:** Bifrost fronts every OpenAI-compatible outbound dial Polypus can use: leaf backends, Cloudflare chat/embed, and composed Switchyard hops (`provider` id `switchyard`). CF `/run` speech needs a custom adapter (or a future Maxim CF provider); Model Search is not a Bifrost surface.
 
 ## Quick start (Apple Silicon)
 
@@ -63,7 +65,7 @@ make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
 
 Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/polypus/config.yaml`). Override with `POLYPUS_CONFIG`. Repo `config.yaml` is a local fallback only (gitignored). Cache: `~/.cache/polypus/`; process-compose socket: `~/.local/state/polypus/`.
 
-**Switchyard (composed routers):** git submodule at `providers/switchyard` (tag `v0.2.0`). Requires **Rust stable** (see `providers/switchyard/rust-toolchain.toml`, currently 1.96.1). `make build` runs `switchyard-build` and installs `bin/switchyard-server` (hard-fail if the submodule or cargo is missing). Generated routes TOML: `~/.cache/polypus/switchyard/routes.toml`. Set `POLYPUS_SWITCHYARD=0` to skip the Switchyard process when using `make serve`.
+**Switchyard (composed routers):** git submodule at `providers/switchyard` (tag `v0.2.0`). Requires **Rust stable** (see `providers/switchyard/rust-toolchain.toml`, currently 1.96.1). `make build` runs `switchyard-build` and installs `bin/switchyard-server` (hard-fail if the submodule or cargo is missing). Generated routes TOML: `~/.cache/polypus/switchyard/routes.toml`. Set `POLYPUS_SWITCHYARD=0` to skip the Switchyard process when using `make serve`. Switchyard routing types and use cases: [docs/switchyard/](docs/switchyard/).
 
 `INFERENCE_CLOUD_CASE=1` in `stack/.env` enables the `cf_local` remote backend (requires `CF_AI_API_KEY`, `CF_ACCOUNT_ID`). MLX process start is driven by `processes.mlx` in config (`polypus processes --print mlx`); `POLYPUS_ENABLE_MLX` overrides when set. When `processes.mlx` is omitted, cloud case defaults MLX off and local defaults it on. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`.
 

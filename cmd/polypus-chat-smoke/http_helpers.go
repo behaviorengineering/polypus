@@ -5,7 +5,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
+
+var smokeHTTPClient = &http.Client{Timeout: 120 * time.Second}
 
 func httpNewGet(ctx context.Context, url string) (*http.Request, error) {
 	return http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -21,7 +24,7 @@ func httpNewPost(ctx context.Context, url, body string) (*http.Request, error) {
 }
 
 func httpDefaultDo(req *http.Request) (*http.Response, error) {
-	return http.DefaultClient.Do(req)
+	return smokeHTTPClient.Do(req)
 }
 
 func ioReadAllLimit(r io.Reader, n int64) ([]byte, error) {

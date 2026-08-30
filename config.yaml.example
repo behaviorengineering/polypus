@@ -88,6 +88,25 @@ backends:
 #       capable: cf_local/@cf/zai-org/glm-4.7-flash
 #       efficient: lm_studio/qwen2.5-7b
 #       recent_turn_window: 3
+#   smart:
+#     capability: chat
+#     route:
+#       type: llm_classifier
+#       mode: custom
+#       classifier: cf_local/@cf/zai-org/glm-4.7-flash
+#       targets:
+#         fast: lm_studio/ornith-1.0-9b
+#         premium: cf_local/@cf/google/gemma-4-26b-a4b-it
+#       default_target: premium
+#       prompt: |
+#         Choose the best configured target for this request.
+#         Return JSON matching the response schema supplied with the request.
+#       response_schema: |
+#         {"type":"object","properties":{"decision":{"type":"object","properties":{"target":{"type":"string","enum":["fast","premium"]}},"required":["target"],"additionalProperties":false}},"required":["decision"],"additionalProperties":false}
+#       policy:
+#         type: target_selector
+#         selector: /decision/target
+#       session_affinity: true
 #   scribe:
 #     capability: chat
 #     route:

@@ -8,27 +8,26 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/router"
-	"github.com/behaviorengineering/polypus/internal/switchyard"
+	"github.com/behaviorengineering/polypus/internal/upstream"
 )
 
 // shared holds dependencies used by capability handlers.
 type shared struct {
-	opts     config.ServeOptions
-	router   *router.Client
-	proxy    http.Handler
-	invCache *modelsInventoryCache
-	timeouts config.Timeouts
-	client   *http.Client
-	swProbe  switchyardProbeCache
+	opts        config.ServeOptions
+	router      Router
+	ownedRouter bool
+	proxy       http.Handler
+	invCache    *modelsInventoryCache
+	timeouts    config.Timeouts
+	client      *http.Client
+	upstreams   *upstream.Board
+	cfGet       CloudflareClientGet
 }
 
 // Gateway is the Polypus HTTP mux (controller) over capability handlers.
@@ -41,26 +40,59 @@ type modelsHandler struct{ *shared }
 type healthHandler struct{ *shared }
 type speechHandler struct{ *shared }
 
+func (s *shared) cloudflareClient(b config.BackendDef) (*cloudflare.Client, error) {
+	if s != nil && s.cfGet != nil {
+		return s.cfGet(b)
+	}
+	return cloudflare.GetClient(b)
+}
+
 // NewHandler returns the public Polypus HTTP handler (*Gateway).
-// Switchyard TOML write is startup I/O (not capability wiring); a later
-// change may move it to an explicit serve/process-compose hook.
-func NewHandler(opts config.ServeOptions) (http.Handler, error) {
+// It does not write Switchyard TOML; ListenAndServe (process startup) does.
+// Pass WithRouter to inject a fake and skip bifrost.Init (tests).
+func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handler, error) {
+	var ho handlerOptions
+	for _, opt := range options {
+		if opt != nil {
+			opt(&ho)
+		}
+	}
+
 	rcfg, err := config.LoadRouterConfig(opts)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: %w", err)
 	}
-	rc, err := router.NewClient(rcfg)
-	if err != nil {
-		return nil, fmt.Errorf("gateway: %w", err)
+
+	cfGet := ho.cfGet
+	if cfGet == nil {
+		cfGet = cloudflare.GetClient
 	}
-	if _, err := switchyard.WriteConfigIfNeeded(rcfg, opts.GatewayBaseURL()); err != nil {
-		rc.Close()
-		return nil, fmt.Errorf("gateway: switchyard render: %w", err)
+
+	var rc Router
+	owned := false
+	if ho.router != nil {
+		rc = ho.router
+	} else {
+		var clientOpts []router.ClientOption
+		if ho.cfGet != nil {
+			clientOpts = append(clientOpts, router.WithCloudflareClientGet(router.CloudflareClientGet(ho.cfGet)))
+		}
+		client, clientErr := router.NewClient(rcfg, clientOpts...)
+		if clientErr != nil {
+			return nil, fmt.Errorf("gateway: %w", clientErr)
+		}
+		rc = client
+		owned = true
 	}
+
 	proxyURL := rc.Registry().ProxyBackendURL()
 	proxy, err := newFallbackProxy(proxyURL)
 	if err != nil {
-		rc.Close()
+		if owned {
+			if c, ok := rc.(routerCloser); ok {
+				c.Close()
+			}
+		}
 		return nil, err
 	}
 	timeouts := rcfg.Timeouts
@@ -68,12 +100,15 @@ func NewHandler(opts config.ServeOptions) (http.Handler, error) {
 		timeouts = config.DefaultTimeouts()
 	}
 	s := &shared{
-		opts:     opts,
-		router:   rc,
-		proxy:    proxy,
-		invCache: newModelsInventoryCache(),
-		timeouts: timeouts,
-		client:   newChatProxyClient(timeouts.Max),
+		opts:        opts,
+		router:      rc,
+		ownedRouter: owned,
+		proxy:       proxy,
+		invCache:    newModelsInventoryCache(),
+		timeouts:    timeouts,
+		client:      newChatProxyClient(timeouts.Max),
+		upstreams:   upstream.NewBoard(),
+		cfGet:       cfGet,
 	}
 	return &Gateway{shared: s}, nil
 }
@@ -83,14 +118,14 @@ func newFallbackProxy(backendURL string) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("backend url: %w", err)
 	}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		http.Error(w, fmt.Sprintf("polypus backend unavailable: %v", err), http.StatusBadGateway)
-	}
-	origDirector := proxy.Director
-	proxy.Director = func(r *http.Request) {
-		origDirector(r)
-		r.Host = target.Host
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.Out.Host = target.Host
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, fmt.Sprintf("polypus backend unavailable: %v", err), http.StatusBadGateway)
+		},
 	}
 	return proxy, nil
 }
@@ -161,10 +196,14 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 	}
 	backendURL, ok := reg.BackendURL(backendID)
 	if !ok {
-		http.Error(w, "polypus: backend not found", http.StatusBadGateway)
+		http.Error(w, errBackendNotFound, http.StatusBadGateway)
 		return
 	}
-	backend, _ := reg.Backend(backendID)
+	backend, ok := reg.Backend(backendID)
+	if !ok {
+		http.Error(w, errBackendNotFound, http.StatusBadGateway)
+		return
+	}
 	backendAuth, authErr := mustBackendAuth(backend)
 	if authErr != nil {
 		http.Error(w, authErr.Error(), http.StatusServiceUnavailable)
@@ -179,8 +218,8 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 	defer func() { observability.EndSpan(span, err) }()
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, vision, chatBodyWantsThinking(body))
-	if err = proxyChatCompletions(w, r, backendURL, rewritten, h.client, hop, backendAuth); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+	if err = h.proxyOrBifrostChat(w, r, backendID, downstream, backendURL, rewritten, hop, backendAuth, true); err != nil {
+		writeUpstreamDialError(w, err, "", nil)
 		return
 	}
 }
@@ -188,78 +227,88 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request, body []byte, model, routerName string, vision bool) {
 	reg := h.router.Registry()
 	cfg := reg.Config()
-	router, ok := lookupRouter(cfg, routerName)
+	nr, ok := lookupRouter(cfg, routerName)
 	if !ok {
 		http.Error(w, fmt.Sprintf("polypus: unknown router %q", model), http.StatusBadRequest)
 		return
 	}
-	if router.Capability != config.CapChat {
-		http.Error(w, fmt.Sprintf("polypus: router %q does not support chat", model), http.StatusBadRequest)
-		return
-	}
-	if vision {
-		http.Error(w, fmt.Sprintf("polypus: router %q does not support vision (v1 chat-only)", model), http.StatusBadRequest)
+	if msg := validateNamedRouterForChat(nr, model, vision); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 
-	var err error
-	switch router.Route.Type {
-	case config.RoutePassthrough:
-		backendID, downstream, resolveErr := reg.ResolveChat(router.Route.Target)
-		if resolveErr != nil {
-			http.Error(w, resolveErr.Error(), http.StatusBadRequest)
-			return
-		}
-		if !h.ensureModelAllowed(backendID, router.Route.Target) {
-			writeModelNotAllowed(w, router.Route.Target)
-			return
-		}
-		backendURL, ok := reg.BackendURL(backendID)
-		if !ok {
-			http.Error(w, "polypus: backend not found", http.StatusBadGateway)
-			return
-		}
-		backend, _ := reg.Backend(backendID)
-		backendAuth, authErr := mustBackendAuth(backend)
-		if authErr != nil {
-			http.Error(w, authErr.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		rewritten, rewriteErr := rewriteChatModel(body, downstream)
-		if rewriteErr != nil {
-			http.Error(w, rewriteErr.Error(), http.StatusBadRequest)
-			return
-		}
-		ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
-		defer func() { observability.EndSpan(span, err) }()
-		r = r.WithContext(ctx)
-		hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, chatBodyWantsThinking(body))
-		if err = proxyChatCompletions(w, r, backendURL, rewritten, h.client, hop, backendAuth); err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-		}
-	case config.RouteStageRouter:
-		switchyardURL := cfg.EffectiveSwitchyardBaseURL()
-		if probeErr := h.swProbe.available(r.Context(), switchyardURL); probeErr != nil {
-			http.Error(w, "polypus: switchyard unavailable: "+probeErr.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		ctx, span := observability.StartRouterSpan(r.Context(), "polypus.router", model, routerName, switchyardURL)
-		defer func() { observability.EndSpan(span, err) }()
-		r = r.WithContext(ctx)
-		hop := h.timeouts.Max
-		if hop <= 0 {
-			hop = config.DefaultTimeouts().Max
-		}
-		if err = proxyChatCompletionsOpts(w, r, switchyardURL, body, h.client, hop, "", false); err != nil {
-			h.swProbe.invalidate()
-			code := http.StatusBadGateway
-			if isSwitchyardUnreachable(err) {
-				code = http.StatusServiceUnavailable
-			}
-			http.Error(w, err.Error(), code)
-		}
+	switch classifyNamedRouterRoute(nr.Route.Type) {
+	case dispatchPassthrough:
+		h.servePassthroughRouterChat(w, r, body, model, nr.Route.Target)
+	case dispatchSwitchyard:
+		h.serveSwitchyardRouterChat(w, r, body, model, routerName, cfg.EffectiveSwitchyardBaseURL())
 	default:
 		http.Error(w, fmt.Sprintf("polypus: router %q has unsupported route type", model), http.StatusBadRequest)
+	}
+}
+
+func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.Request, body []byte, model, target string) {
+	reg := h.router.Registry()
+	backendID, downstream, resolveErr := reg.ResolveChat(target)
+	if resolveErr != nil {
+		http.Error(w, resolveErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if !h.ensureModelAllowed(backendID, target) {
+		writeModelNotAllowed(w, target)
+		return
+	}
+	backendURL, ok := reg.BackendURL(backendID)
+	if !ok {
+		http.Error(w, errBackendNotFound, http.StatusBadGateway)
+		return
+	}
+	backend, ok := reg.Backend(backendID)
+	if !ok {
+		http.Error(w, errBackendNotFound, http.StatusBadGateway)
+		return
+	}
+	backendAuth, authErr := mustBackendAuth(backend)
+	if authErr != nil {
+		http.Error(w, authErr.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	rewritten, rewriteErr := rewriteChatModel(body, downstream)
+	if rewriteErr != nil {
+		http.Error(w, rewriteErr.Error(), http.StatusBadRequest)
+		return
+	}
+	var err error
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
+	defer func() { observability.EndSpan(span, err) }()
+	r = r.WithContext(ctx)
+	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, chatBodyWantsThinking(body))
+	if err = h.proxyOrBifrostChat(w, r, backendID, downstream, backendURL, rewritten, hop, backendAuth, true); err != nil {
+		writeUpstreamDialError(w, err, "", nil)
+	}
+}
+
+func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Request, body []byte, model, routerName, switchyardURL string) {
+	var err error
+	ctx, span := observability.StartRouterSpan(r.Context(), "polypus.router", model, routerName, switchyardURL)
+	defer func() { observability.EndSpan(span, err) }()
+	r = r.WithContext(ctx)
+	hop := h.timeouts.Max
+	if hop <= 0 {
+		hop = config.DefaultTimeouts().Max
+	}
+	downstream := model
+	if mid, midErr := extractChatModel(body); midErr == nil && strings.TrimSpace(mid) != "" {
+		downstream = mid
+	}
+	err = h.upstreams.Execute(upstream.NameSwitchyard, func() error {
+		if !h.router.UsesBifrost(router.ProviderSwitchyard) {
+			return proxyChatCompletionsOpts(w, r, switchyardURL, body, h.client, hop, "", false)
+		}
+		return h.bifrostChatResponse(w, r, router.ProviderSwitchyard, downstream, body, hop, false)
+	})
+	if err != nil {
+		writeUpstreamDialError(w, err, "polypus: switchyard unavailable: ", isSwitchyardUnreachable)
 	}
 }
 
@@ -274,7 +323,7 @@ func probeSwitchyard(ctx context.Context, baseURL string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("status %d", resp.StatusCode)
@@ -291,6 +340,23 @@ func isSwitchyardUnreachable(err error) bool {
 		strings.Contains(msg, "connect: connection refused") ||
 		strings.Contains(msg, "no such host") ||
 		strings.Contains(msg, "connection reset")
+}
+
+// writeUpstreamDialError writes a dial failure unless the upstream body was already sent.
+// prefix is prepended for Switchyard-style messages; unreachable maps to 503 when set.
+func writeUpstreamDialError(w http.ResponseWriter, err error, prefix string, unreachable func(error) bool) {
+	if err == nil || upstream.ResponseWritten(err) {
+		return
+	}
+	msg := err.Error()
+	if prefix != "" {
+		msg = prefix + msg
+	}
+	code := http.StatusBadGateway
+	if upstream.Unavailable(err) || (unreachable != nil && unreachable(err)) {
+		code = http.StatusServiceUnavailable
+	}
+	http.Error(w, msg, code)
 }
 
 func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
@@ -322,10 +388,14 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	backendURL, ok := reg.BackendURL(backendID)
 	if !ok {
-		http.Error(w, "polypus: backend not found", http.StatusBadGateway)
+		http.Error(w, errBackendNotFound, http.StatusBadGateway)
 		return
 	}
-	backend, _ := reg.Backend(backendID)
+	backend, ok := reg.Backend(backendID)
+	if !ok {
+		http.Error(w, errBackendNotFound, http.StatusBadGateway)
+		return
+	}
 	backendAuth, authErr := mustBackendAuth(backend)
 	if authErr != nil {
 		http.Error(w, authErr.Error(), http.StatusServiceUnavailable)
@@ -340,8 +410,24 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	defer func() { observability.EndSpan(span, err) }()
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveEmbed(r.Header.Get(config.TimeoutHeader))
-	if err = proxyEmbeddings(w, r, backendURL, rewritten, h.client, hop, backendAuth); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+	err = h.upstreams.Execute(backendID, func() error {
+		if h.router.UsesBifrost(backendID) {
+			raw, bifrostErr := h.router.EmbeddingRaw(r.Context(), backendID, downstream, rewritten, hop)
+			if bifrostErr != nil {
+				return bifrostErr
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, writeErr := w.Write(raw)
+			if writeErr != nil {
+				return fmt.Errorf("write response: %w", writeErr)
+			}
+			return nil
+		}
+		return proxyEmbeddings(w, r, backendURL, rewritten, h.client, hop, backendAuth)
+	})
+	if err != nil {
+		writeUpstreamDialError(w, err, "", nil)
 		return
 	}
 }
@@ -372,24 +458,40 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 	}
 	backendURL := ""
 	if resolveErr == nil {
-		backendURL, _ = h.router.Registry().BackendURL(string(backendID))
+		if u, ok := h.router.Registry().BackendURL(string(backendID)); ok {
+			backendURL = u
+		}
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.speech", req.Model, string(backendID), backendURL, downstream)
 	defer func() { observability.EndSpan(span, err) }()
-	audio, err := h.router.Synthesize(ctx, router.SpeechRequest{
-		Model:          req.Model,
-		Input:          req.Input,
-		Voice:          req.Voice,
-		ResponseFormat: req.ResponseFormat,
-		Speed:          req.Speed,
+	hop := h.timeouts.ResolveSpeech(r.Header.Get(config.TimeoutHeader))
+	if hop > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, hop)
+		defer cancel()
+	}
+	var audio []byte
+	err = h.upstreams.Execute(string(backendID), func() error {
+		var synthErr error
+		audio, synthErr = h.router.Synthesize(ctx, router.SpeechRequest{
+			Model:          req.Model,
+			Input:          req.Input,
+			Voice:          req.Voice,
+			ResponseFormat: req.ResponseFormat,
+			Speed:          req.Speed,
+		})
+		return synthErr
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeUpstreamDialError(w, err, "", nil)
 		return
 	}
 	w.Header().Set("Content-Type", speechContentType(req.ResponseFormat))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(audio)
+	if _, writeErr := w.Write(audio); writeErr != nil {
+		err = fmt.Errorf("write speech: %w", writeErr)
+		return
+	}
 }
 
 func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request) {
@@ -402,7 +504,7 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 		http.Error(w, "file required: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	audio, err := io.ReadAll(file)
 	if err != nil {
 		http.Error(w, "read file: "+err.Error(), http.StatusBadRequest)
@@ -426,24 +528,41 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 	}
 	backendURL := ""
 	if resolveErr == nil {
-		backendURL, _ = h.router.Registry().BackendURL(string(backendID))
+		if u, ok := h.router.Registry().BackendURL(string(backendID)); ok {
+			backendURL = u
+		}
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.transcription", sttModel, string(backendID), backendURL, downstream)
 	defer func() { observability.EndSpan(span, err) }()
-	out, ct, err := h.router.Transcribe(ctx, router.TranscriptionRequest{
-		Model:          sttModel,
-		Audio:          audio,
-		Filename:       filename,
-		ResponseFormat: format,
-		Language:       r.FormValue("language"),
+	hop := h.timeouts.ResolveSpeech(r.Header.Get(config.TimeoutHeader))
+	if hop > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, hop)
+		defer cancel()
+	}
+	var out []byte
+	var ct string
+	err = h.upstreams.Execute(string(backendID), func() error {
+		var trErr error
+		out, ct, trErr = h.router.Transcribe(ctx, router.TranscriptionRequest{
+			Model:          sttModel,
+			Audio:          audio,
+			Filename:       filename,
+			ResponseFormat: format,
+			Language:       r.FormValue("language"),
+		})
+		return trErr
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeUpstreamDialError(w, err, "", nil)
 		return
 	}
 	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(out)
+	if _, writeErr := w.Write(out); writeErr != nil {
+		err = fmt.Errorf("write transcription: %w", writeErr)
+		return
+	}
 }
 
 func speechContentType(format string) string {
@@ -458,48 +577,5 @@ func speechContentType(format string) string {
 		return "audio/flac"
 	default:
 		return "audio/mpeg"
-	}
-}
-
-// Close releases router resources.
-func (g *Gateway) Close() {
-	if g != nil && g.shared != nil && g.router != nil {
-		g.router.Close()
-	}
-}
-
-// ListenAndServe starts the gateway on opts.ListenAddr().
-func ListenAndServe(opts config.ServeOptions) error {
-	handler, err := NewHandler(opts)
-	if err != nil {
-		return err
-	}
-	if g, ok := handler.(*Gateway); ok {
-		defer g.Close()
-	}
-	server := &http.Server{
-		Addr:              opts.ListenAddr(),
-		Handler:           observability.WrapHandler(handler),
-		ReadHeaderTimeout: 30 * time.Second,
-	}
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.ListenAndServe()
-	}()
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case err := <-errCh:
-		if err == http.ErrServerClosed {
-			return nil
-		}
-		return err
-	case <-sigCh:
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
-			return err
-		}
-		return nil
 	}
 }

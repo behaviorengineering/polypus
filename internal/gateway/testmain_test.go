@@ -13,9 +13,14 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(dir)
 	_ = os.Unsetenv("POLYPUS_CONFIG")
 	_ = os.Unsetenv("POLYPUS_ROOT")
-	_ = os.Setenv("XDG_CONFIG_HOME", dir)
-	os.Exit(m.Run())
+	if err := os.Setenv("XDG_CONFIG_HOME", dir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		_ = os.RemoveAll(dir)
+		os.Exit(1)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
 }

@@ -71,3 +71,16 @@ func TestParseTimeoutsFileOverlay(t *testing.T) {
 		t.Fatalf("resolve after overlay: %s", got.ResolveChat("", "cf_local", false, false))
 	}
 }
+
+func TestResolveSpeechBucketsAndHeader(t *testing.T) {
+	to := DefaultTimeouts()
+	if got := to.ResolveSpeech(""); got != 180*time.Second {
+		t.Fatalf("default speech: %s", got)
+	}
+	if got := to.ResolveSpeech("45s"); got != 45*time.Second {
+		t.Fatalf("header: %s", got)
+	}
+	if got := to.ResolveSpeech("1s"); got != 5*time.Second {
+		t.Fatalf("clamp min: %s", got)
+	}
+}

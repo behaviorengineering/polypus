@@ -11,6 +11,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
+	"github.com/behaviorengineering/polypus/internal/upstream"
 )
 
 const backendProbeTimeout = 5 * time.Second
@@ -70,7 +71,7 @@ func (h healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
 
 // serveBackendHealth probes configured upstream backends (manual / stack-doctor use).
 func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), backendProbeTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), backendProbeTimeout)
 	defer cancel()
 
 	reg := h.router.Registry()
@@ -80,7 +81,9 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	for _, id := range cfg.BackendIDs() {
 		b := cfg.Backends[id]
 		entry := backendProbeResult{ID: id, URL: b.BaseURL}
-		if err := probeBackend(ctx, b); err != nil {
+		if err := h.upstreams.Execute(id, func() error {
+			return probeBackend(ctx, b, h.cloudflareClient)
+		}); err != nil {
 			entry.Error = err.Error()
 			allOK = false
 		} else {
@@ -92,7 +95,9 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	if config.SwitchyardEnabled() {
 		switchyardURL := cfg.EffectiveSwitchyardBaseURL()
 		entry := backendProbeResult{ID: "switchyard", URL: switchyardURL}
-		if err := probeSwitchyard(ctx, switchyardURL); err != nil {
+		if err := h.upstreams.Execute(upstream.NameSwitchyard, func() error {
+			return probeSwitchyard(ctx, switchyardURL)
+		}); err != nil {
 			entry.Error = err.Error()
 			allOK = false
 		} else {
@@ -116,10 +121,13 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	})
 }
 
-func probeBackend(ctx context.Context, b config.BackendDef) error {
+func probeBackend(ctx context.Context, b config.BackendDef, getCF CloudflareClientGet) error {
 	if b.Remote {
 		if b.IsCloudflareExtension() {
-			cf, err := cloudflare.NewClient(b)
+			if getCF == nil {
+				getCF = cloudflare.GetClient
+			}
+			cf, err := getCF(b)
 			if err != nil {
 				return err
 			}
@@ -143,7 +151,7 @@ func pingBackendURL(ctx context.Context, backendURL string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("status %d", resp.StatusCode)

@@ -1,4 +1,4 @@
-.PHONY: help build build-gateway build-chat-smoke install test vet tidy ci mlx-sync serve serve-down smoke smoke-chat smoke-router smoke-higgs smoke-stt smoke-all switchyard-build docker-build
+.PHONY: help build build-gateway build-chat-smoke install test vet lint tidy ci mlx-sync serve serve-down smoke smoke-chat smoke-router smoke-higgs smoke-stt smoke-all switchyard-build docker-build
 
 include ports.env
 export POLYPUS_HOST POLYPUS_PORT POLYPUS_MLX_HOST POLYPUS_MLX_PORT POLYPUS_SWITCHYARD_HOST POLYPUS_SWITCHYARD_PORT
@@ -45,6 +45,7 @@ help:
 	@echo "  make docker-build  Build $(IMAGE_REPO):$(IMAGE_TAG)"
 	@echo "  make test          go test ./..."
 	@echo "  make vet           go vet ./..."
+	@echo "  make lint          golangci-lint (go run @latest) on ./cmd/... ./internal/..."
 	@echo "  make ci            tidy + gofmt + vet + race tests + build"
 
 build: build-gateway build-chat-smoke switchyard-build
@@ -118,6 +119,9 @@ test:
 
 vet:
 	go vet ./...
+
+lint:
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./cmd/... ./internal/...
 
 tidy:
 	go mod tidy
