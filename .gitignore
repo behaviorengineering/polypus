@@ -5,6 +5,8 @@ backends/mlx/.venv/
 bin/
 build/
 dist/
+.crates.toml
+.crates2.json
 
 # Local env overrides
 .env

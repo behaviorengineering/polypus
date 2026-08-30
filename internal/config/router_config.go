@@ -76,6 +76,7 @@ type routerFile struct {
 	DefaultProxyBackend  string                      `yaml:"default_proxy_backend"`
 	Timeouts             timeoutsFile                `yaml:"timeouts"`
 	Policy               routerPolicyFile            `yaml:"policy"`
+	Processes            processesFile               `yaml:"processes"`
 	Backends             map[string]backendFileEntry `yaml:"backends"`
 	Switchyard           switchyardFile              `yaml:"switchyard"`
 	Routers              map[string]namedRouterFile  `yaml:"routers"`
@@ -278,7 +279,11 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 		return fmt.Errorf("router: no backends configured")
 	}
 	if cfg.DefaultTTSBackend == "" {
-		cfg.DefaultTTSBackend = "mlx_local"
+		if _, ok := cfg.Backends["mlx_local"]; ok {
+			cfg.DefaultTTSBackend = "mlx_local"
+		} else {
+			return fmt.Errorf("router: default_tts_backend required (mlx_local not in backends)")
+		}
 	}
 	if cfg.DefaultSTTBackend == "" {
 		cfg.DefaultSTTBackend = cfg.DefaultTTSBackend

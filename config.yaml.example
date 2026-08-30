@@ -2,6 +2,10 @@
 # Copy to ~/.config/polypus/config.yaml (or set POLYPUS_CONFIG).
 # Env-only single backend works without this file (mlx_local from POLYPUS_MLX_*).
 
+# Process-compose toggles (pc-up.sh). POLYPUS_ENABLE_MLX overrides when set.
+processes:
+  mlx: true
+
 default_tts_backend: mlx_local
 default_stt_backend: mlx_local
 default_proxy_backend: mlx_local

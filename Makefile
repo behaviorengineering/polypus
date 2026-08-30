@@ -24,11 +24,15 @@ IMAGE_REPO ?= xynova/polypus
 IMAGE_TAG ?= latest
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/behaviorengineering/polypus/internal/cli.version=$(VERSION)
+# Nested submodule checkouts (and broken gitdirs) make `go build` VCS stamping fail
+# with exit 128; version is already injected via LDFLAGS.
+GO_BUILDFLAGS := -buildvcs=false
 
 help:
 	@echo "polypus — local OpenAI speech gateway (TTS/STT backends behind loopback)"
 	@echo ""
-	@echo "  make build         Build $(BINARY)"
+	@echo "  make build         Build $(BINARY) + bin/switchyard-server"
+	@echo "  make switchyard-build  Build bin/switchyard-server (Rust; also part of make build)"
 	@echo "  make mlx-sync      uv sync for backends/mlx"
 	@echo "  make serve         process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 (POLYPUS_PHOENIX=0 to skip)"
 	@echo "  make serve-down    Stop this Polypus process-compose project only"
@@ -43,18 +47,18 @@ help:
 	@echo "  make vet           go vet ./..."
 	@echo "  make ci            tidy + gofmt + vet + race tests + build"
 
-build: build-gateway build-chat-smoke
+build: build-gateway build-chat-smoke switchyard-build
 
 build-gateway:
 	@mkdir -p $(dir $(BINARY))
-	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/polypus
+	go build $(GO_BUILDFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/polypus
 
 build-chat-smoke:
 	@mkdir -p $(dir $(CHAT_SMOKE_BIN))
-	go build -o $(CHAT_SMOKE_BIN) ./cmd/polypus-chat-smoke
+	go build $(GO_BUILDFLAGS) -o $(CHAT_SMOKE_BIN) ./cmd/polypus-chat-smoke
 
 install:
-	go build -ldflags "$(LDFLAGS)" -o $(shell go env GOPATH)/bin/polypus ./cmd/polypus
+	go build $(GO_BUILDFLAGS) -ldflags "$(LDFLAGS)" -o $(shell go env GOPATH)/bin/polypus ./cmd/polypus
 
 mlx-sync:
 	chmod +x backends/mlx/scripts/sync.sh
@@ -78,9 +82,20 @@ smoke-chat: build-chat-smoke
 smoke-router: build-chat-smoke
 	$(CHAT_SMOKE_BIN) -model $(POLYPUS_ROUTER_SMOKE_MODEL)
 
+# cargo install --root DIR places the binary at DIR/bin/<name>; use --root .
+# so the result is ./bin/switchyard-server (what pc-switchyard.sh execs).
 switchyard-build:
+	@test -f providers/switchyard/Cargo.toml || ( \
+		echo "switchyard-build: missing providers/switchyard (run: git submodule update --init providers/switchyard)" >&2; \
+		exit 1)
+	@command -v cargo >/dev/null 2>&1 || ( \
+		echo "switchyard-build: cargo not found; install a Rust toolchain" >&2; \
+		exit 1)
 	@mkdir -p bin
-	cargo install --locked --path providers/switchyard/crates/switchyard-server --root ./bin
+	cargo install --locked --force --path providers/switchyard/crates/switchyard-server --root .
+	@test -x bin/switchyard-server || ( \
+		echo "switchyard-build: expected executable bin/switchyard-server after cargo install" >&2; \
+		exit 1)
 
 smoke-higgs:
 	chmod +x scripts/smoke.sh
@@ -115,4 +130,4 @@ ci:
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
 	go vet ./...
 	go test -race -count=1 ./...
-	go build ./...
+	go build $(GO_BUILDFLAGS) ./...

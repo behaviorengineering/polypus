@@ -20,8 +20,8 @@ import (
 	"github.com/behaviorengineering/polypus/internal/switchyard"
 )
 
-// Handler is the Polypus HTTP gateway (Bifrost router + capability proxies).
-type Handler struct {
+// shared holds dependencies used by capability handlers.
+type shared struct {
 	opts     config.ServeOptions
 	router   *router.Client
 	proxy    http.Handler
@@ -31,7 +31,19 @@ type Handler struct {
 	swProbe  switchyardProbeCache
 }
 
-// NewHandler returns the public Polypus HTTP handler.
+// Gateway is the Polypus HTTP mux (controller) over capability handlers.
+type Gateway struct {
+	*shared
+}
+
+type chatHandler struct{ *shared }
+type modelsHandler struct{ *shared }
+type healthHandler struct{ *shared }
+type speechHandler struct{ *shared }
+
+// NewHandler returns the public Polypus HTTP handler (*Gateway).
+// Switchyard TOML write is startup I/O (not capability wiring); a later
+// change may move it to an explicit serve/process-compose hook.
 func NewHandler(opts config.ServeOptions) (http.Handler, error) {
 	rcfg, err := config.LoadRouterConfig(opts)
 	if err != nil {
@@ -55,14 +67,15 @@ func NewHandler(opts config.ServeOptions) (http.Handler, error) {
 	if timeouts.Max == 0 {
 		timeouts = config.DefaultTimeouts()
 	}
-	return &Handler{
+	s := &shared{
 		opts:     opts,
 		router:   rc,
 		proxy:    proxy,
 		invCache: newModelsInventoryCache(),
 		timeouts: timeouts,
 		client:   newChatProxyClient(timeouts.Max),
-	}, nil
+	}
+	return &Gateway{shared: s}, nil
 }
 
 func newFallbackProxy(backendURL string) (http.Handler, error) {
@@ -82,32 +95,32 @@ func newFallbackProxy(backendURL string) (http.Handler, error) {
 	return proxy, nil
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/health" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		h.serveHealth(w, r)
+		healthHandler{g.shared}.serveHealth(w, r)
 	case r.URL.Path == "/health/backends" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		h.serveBackendHealth(w, r)
+		healthHandler{g.shared}.serveBackendHealth(w, r)
 	case r.URL.Path == "/v1/models" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		h.serveModelsList(w, r)
+		modelsHandler{g.shared}.serveModelsList(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/models/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		h.serveModelRetrieve(w, r)
+		modelsHandler{g.shared}.serveModelRetrieve(w, r)
 	case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
-		h.serveChatCompletions(w, r)
+		chatHandler{g.shared}.serveChatCompletions(w, r)
 	case r.URL.Path == "/v1/embeddings" && r.Method == http.MethodPost:
-		h.serveEmbeddings(w, r)
+		chatHandler{g.shared}.serveEmbeddings(w, r)
 	case r.URL.Path == "/v1/audio/speech" && r.Method == http.MethodPost:
-		h.serveSpeech(w, r)
+		speechHandler{g.shared}.serveSpeech(w, r)
 	case r.URL.Path == "/v1/audio/transcriptions" && r.Method == http.MethodPost:
-		h.serveTranscription(w, r)
+		speechHandler{g.shared}.serveTranscription(w, r)
 	case r.URL.Path == "/v1/audio/voices" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		h.proxy.ServeHTTP(w, r)
+		g.proxy.ServeHTTP(w, r)
 	default:
 		http.NotFound(w, r)
 	}
 }
 
-func (h *Handler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
+func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, chatMaxBody))
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
@@ -172,7 +185,7 @@ func (h *Handler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request, body []byte, model, routerName string, vision bool) {
+func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request, body []byte, model, routerName string, vision bool) {
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	router, ok := lookupRouter(cfg, routerName)
@@ -280,7 +293,7 @@ func isSwitchyardUnreachable(err error) bool {
 		strings.Contains(msg, "connection reset")
 }
 
-func (h *Handler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
+func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, embedMaxBody))
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
@@ -333,7 +346,7 @@ func (h *Handler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) serveSpeech(w http.ResponseWriter, r *http.Request) {
+func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
@@ -379,7 +392,7 @@ func (h *Handler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(audio)
 }
 
-func (h *Handler) serveTranscription(w http.ResponseWriter, r *http.Request) {
+func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, "multipart: "+err.Error(), http.StatusBadRequest)
 		return
@@ -449,9 +462,9 @@ func speechContentType(format string) string {
 }
 
 // Close releases router resources.
-func (h *Handler) Close() {
-	if h != nil && h.router != nil {
-		h.router.Close()
+func (g *Gateway) Close() {
+	if g != nil && g.shared != nil && g.router != nil {
+		g.router.Close()
 	}
 }
 
@@ -461,8 +474,8 @@ func ListenAndServe(opts config.ServeOptions) error {
 	if err != nil {
 		return err
 	}
-	if h, ok := handler.(*Handler); ok {
-		defer h.Close()
+	if g, ok := handler.(*Gateway); ok {
+		defer g.Close()
 	}
 	server := &http.Server{
 		Addr:              opts.ListenAddr(),
