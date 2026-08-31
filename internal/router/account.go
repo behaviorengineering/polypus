@@ -8,22 +8,40 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
-// Account implements schemas.Account for multi-backend local speech routing.
+// ProviderSwitchyard is the Bifrost provider id for composed Switchyard hops.
+// Must stay equal to upstream.NameSwitchyard (see gateway TestSwitchyardNameAligned).
+const ProviderSwitchyard = "switchyard"
+
+// Account implements schemas.Account for Polypus OpenAI-compatible backends,
+// including Cloudflare chat/embed (Workers AI OpenAI-compat URL) and a synthetic
+// Switchyard provider. CF TTS/STT are AllowedRequests on Bifrost; a PreLLMHook
+// plugin short-circuits them onto extension /ai/run (no /ai/v1/audio/*).
 type Account struct {
 	backends map[schemas.ModelProvider]config.BackendDef
 	timeouts config.Timeouts
 }
 
-// NewAccount returns a Bifrost account for validated local OpenAI speech backends.
+// NewAccount returns a Bifrost account for leaf backends plus optional Switchyard.
 func NewAccount(cfg config.RouterConfig) *Account {
-	backends := make(map[schemas.ModelProvider]config.BackendDef, len(cfg.Backends))
+	backends := make(map[schemas.ModelProvider]config.BackendDef, len(cfg.Backends)+1)
 	for id, b := range cfg.Backends {
-		if b.Remote || b.IsCloudflareExtension() {
-			continue
-		}
 		backends[schemas.ModelProvider(id)] = b
 	}
+	if shouldRegisterSwitchyard(cfg) {
+		backends[schemas.ModelProvider(ProviderSwitchyard)] = config.BackendDef{
+			ID:           ProviderSwitchyard,
+			BaseURL:      cfg.EffectiveSwitchyardBaseURL(),
+			Capabilities: []config.Capability{config.CapChat},
+		}
+	}
 	return &Account{backends: backends, timeouts: cfg.Timeouts}
+}
+
+func shouldRegisterSwitchyard(cfg config.RouterConfig) bool {
+	if cfg.HasComposedRouters() {
+		return true
+	}
+	return config.SwitchyardEnabled()
 }
 
 func (a *Account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
@@ -35,11 +53,20 @@ func (a *Account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
 }
 
 func (a *Account) GetKeysForProvider(_ context.Context, provider schemas.ModelProvider) ([]schemas.Key, error) {
-	if _, ok := a.backends[provider]; !ok {
+	b, ok := a.backends[provider]
+	if !ok {
 		return nil, fmt.Errorf("provider %s not supported", provider)
 	}
+	secret := "local"
+	if b.Remote {
+		token, err := b.Auth.ResolveBearerToken()
+		if err != nil {
+			return nil, err
+		}
+		secret = token
+	}
 	return []schemas.Key{{
-		Value:  *schemas.NewSecretVar("local"),
+		Value:  *schemas.NewSecretVar(secret),
 		Models: []string{"*"},
 		Weight: 1.0,
 	}}, nil
@@ -50,19 +77,10 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 	if !ok {
 		return nil, fmt.Errorf("provider %s not supported", provider)
 	}
-	allowed := &schemas.AllowedRequests{}
-	if b.HasCapability(config.CapTTS) {
-		allowed.Speech = true
-		allowed.SpeechStream = true
-	}
-	if b.HasCapability(config.CapSTT) {
-		allowed.Transcription = true
-		allowed.TranscriptionStream = true
-	}
 	return &schemas.ProviderConfig{
 		NetworkConfig: schemas.NetworkConfig{
-			BaseURL:                        OpenAIBaseURL(b.BaseURL),
-			DefaultRequestTimeoutInSeconds: a.timeouts.SpeechSeconds(),
+			BaseURL:                        openAIBaseURL(b.BaseURL),
+			DefaultRequestTimeoutInSeconds: a.timeouts.ProviderSeconds(),
 			AllowPrivateNetwork:            true,
 		},
 		ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
@@ -71,7 +89,46 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 		},
 		CustomProviderConfig: &schemas.CustomProviderConfig{
 			BaseProviderType: schemas.OpenAI,
-			AllowedRequests:  allowed,
+			AllowedRequests:  allowedRequestsForBackend(b),
 		},
 	}, nil
+}
+
+func allowedRequestsForBackend(b config.BackendDef) *schemas.AllowedRequests {
+	allowed := &schemas.AllowedRequests{}
+	if b.IsCloudflareExtension() {
+		// Chat/embed use Workers AI OpenAI-compat. Speech/transcription are enabled so
+		// Bifrost accepts the dial; cfRunSpeechPlugin short-circuits onto /ai/run.
+		// Stream speech is left off (unsupported on the CF path).
+		if b.HasCapability(config.CapChat) || b.HasCapability(config.CapVision) {
+			allowed.ChatCompletion = true
+			allowed.ChatCompletionStream = true
+		}
+		if b.HasCapability(config.CapEmbed) {
+			allowed.Embedding = true
+		}
+		if b.HasCapability(config.CapTTS) {
+			allowed.Speech = true
+		}
+		if b.HasCapability(config.CapSTT) {
+			allowed.Transcription = true
+		}
+		return allowed
+	}
+	if b.HasCapability(config.CapTTS) {
+		allowed.Speech = true
+		allowed.SpeechStream = true
+	}
+	if b.HasCapability(config.CapSTT) {
+		allowed.Transcription = true
+		allowed.TranscriptionStream = true
+	}
+	if b.HasCapability(config.CapChat) || b.HasCapability(config.CapVision) {
+		allowed.ChatCompletion = true
+		allowed.ChatCompletionStream = true
+	}
+	if b.HasCapability(config.CapEmbed) {
+		allowed.Embedding = true
+	}
+	return allowed
 }

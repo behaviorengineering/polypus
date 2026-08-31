@@ -201,6 +201,86 @@ routers:
 	}
 }
 
+func TestNamedRouterLLMClassifierProxiesToSwitchyard(t *testing.T) {
+	sw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		case "/v1/chat/completions":
+			body := readBody(t, r)
+			if !strings.Contains(body, `"model":"router/smart"`) {
+				t.Fatalf("expected unchanged router model in body: %s", body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"via-classifier"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(sw.Close)
+	t.Setenv("POLYPUS_SWITCHYARD_BASE_URL", sw.URL)
+
+	dir := t.TempDir()
+	content := `
+default_chat_backend: cf_local
+default_tts_backend: mlx_local
+default_stt_backend: mlx_local
+default_proxy_backend: mlx_local
+backends:
+  mlx_local:
+    base_url: http://127.0.0.1:1322
+    capabilities: [tts, stt, voices]
+  cf_local:
+    base_url: http://127.0.0.1:1323
+    capabilities: [chat]
+    models:
+      allow:
+        - "@cf/a"
+        - "@cf/b"
+  lm_studio:
+    base_url: http://127.0.0.1:1234/v1
+    capabilities: [chat]
+    models:
+      allow:
+        - qwen
+routers:
+  smart:
+    capability: chat
+    route:
+      type: llm_classifier
+      mode: custom
+      classifier: cf_local/@cf/a
+      targets:
+        fast: lm_studio/qwen
+        premium: cf_local/@cf/b
+      default_target: premium
+      prompt: choose
+      response_schema: '{"type":"object","properties":{"x":{"type":"string"}}}'
+      policy:
+        type: target_selector
+        selector: /decision/target
+`
+	writeConfig(t, dir, content)
+
+	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"router/smart","messages":[{"role":"user","content":"hi"}]}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "via-classifier") {
+		t.Fatalf("body: %s", rec.Body.String())
+	}
+}
+
 func TestModelsListIncludesRouters(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

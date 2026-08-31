@@ -38,9 +38,19 @@ load_polypus_smoke_env() {
   source "$POLYPUS_DIR/ports.env"
 }
 
-# When INFERENCE_CLOUD_CASE=1, default speech models to cf_local unless explicitly set.
+# Default speech smokes to cf_local. Set POLYPUS_SMOKE_LOCAL=1 for MLX (make smoke-local).
+# Explicit POLYPUS_DEFAULT_* / POLYPUS_CF_* overrides still win when already set.
 apply_smoke_speech_defaults() {
-  if [[ "${INFERENCE_CLOUD_CASE:-0}" != "1" ]]; then
+  if [[ "${POLYPUS_SMOKE_LOCAL:-0}" == "1" ]]; then
+    if [[ -z "${POLYPUS_DEFAULT_VOICE:-}" ]]; then
+      export POLYPUS_DEFAULT_VOICE=vivian
+    fi
+    if [[ -z "${POLYPUS_DEFAULT_MODEL:-}" ]]; then
+      export POLYPUS_DEFAULT_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16
+    fi
+    if [[ -z "${POLYPUS_DEFAULT_STT_MODEL:-}" ]]; then
+      export POLYPUS_DEFAULT_STT_MODEL=mlx-community/whisper-large-v3-turbo-asr-fp16
+    fi
     return 0
   fi
   if [[ -z "${POLYPUS_DEFAULT_VOICE:-}" ]]; then

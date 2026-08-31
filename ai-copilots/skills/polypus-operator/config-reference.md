@@ -21,7 +21,7 @@ Bootstrap: `cp config.yaml.example ~/.config/polypus/config.yaml`
 | Phoenix UI | `127.0.0.1:6006` | Trace viewer |
 | Phoenix OTLP | `127.0.0.1:4317` | gRPC collector |
 
-Cloudflare (`cf_local`) has no separate port; it runs in-process when `INFERENCE_CLOUD_CASE=1`.
+Cloudflare (`cf_local`) has no separate port; it runs in-process when `INFERENCE_CLOUD_CASE=1`. CF TTS/STT enter Bifrost; a PreLLMHook plugin short-circuits them onto `/ai/run` (Workers AI has no `/ai/v1/audio/*`).
 
 ## Environment (common)
 
@@ -41,7 +41,7 @@ CF_AI_API_KEY=...
 CF_ACCOUNT_ID=...
 ```
 
-Speech defaults (MLX profile): `POLYPUS_DEFAULT_MODEL`, `POLYPUS_DEFAULT_STT_MODEL`, `POLYPUS_DEFAULT_VOICE`.
+Speech smoke defaults to cf_local (`make smoke` / `make smoke-stt`). MLX: `POLYPUS_SMOKE_LOCAL=1` or `make smoke-local` / `make smoke-stt-local`. Override with `POLYPUS_DEFAULT_MODEL`, `POLYPUS_DEFAULT_STT_MODEL`, `POLYPUS_DEFAULT_VOICE` (or `POLYPUS_CF_*` for cloud ids).
 
 ## config.yaml structure
 
@@ -102,8 +102,9 @@ Configure under `routers:` in `config.yaml`. Public model id is always `router/<
 |------------|---------|-----------------|
 | `passthrough` | Polypus leaf proxy | omitted |
 | `stage_router` | HTTP to Switchyard `:4000` | emitted |
+| `llm_classifier` (`mode: custom`) | HTTP to Switchyard `:4000` | emitted |
 
-Generated Switchyard config: `~/.cache/polypus/switchyard/routes.toml` (override with `switchyard.config_path`). Regenerated at gateway startup and by `polypus switchyard-render`.
+Generated Switchyard config: `~/.cache/polypus/switchyard/routes.toml` (override with `switchyard.config_path`). Regenerated at gateway startup and by `polypus switchyard-render`. See [docs/switchyard/llm-classifier-custom.md](../../../docs/switchyard/llm-classifier-custom.md) for custom classifier fields.
 
 ```yaml
 switchyard:

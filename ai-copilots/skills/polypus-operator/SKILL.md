@@ -74,9 +74,13 @@ Default model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`
 
 ### 4. Smoke audio
 
+Default path is **cf_local** (does not require setting `INFERENCE_CLOUD_CASE` in the Make shell; the gateway process still needs cloud case + keys). For MLX:
+
 ```bash
 make smoke
 make smoke-stt
+make smoke-local
+make smoke-stt-local
 ```
 
 ### 5. Full model matrix

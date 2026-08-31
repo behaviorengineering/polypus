@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -41,9 +42,10 @@ type ModelList struct {
 
 // Client implements Cloudflare Workers AI extension hooks for Polypus.
 type Client struct {
-	apiBase    string
-	apiKey     string
-	httpClient *http.Client
+	apiBase      string
+	apiKey       string
+	httpClient   *http.Client // catalog / ping (short timeout)
+	speechClient *http.Client // /run TTS/STT (shared transport; timeout via ctx)
 
 	mu       sync.Mutex
 	cache    []Model
@@ -51,10 +53,12 @@ type Client struct {
 	cacheTTL time.Duration
 }
 
-// NewClient builds a Cloudflare extension client from a remote backend definition.
+// NewClient builds an uncached Cloudflare extension client from a remote backend
+// definition. Prefer GetClient in production so catalog/health/speech share a
+// process-scoped client (and transport after speech-client wiring).
 func NewClient(b config.BackendDef) (*Client, error) {
 	if !b.IsCloudflareExtension() {
-		return nil, fmt.Errorf("cloudflare: backend %q is not a cloudflare extension", b.ID)
+		return nil, fmt.Errorf("%w: %q", errNotCloudflareExtension, b.ID)
 	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {
@@ -64,15 +68,25 @@ func NewClient(b config.BackendDef) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newClient(apiBase, token)
+}
+
+func newClient(apiBase, token string) (*Client, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, errAPIKeyRequired
 	}
+	transport := observability.WrapTransport(http.DefaultTransport)
 	return &Client{
 		apiBase: apiBase,
 		apiKey:  token,
 		httpClient: &http.Client{
 			Timeout:   modelsTimeout,
-			Transport: observability.WrapTransport(http.DefaultTransport),
+			Transport: transport,
+		},
+		// Timeout 0: hop deadline comes from context (gateway ResolveSpeech).
+		speechClient: &http.Client{
+			Timeout:   0,
+			Transport: transport,
 		},
 		cacheTTL: modelsCacheTTL,
 	}, nil
@@ -89,20 +103,42 @@ func (c *Client) Ping(ctx context.Context) error {
 	return err
 }
 
-// ListModels returns OpenAI-shaped models (ids are bare @cf/... for Polypus to prefix).
-func (c *Client) ListModels(ctx context.Context) ModelList {
+// ListModelsStrict fetches the catalog or returns an error when the dial fails
+// and no in-memory cache is available.
+//
+// Stale-cache fallback: on fetch failure, a previously successful catalog is
+// returned with a nil error (so circuit breakers treat it as success) and a
+// warning is logged. Operators should treat that as degraded inventory, not a
+// fresh sync. With no cache, the dial error is returned.
+func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
-		return ModelList{Object: "list", Data: nil}
+		return ModelList{}, fmt.Errorf("cloudflare: not configured")
 	}
 	models, err := c.fetchAll(ctx)
 	if err != nil {
 		if cached, ok := c.cached(); ok {
-			return ModelList{Object: "list", Data: cached}
+			slog.Warn("cloudflare: models catalog fetch failed; using stale cache",
+				"err", err,
+				"cached_models", len(cached),
+			)
+			return ModelList{Object: "list", Data: cached}, nil
 		}
-		return ModelList{Object: "list", Data: nil}
+		return ModelList{Object: "list"}, err
 	}
 	c.storeCache(models)
-	return ModelList{Object: "list", Data: models}
+	return ModelList{Object: "list", Data: models}, nil
+}
+
+// ListModels returns OpenAI-shaped models (ids are bare @cf/... for Polypus to prefix).
+// Fetch failures with no cache yield an empty list; prefer ListModelsStrict when
+// the caller must distinguish errors from an empty catalog.
+func (c *Client) ListModels(ctx context.Context) ModelList {
+	list, err := c.ListModelsStrict(ctx)
+	if err != nil {
+		slog.Warn("cloudflare: models catalog fetch failed; empty list", "err", err)
+		return ModelList{Object: "list", Data: nil}
+	}
+	return list
 }
 
 // GetModel returns one model by id or false when missing.
@@ -190,7 +226,7 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 	if err != nil {
 		return nil, 0, fmt.Errorf("cloudflare models: fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
 	if err != nil {
 		return nil, 0, fmt.Errorf("cloudflare models: read: %w", err)

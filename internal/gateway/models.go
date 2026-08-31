@@ -4,17 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 )
 
 const modelsListTimeout = 5 * time.Second
@@ -39,6 +38,7 @@ type modelsInventoryCache struct {
 	byKey map[string]modelsCacheEntry
 	ttl   time.Duration
 	path  string
+	now   func() time.Time
 }
 
 type modelsCacheEntry struct {
@@ -58,6 +58,7 @@ func newModelsInventoryCache() *modelsInventoryCache {
 		byKey: make(map[string]modelsCacheEntry),
 		ttl:   ttl,
 		path:  path,
+		now:   time.Now,
 	}
 	c.loadDisk()
 	return c
@@ -108,7 +109,11 @@ func (c *modelsInventoryCache) get(key string) ([]openaiModel, bool) {
 	if !ok || len(e.Models) == 0 {
 		return nil, false
 	}
-	if time.Since(e.At) > c.ttl {
+	now := time.Now
+	if c.now != nil {
+		now = c.now
+	}
+	if now().Sub(e.At) > c.ttl {
 		return nil, false
 	}
 	out := make([]openaiModel, len(e.Models))
@@ -120,8 +125,12 @@ func (c *modelsInventoryCache) put(key string, models []openaiModel) {
 	if c == nil || len(models) == 0 {
 		return
 	}
+	now := time.Now
+	if c.now != nil {
+		now = c.now
+	}
 	c.mu.Lock()
-	c.byKey[key] = modelsCacheEntry{At: time.Now(), Models: append([]openaiModel(nil), models...)}
+	c.byKey[key] = modelsCacheEntry{At: now(), Models: append([]openaiModel(nil), models...)}
 	c.mu.Unlock()
 	// Best-effort disk cache; in-memory entry remains when persist fails.
 	_ = c.persist()
@@ -182,28 +191,12 @@ func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openai
 	cfg := reg.Config()
 	ids := cfg.BackendIDs()
 
-	out := make([]openaiModel, 0)
+	var catalog []openaiModel
 	if !asInventory {
-		routerNames := make([]string, 0, len(cfg.Routers))
-		for name := range cfg.Routers {
-			routerNames = append(routerNames, name)
-		}
-		sort.Strings(routerNames)
-		for _, name := range routerNames {
-			out = append(out, openaiModel{
-				ID:      config.RouterPublicID(name),
-				Object:  "model",
-				Created: 0,
-				OwnedBy: "polypus",
-			})
-		}
+		catalog = routerCatalogModels(cfg)
 	}
 
-	type result struct {
-		backend string
-		models  []openaiModel
-	}
-	results := make([]result, len(ids))
+	results := make([]backendInventory, len(ids))
 	var wg sync.WaitGroup
 	for i, backendID := range ids {
 		b, ok := cfg.Backends[backendID]
@@ -213,70 +206,14 @@ func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openai
 		wg.Add(1)
 		go func(i int, backendID string, b config.BackendDef) {
 			defer wg.Done()
-			results[i] = result{backend: backendID, models: h.inventoryForBackend(r, b)}
+			results[i] = backendInventory{backend: backendID, models: h.inventoryForBackend(r, b)}
 		}(i, backendID, b)
 	}
 	wg.Wait()
 
-	byID := make(map[string]openaiModel)
-	for _, res := range results {
-		b := cfg.Backends[res.backend]
-		for _, m := range res.models {
-			if !asInventory && !b.IsModelAllowed(m.ID) {
-				continue
-			}
-			byID[m.ID] = m
-		}
-		// Bare default-backend form for allowed models only when not inventory-restricted... keep bare for allowed.
-		if isDefaultBackend(cfg, res.backend) {
-			for _, m := range res.models {
-				if !asInventory && !b.IsModelAllowed(m.ID) {
-					continue
-				}
-				down := config.NormalizeDownstream(res.backend, m.ID)
-				if down == "" || down == m.ID {
-					continue
-				}
-				if _, ok := byID[down]; !ok {
-					byID[down] = openaiModel{
-						ID:      down,
-						Object:  "model",
-						Created: m.Created,
-						OwnedBy: firstNonEmpty(m.OwnedBy, res.backend),
-					}
-				}
-			}
-		}
-	}
-
-	// Env seeds for speech defaults (respect allow when set).
-	for _, seed := range seedModelsFromEnv(cfg) {
-		b, ok := cfg.Backends[seed.OwnedBy]
-		if !ok {
-			// OwnedBy may be backend; for bare seed owned_by is backend
-			for _, id := range ids {
-				if strings.HasPrefix(seed.ID, id+"/") || seed.OwnedBy == id {
-					b = cfg.Backends[id]
-					ok = true
-					break
-				}
-			}
-		}
-		if ok && !asInventory && !b.IsModelAllowed(seed.ID) {
-			continue
-		}
-		if _, exists := byID[seed.ID]; !exists {
-			byID[seed.ID] = seed
-		}
-	}
-
-	for _, m := range byID {
-		out = append(out, m)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].ID < out[j].ID
-	})
-	return out
+	byID := mergeBackendInventories(cfg, asInventory, results)
+	mergeSeedModels(cfg, asInventory, ids, byID, seedModelsFromEnv(cfg))
+	return finalizeModelList(catalog, byID)
 }
 
 func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef) []openaiModel {
@@ -301,7 +238,7 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 	if modelsCfg != nil && !modelsCfg.ShouldSync() {
 		return syntheticModels(b.ID, modelsCfg.Allow)
 	}
-	live := fetchBackendModels(r, b)
+	live := h.fetchBackendModelsProtected(r, b)
 	if len(live) > 0 {
 		if h.invCache != nil {
 			h.invCache.put(b.ID, live)
@@ -335,30 +272,56 @@ func syntheticModels(backendID string, allow []string) []openaiModel {
 	return out
 }
 
+// cloudflareInventory returns CF models for /v1/models. Client and list errors
+// soft-fail to an empty slice (Warn only) so one backend outage does not fail the catalog.
 func (h modelsHandler) cloudflareInventory(r *http.Request, b config.BackendDef) []openaiModel {
-	client, err := cloudflare.NewClient(b)
-	if err != nil {
+	var out []openaiModel
+	if execErr := h.upstreams.Execute(b.ID, func() error {
+		client, err := h.cloudflareClient(b)
+		if err != nil {
+			return err
+		}
+		list, listErr := client.ListModelsStrict(r.Context())
+		if listErr != nil {
+			return listErr
+		}
+		out = make([]openaiModel, 0, len(list.Data))
+		for _, m := range list.Data {
+			out = append(out, openaiModel{
+				ID:      prefixModelID(b.ID, m.ID),
+				Object:  "model",
+				Created: m.Created,
+				OwnedBy: firstNonEmpty(m.OwnedBy, b.ID),
+			})
+		}
 		return nil
-	}
-	list := client.ListModels(r.Context())
-	out := make([]openaiModel, 0, len(list.Data))
-	for _, m := range list.Data {
-		out = append(out, openaiModel{
-			ID:      prefixModelID(b.ID, m.ID),
-			Object:  "model",
-			Created: m.Created,
-			OwnedBy: firstNonEmpty(m.OwnedBy, b.ID),
-		})
+	}); execErr != nil {
+		slog.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
 	}
 	return out
 }
 
-func fetchBackendModels(r *http.Request, b config.BackendDef) []openaiModel {
+func (h modelsHandler) fetchBackendModelsProtected(r *http.Request, b config.BackendDef) []openaiModel {
+	var out []openaiModel
+	if execErr := h.upstreams.Execute(b.ID, func() error {
+		models, err := fetchBackendModelsErr(r, b)
+		if err != nil {
+			return err
+		}
+		out = models
+		return nil
+	}); execErr != nil {
+		slog.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
+	}
+	return out
+}
+
+func fetchBackendModelsErr(r *http.Request, b config.BackendDef) ([]openaiModel, error) {
 	target := openAIModelsURL(b.BaseURL)
 	ctx := r.Context()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 	if auth, err := bearerAuthHeader(b); err == nil && auth != "" {
@@ -369,18 +332,18 @@ func fetchBackendModels(r *http.Request, b config.BackendDef) []openaiModel {
 	client := &http.Client{Timeout: modelsListTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil
+		return nil, fmt.Errorf("models list status %d", resp.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return rewriteBackendModelList(raw, b.ID)
+	return rewriteBackendModelList(raw, b.ID), nil
 }
 
 func rewriteBackendModelList(raw []byte, backendID string) []openaiModel {

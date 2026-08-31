@@ -25,30 +25,6 @@ backends:
       sync: true
       allow:
         - "@cf/zai-org/glm-4.7-flash"
-  lm_empty:
-    base_url: http://127.0.0.1:1234/v1
-    capabilities: [embed]
-    models:
-      allow: []
-`
-	// need embed not as default - add default embed skip - cf can't be default embed
-	// fix: remove lm_empty or give default embed
-	content = `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
-backends:
-  mlx_local:
-    base_url: http://127.0.0.1:1322
-    capabilities: [tts, stt, voices]
-  cf_local:
-    base_url: http://127.0.0.1:1323
-    capabilities: [chat, vision, tts, stt, voices]
-    models:
-      sync: true
-      allow:
-        - "@cf/zai-org/glm-4.7-flash"
   blocked:
     base_url: http://127.0.0.1:1234/v1
     capabilities: [chat]

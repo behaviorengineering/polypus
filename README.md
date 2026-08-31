@@ -45,7 +45,9 @@ flowchart TB
 | `phoenix` (`obs`) | `:6006` / `:4317` | Arize trace UI and OTLP collector. Clients set `openinference.endpoint` to `localhost:4317`. |
 | (external) | `:1234` | LM Studio. Not started by Polypus. |
 
-**Cloudflare (`cf_local`):** When `INFERENCE_CLOUD_CASE=1`, the gateway calls Workers AI in-process via a **Cloudflare extension** (Model Search catalog + `/ai/run` audio). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` only.
+**Cloudflare (`cf_local`):** When `INFERENCE_CLOUD_CASE=1`, the gateway uses Workers AI. **OpenAI-shaped** chat and embeddings dial through Bifrost to the Workers AI `/ai/v1` base URL. **TTS/STT** also enter Bifrost; a PreLLMHook plugin short-circuits them onto the in-process Cloudflare extension `/ai/run` path (Workers AI has no `/ai/v1/audio/*` OpenAI-compat routes; live spike returned `400 No route for that URI`). Model Search catalog stays on the extension. Extension HTTP clients are process-scoped (keyed by backend id + bearer). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` only.
+
+**Bifrost:** Bifrost fronts every OpenAI-compatible outbound dial Polypus can use: leaf backends, Cloudflare chat/embed, composed Switchyard hops (`provider` id `switchyard`), and Cloudflare speech/transcription (plugin → `/run`). Model Search is not a Bifrost surface.
 
 ## Quick start (Apple Silicon)
 
@@ -56,22 +58,26 @@ make mlx-sync
 make build        # gateway bin/polypus + bin/switchyard-server
 make serve        # process-compose TUI: gateway :1320 + backends + Phoenix :6006
 make serve-down   # stop this Polypus project only
-make smoke        # → /tmp/polypus-smoke.mp3
-make smoke-stt    # TTS then STT round-trip
+make smoke        # TTS smoke (cf_local default) → /tmp/polypus-smoke.mp3
+make smoke-stt    # TTS then STT round-trip (cf_local default)
+make smoke-local  # TTS via MLX (needs mlx_local up)
+make smoke-stt-local  # TTS+STT via MLX
 make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
 ```
 
 Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/polypus/config.yaml`). Override with `POLYPUS_CONFIG`. Repo `config.yaml` is a local fallback only (gitignored). Cache: `~/.cache/polypus/`; process-compose socket: `~/.local/state/polypus/`.
 
-**Switchyard (composed routers):** git submodule at `providers/switchyard` (tag `v0.2.0`). Requires **Rust stable** (see `providers/switchyard/rust-toolchain.toml`, currently 1.96.1). `make build` runs `switchyard-build` and installs `bin/switchyard-server` (hard-fail if the submodule or cargo is missing). Generated routes TOML: `~/.cache/polypus/switchyard/routes.toml`. Set `POLYPUS_SWITCHYARD=0` to skip the Switchyard process when using `make serve`.
+**Switchyard (composed routers):** git submodule at `providers/switchyard` (tag `v0.2.0`). Requires **Rust stable** (see `providers/switchyard/rust-toolchain.toml`, currently 1.96.1). `make build` runs `switchyard-build` and installs `bin/switchyard-server` (hard-fail if the submodule or cargo is missing). Generated routes TOML: `~/.cache/polypus/switchyard/routes.toml`. Set `POLYPUS_SWITCHYARD=0` to skip the Switchyard process when using `make serve`. Switchyard routing types and use cases: [docs/switchyard/](docs/switchyard/).
 
 `INFERENCE_CLOUD_CASE=1` in `stack/.env` enables the `cf_local` remote backend (requires `CF_AI_API_KEY`, `CF_ACCOUNT_ID`). MLX process start is driven by `processes.mlx` in config (`polypus processes --print mlx`); `POLYPUS_ENABLE_MLX` overrides when set. When `processes.mlx` is omitted, cloud case defaults MLX off and local defaults it on. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`.
 
 Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_OTLP_ENDPOINT` and dumps with `POLYPUS_FAILURE_DUMP_DIR`. Skip probe noise with `POLYPUS_OTEL_SKIP_PATHS` (default `/health,/health/backends`).
 
-## Live smoke (cloud)
+## Live smoke
 
-Prereqs in `stack/.env`:
+Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat smoke already defaults to a cf_local chat model.
+
+Prereqs for cloud speech and cf_local chat (`stack/.env`):
 
 ```env
 INFERENCE_CLOUD_CASE=1
@@ -82,15 +88,11 @@ CF_ACCOUNT_ID=...
 ```bash
 make build
 make serve
+make smoke          # cf_local TTS
+make smoke-stt      # cf_local TTS then STT
 make smoke-chat     # cf_local/@cf/google/gemma-4-26b-a4b-it
-make smoke-stt      # when cf_local is default TTS/STT
-```
-
-Optional deeper model probe (when your workspace ships a harness):
-
-```bash
-# example: tier L1 chat probe against a cf_local model id
-make smoke-chat
+make smoke-local    # MLX TTS (when mlx_local is up)
+make smoke-stt-local
 ```
 
 ## Layout
@@ -100,7 +102,7 @@ polypus/
   cmd/polypus/                    # Go gateway binary
   internal/gateway/               # HTTP surface (/health, /v1/models, chat/embed/audio)
   internal/router/                # Bifrost SDK + registry + policy
-  internal/extension/cloudflare/  # Model Search + /ai/run speech (P7)
+  internal/extension/cloudflare/  # Model Search + /ai/run speech + Bifrost speech plugin
   config.yaml.example             # template → ~/.config/polypus/config.yaml
   backends/mlx/                   # uv + mlx-audio (host only)
   process-compose.yaml            # independent TUI (make serve)

@@ -16,6 +16,8 @@ make smoke-router
 POLYPUS_ROUTER_SMOKE_MODEL='router/investigator' make smoke-router
 make smoke
 make smoke-stt
+make smoke-local
+make smoke-stt-local
 ```
 
 Binary: `bin/polypus-chat-smoke` (built with `make build`).
@@ -23,6 +25,8 @@ Binary: `bin/polypus-chat-smoke` (built with `make build`).
 Default chat model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
 
 Default router model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`). Run when `routers:` is configured — especially composed (`stage_router`) routes that need Switchyard.
+
+Default audio models: cf_local Deepgram (`aura-2-en` / `nova-3`). Local MLX: `make smoke-local` / `make smoke-stt-local` (`POLYPUS_SMOKE_LOCAL=1`).
 
 ## Tier summary (when host provides harness)
 

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMergeReasoningIntoContent(t *testing.T) {
@@ -68,6 +69,20 @@ func TestChatBodyWantsThinkingKwargs(t *testing.T) {
 	off := []byte(`{"model":"x","enable_thinking":false}`)
 	if chatBodyWantsThinking(off) {
 		t.Fatal("expected thinking off")
+	}
+}
+
+func TestStreamSafeClientClearsTimeout(t *testing.T) {
+	c := newChatProxyClient(30 * time.Second)
+	if c.Timeout == 0 {
+		t.Fatal("expected non-stream client to have Timeout")
+	}
+	s := streamSafeClient(c)
+	if s.Timeout != 0 {
+		t.Fatalf("stream client Timeout=%v want 0", s.Timeout)
+	}
+	if streamSafeClient(nil) == nil {
+		t.Fatal("nil client should yield stream client")
 	}
 }
 

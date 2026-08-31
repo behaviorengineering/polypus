@@ -32,8 +32,8 @@ func ValidateBackend(b config.BackendDef, policy config.RouterPolicy) error {
 	return validateLocalBackendURL(raw, policy.RejectNonLoopbackBackends)
 }
 
-// ValidateBackendURL rejects cloud or non-loopback hosts for local routing (case-mode default).
-func ValidateBackendURL(raw string) error {
+// validateBackendURL rejects cloud or non-loopback hosts for local routing (case-mode default).
+func validateBackendURL(raw string) error {
 	return validateLocalBackendURL(raw, true)
 }
 
@@ -105,7 +105,8 @@ func isBlockedCloudHost(host string) bool {
 	return false
 }
 
-// OpenAIBaseURL normalizes the backend root (no /v1 suffix; Bifrost adds /v1/... paths).
-func OpenAIBaseURL(backend string) string {
-	return strings.TrimRight(strings.TrimSpace(backend), "/")
+// openAIBaseURL normalizes the backend root (no /v1 suffix; Bifrost adds /v1/... paths).
+func openAIBaseURL(backend string) string {
+	s := strings.TrimRight(strings.TrimSpace(backend), "/")
+	return strings.TrimSuffix(s, "/v1")
 }
