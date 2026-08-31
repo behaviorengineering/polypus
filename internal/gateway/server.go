@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/router"
@@ -342,8 +344,17 @@ func isSwitchyardUnreachable(err error) bool {
 		strings.Contains(msg, "connection reset")
 }
 
+// writeHandlerError writes a domain error (or any error) using HTTPStatus.
+func writeHandlerError(w http.ResponseWriter, err error) {
+	if err == nil || upstream.ResponseWritten(err) {
+		return
+	}
+	http.Error(w, err.Error(), derrors.HTTPStatus(err))
+}
+
 // writeUpstreamDialError writes a dial failure unless the upstream body was already sent.
 // prefix is prepended for Switchyard-style messages; unreachable maps to 503 when set.
+// Typed domain errors use HTTPStatus; other errors stay 502 unless the breaker or unreachable hook says 503.
 func writeUpstreamDialError(w http.ResponseWriter, err error, prefix string, unreachable func(error) bool) {
 	if err == nil || upstream.ResponseWritten(err) {
 		return
@@ -353,6 +364,10 @@ func writeUpstreamDialError(w http.ResponseWriter, err error, prefix string, unr
 		msg = prefix + msg
 	}
 	code := http.StatusBadGateway
+	var de *derrors.Error
+	if errors.As(err, &de) {
+		code = derrors.HTTPStatus(err)
+	}
 	if upstream.Unavailable(err) || (unreachable != nil && unreachable(err)) {
 		code = http.StatusServiceUnavailable
 	}
@@ -435,7 +450,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "read body"))
 		return
 	}
 	var req struct {
@@ -446,7 +461,7 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 		Speed          *float64 `json:"speed"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "invalid json"))
 		return
 	}
 	backendID, downstream, resolveErr := h.router.Registry().ResolveTTS(req.Model)
@@ -489,25 +504,25 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", speechContentType(req.ResponseFormat))
 	w.WriteHeader(http.StatusOK)
 	if _, writeErr := w.Write(audio); writeErr != nil {
-		err = fmt.Errorf("write speech: %w", writeErr)
+		err = derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.serveSpeech", "write")
 		return
 	}
 }
 
 func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		http.Error(w, "multipart: "+err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "multipart"))
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "file required: "+err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "file required"))
 		return
 	}
 	defer func() { _ = file.Close() }()
 	audio, err := io.ReadAll(file)
 	if err != nil {
-		http.Error(w, "read file: "+err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "read file"))
 		return
 	}
 	filename := "audio.wav"
@@ -560,7 +575,7 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(http.StatusOK)
 	if _, writeErr := w.Write(out); writeErr != nil {
-		err = fmt.Errorf("write transcription: %w", writeErr)
+		err = derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.serveTranscription", "write")
 		return
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/router"
 	"github.com/behaviorengineering/polypus/internal/upstream"
 )
@@ -41,6 +42,15 @@ func (f *fakeRouter) Synthesize(context.Context, router.SpeechRequest) ([]byte, 
 
 func (f *fakeRouter) Transcribe(context.Context, router.TranscriptionRequest) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("fakeRouter: Transcribe not implemented")
+}
+
+type errSynthRouter struct {
+	*fakeRouter
+	err error
+}
+
+func (e *errSynthRouter) Synthesize(context.Context, router.SpeechRequest) ([]byte, error) {
+	return nil, e.err
 }
 
 // recordingRouter is a fake that can force Bifrost paths and record dials.
@@ -465,5 +475,51 @@ backends:
 	}
 	if len(recRouter.embedProviders) != 1 || recRouter.embedProviders[0] != "cf_local:@cf/embed-me" {
 		t.Fatalf("embedProviders=%v", recRouter.embedProviders)
+	}
+}
+
+func TestSpeechDomainErrorMapsHTTPStatus(t *testing.T) {
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	leaf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "leaf must not be dialed", http.StatusBadGateway)
+	}))
+	t.Cleanup(leaf.Close)
+
+	dir := t.TempDir()
+	content := fmt.Sprintf(`
+default_chat_backend: leaf
+default_tts_backend: leaf
+default_stt_backend: leaf
+default_proxy_backend: leaf
+backends:
+  leaf:
+    base_url: %s
+    capabilities: [chat, tts, stt, voices]
+`, leaf.URL)
+	writeConfig(t, dir, content)
+	opts := config.ServeOptions{BackendURL: leaf.URL}
+	base := newFakeRouter(t, opts)
+
+	cases := []struct {
+		name string
+		err  error
+		code int
+	}{
+		{"invalid", derrors.New(derrors.CodeInvalid, "router.Synthesize", "input required"), http.StatusBadRequest},
+		{"timeout", derrors.New(derrors.CodeTimeout, "cloudflare.Synthesize", "deadline"), http.StatusGatewayTimeout},
+		{"unavailable", derrors.New(derrors.CodeUnavailable, "router.bifrost", "provider call"), http.StatusBadGateway},
+		{"plain", fmt.Errorf("not a domain error"), http.StatusBadGateway},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := newTestGateway(t, opts, &errSynthRouter{fakeRouter: base, err: tc.err})
+			req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(`{"input":"hello"}`))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tc.code {
+				t.Fatalf("status=%d want %d body=%q", rec.Code, tc.code, rec.Body.String())
+			}
+		})
 	}
 }
