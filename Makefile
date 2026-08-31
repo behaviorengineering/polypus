@@ -1,4 +1,4 @@
-.PHONY: help build build-gateway build-chat-smoke install test vet lint tidy ci mlx-sync serve serve-down smoke smoke-chat smoke-router smoke-higgs smoke-stt smoke-all switchyard-build docker-build
+.PHONY: help build build-gateway build-chat-smoke install test vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-higgs smoke-stt smoke-stt-local smoke-all switchyard-build docker-build
 
 include ports.env
 export POLYPUS_HOST POLYPUS_PORT POLYPUS_MLX_HOST POLYPUS_MLX_PORT POLYPUS_SWITCHYARD_HOST POLYPUS_SWITCHYARD_PORT
@@ -36,12 +36,14 @@ help:
 	@echo "  make mlx-sync      uv sync for backends/mlx"
 	@echo "  make serve         process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 (POLYPUS_PHOENIX=0 to skip)"
 	@echo "  make serve-down    Stop this Polypus process-compose project only"
-	@echo "  make smoke         curl TTS smoke test via gateway"
+	@echo "  make smoke         curl TTS smoke via gateway (cf_local default)"
+	@echo "  make smoke-local   TTS smoke via MLX (POLYPUS_SMOKE_LOCAL=1)"
 	@echo "  make smoke-chat    L1 chat transport smoke (polypus-chat-smoke)"
 	@echo "  make smoke-router  Named router smoke (router/investigator by default)"
 	@echo "  make smoke-higgs   Higgs v2 TTS smoke (narration alternative)"
-	@echo "  make smoke-stt     TTS then STT round-trip via gateway"
-	@echo "  make smoke-all     TTS + STT smoke"
+	@echo "  make smoke-stt     TTS then STT round-trip (cf_local default)"
+	@echo "  make smoke-stt-local  TTS+STT round-trip via MLX"
+	@echo "  make smoke-all     TTS + STT smoke (cloud)"
 	@echo "  make docker-build  Build $(IMAGE_REPO):$(IMAGE_TAG)"
 	@echo "  make test          go test ./..."
 	@echo "  make vet           go vet ./..."
@@ -77,6 +79,10 @@ smoke:
 	chmod +x scripts/smoke.sh
 	./scripts/smoke.sh
 
+smoke-local:
+	chmod +x scripts/smoke.sh
+	POLYPUS_SMOKE_LOCAL=1 ./scripts/smoke.sh
+
 smoke-chat: build-chat-smoke
 	$(CHAT_SMOKE_BIN) -model $(POLYPUS_CHAT_SMOKE_MODEL)
 
@@ -100,6 +106,7 @@ switchyard-build:
 
 smoke-higgs:
 	chmod +x scripts/smoke.sh
+	POLYPUS_SMOKE_LOCAL=1 \
 	POLYPUS_DEFAULT_MODEL=mlx-community/higgs-audio-v2-3B-mlx-q6 \
 	POLYPUS_DEFAULT_VOICE=vivian \
 	POLYPUS_SMOKE_OUT=/tmp/polypus-higgs-smoke.mp3 \
@@ -108,6 +115,10 @@ smoke-higgs:
 smoke-stt:
 	chmod +x scripts/smoke-stt.sh
 	./scripts/smoke-stt.sh
+
+smoke-stt-local:
+	chmod +x scripts/smoke-stt.sh
+	POLYPUS_SMOKE_LOCAL=1 ./scripts/smoke-stt.sh
 
 smoke-all: smoke smoke-stt
 

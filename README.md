@@ -58,8 +58,10 @@ make mlx-sync
 make build        # gateway bin/polypus + bin/switchyard-server
 make serve        # process-compose TUI: gateway :1320 + backends + Phoenix :6006
 make serve-down   # stop this Polypus project only
-make smoke        # → /tmp/polypus-smoke.mp3
-make smoke-stt    # TTS then STT round-trip
+make smoke        # TTS smoke (cf_local default) → /tmp/polypus-smoke.mp3
+make smoke-stt    # TTS then STT round-trip (cf_local default)
+make smoke-local  # TTS via MLX (needs mlx_local up)
+make smoke-stt-local  # TTS+STT via MLX
 make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
 ```
 
@@ -71,9 +73,11 @@ Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/po
 
 Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_OTLP_ENDPOINT` and dumps with `POLYPUS_FAILURE_DUMP_DIR`. Skip probe noise with `POLYPUS_OTEL_SKIP_PATHS` (default `/health,/health/backends`).
 
-## Live smoke (cloud)
+## Live smoke
 
-Prereqs in `stack/.env`:
+Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat smoke already defaults to a cf_local chat model.
+
+Prereqs for cloud speech and cf_local chat (`stack/.env`):
 
 ```env
 INFERENCE_CLOUD_CASE=1
@@ -84,15 +88,11 @@ CF_ACCOUNT_ID=...
 ```bash
 make build
 make serve
+make smoke          # cf_local TTS
+make smoke-stt      # cf_local TTS then STT
 make smoke-chat     # cf_local/@cf/google/gemma-4-26b-a4b-it
-make smoke-stt      # when cf_local is default TTS/STT
-```
-
-Optional deeper model probe (when your workspace ships a harness):
-
-```bash
-# example: tier L1 chat probe against a cf_local model id
-make smoke-chat
+make smoke-local    # MLX TTS (when mlx_local is up)
+make smoke-stt-local
 ```
 
 ## Layout

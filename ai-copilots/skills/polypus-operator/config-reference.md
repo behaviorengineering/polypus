@@ -41,7 +41,7 @@ CF_AI_API_KEY=...
 CF_ACCOUNT_ID=...
 ```
 
-Speech defaults (MLX profile): `POLYPUS_DEFAULT_MODEL`, `POLYPUS_DEFAULT_STT_MODEL`, `POLYPUS_DEFAULT_VOICE`.
+Speech smoke defaults to cf_local (`make smoke` / `make smoke-stt`). MLX: `POLYPUS_SMOKE_LOCAL=1` or `make smoke-local` / `make smoke-stt-local`. Override with `POLYPUS_DEFAULT_MODEL`, `POLYPUS_DEFAULT_STT_MODEL`, `POLYPUS_DEFAULT_VOICE` (or `POLYPUS_CF_*` for cloud ids).
 
 ## config.yaml structure
 
