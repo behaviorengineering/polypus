@@ -102,7 +102,7 @@ polypus/
   cmd/polypus/                    # Go gateway binary
   internal/gateway/               # HTTP surface (/health, /v1/models, chat/embed/audio)
   internal/router/                # Bifrost SDK + registry + policy
-  internal/extension/cloudflare/  # Model Search + /ai/run speech (P7)
+  internal/extension/cloudflare/  # Model Search + /ai/run speech + Bifrost speech plugin
   config.yaml.example             # template → ~/.config/polypus/config.yaml
   backends/mlx/                   # uv + mlx-audio (host only)
   process-compose.yaml            # independent TUI (make serve)

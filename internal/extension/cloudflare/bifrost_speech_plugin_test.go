@@ -130,6 +130,24 @@ func TestRunSpeechPluginRejectsMissingDeadline(t *testing.T) {
 	}
 }
 
+func TestRunSpeechPluginRejectsNilSpeechPayload(t *testing.T) {
+	plugin := NewRunSpeechPlugin(func(string) (config.BackendDef, bool) {
+		return config.BackendDef{}, false
+	}, NewClient)
+	bctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	req := &schemas.BifrostRequest{RequestType: schemas.SpeechRequest}
+	_, sc, err := plugin.PreLLMHook(bctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc == nil || sc.Error == nil || sc.Error.Error == nil {
+		t.Fatalf("want nil-payload error, got %#v", sc)
+	}
+	if !strings.Contains(sc.Error.Error.Message, "nil speech request payload") {
+		t.Fatalf("msg=%q", sc.Error.Error.Message)
+	}
+}
+
 func TestRunSpeechPluginRejectsStream(t *testing.T) {
 	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")

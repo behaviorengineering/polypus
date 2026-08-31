@@ -74,7 +74,8 @@ func (p *runSpeechPlugin) PreLLMHook(
 		return req, nil, nil
 	case schemas.SpeechRequest:
 		if req.SpeechRequest == nil {
-			return req, nil, nil
+			err := derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "nil speech request payload")
+			return req, shortCircuitFail(ctx, config.BackendDef{ID: "unknown"}, "", "speech", err, true), nil
 		}
 		b, ok := p.cfBackend(req.SpeechRequest.Provider)
 		if !ok {
@@ -83,7 +84,8 @@ func (p *runSpeechPlugin) PreLLMHook(
 		return req, p.shortCircuitSpeech(ctx, b, req.SpeechRequest), nil
 	case schemas.TranscriptionRequest:
 		if req.TranscriptionRequest == nil {
-			return req, nil, nil
+			err := derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "nil transcription request payload")
+			return req, shortCircuitFail(ctx, config.BackendDef{ID: "unknown"}, "", "transcription", err, true), nil
 		}
 		b, ok := p.cfBackend(req.TranscriptionRequest.Provider)
 		if !ok {
