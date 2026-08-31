@@ -1,0 +1,150 @@
+# Auto patch release (agent-oriented)
+#
+# On every push to main, create vX.Y.(Z+1) and publish a binary GitHub Release
+# via GoReleaser, unless the commits since the last tag are only docs/chore/ci
+# (or the commit subject contains [skip release]).
+#
+# Manual bump (minor/major/patch): workflow_dispatch.
+# release.yml still runs if a human pushes a v* tag that triggers workflows.
+
+name: Auto patch release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semver bump level
+        required: false
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to tag
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_BUMP: ${{ github.event.inputs.bump }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${HEAD_MSG:-}" == *"[skip release]"* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=commit contains [skip release]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          last_tag="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          if [[ -z "${last_tag}" ]]; then
+            last_tag="v0.0.0"
+          fi
+          echo "last_tag=${last_tag}" >> "$GITHUB_OUTPUT"
+
+          bump="patch"
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            bump="${MANUAL_BUMP:-patch}"
+          else
+            range="${last_tag}..HEAD"
+            if [[ "${last_tag}" == "v0.0.0" ]]; then
+              range="HEAD"
+              subjects="$(git log -1 --pretty=%s)"
+            else
+              subjects="$(git log --pretty=%s "${range}")"
+            fi
+            if [[ -z "${subjects}" ]]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "reason=no commits since ${last_tag}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            releasable="false"
+            while IFS= read -r subject; do
+              [[ -z "${subject}" ]] && continue
+              lower="$(printf '%s' "${subject}" | tr '[:upper:]' '[:lower:]')"
+              case "${lower}" in
+                docs:*|docs\(*|chore:*|chore\(*|ci:*|ci\(*)
+                  ;;
+                merge\ *)
+                  ;;
+                *)
+                  releasable="true"
+                  ;;
+              esac
+            done <<< "${subjects}"
+
+            if [[ "${releasable}" != "true" ]]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "reason=only docs/chore/ci commits since ${last_tag}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          ver="${last_tag#v}"
+          IFS='.' read -r maj min pat <<< "${ver}"
+          maj="${maj:-0}"
+          min="${min:-0}"
+          pat="${pat:-0}"
+          case "${bump}" in
+            major) maj=$((maj + 1)); min=0; pat=0 ;;
+            minor) min=$((min + 1)); pat=0 ;;
+            patch) pat=$((pat + 1)) ;;
+            *) echo "unknown bump: ${bump}"; exit 1 ;;
+          esac
+          new_tag="v${maj}.${min}.${pat}"
+
+          if git rev-parse "${new_tag}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=tag ${new_tag} already exists" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "bump=${bump}" >> "$GITHUB_OUTPUT"
+          echo "new_tag=${new_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Skip notice
+        if: steps.decide.outputs.skip == 'true'
+        run: |
+          echo "Skipping auto release: ${{ steps.decide.outputs.reason }}"
+
+      - uses: actions/setup-go@v5
+        if: steps.decide.outputs.skip != 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Create and push tag
+        if: steps.decide.outputs.skip != 'true'
+        env:
+          NEW_TAG: ${{ steps.decide.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${NEW_TAG}" -m "Release ${NEW_TAG}"
+          git push origin "refs/tags/${NEW_TAG}"
+
+      - uses: goreleaser/goreleaser-action@v6
+        if: steps.decide.outputs.skip != 'true'
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
