@@ -45,9 +45,9 @@ flowchart TB
 | `phoenix` (`obs`) | `:6006` / `:4317` | Arize trace UI and OTLP collector. Clients set `openinference.endpoint` to `localhost:4317`. |
 | (external) | `:1234` | LM Studio. Not started by Polypus. |
 
-**Cloudflare (`cf_local`):** When `INFERENCE_CLOUD_CASE=1`, the gateway uses Workers AI. **OpenAI-shaped** chat and embeddings dial through Bifrost to the Workers AI `/ai/v1` base URL. **TTS/STT** stay on the in-process Cloudflare extension via `/ai/run` (Workers AI has no `/ai/v1/audio/*` OpenAI-compat routes; live spike returned `400 No route for that URI`). Model Search catalog also stays on the extension. Extension HTTP clients are process-scoped (keyed by backend id + bearer). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` only.
+**Cloudflare (`cf_local`):** When `INFERENCE_CLOUD_CASE=1`, the gateway uses Workers AI. **OpenAI-shaped** chat and embeddings dial through Bifrost to the Workers AI `/ai/v1` base URL. **TTS/STT** also enter Bifrost; a PreLLMHook plugin short-circuits them onto the in-process Cloudflare extension `/ai/run` path (Workers AI has no `/ai/v1/audio/*` OpenAI-compat routes; live spike returned `400 No route for that URI`). Model Search catalog stays on the extension. Extension HTTP clients are process-scoped (keyed by backend id + bearer). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` only.
 
-**Bifrost:** Bifrost fronts every OpenAI-compatible outbound dial Polypus can use: leaf backends, Cloudflare chat/embed, and composed Switchyard hops (`provider` id `switchyard`). CF `/run` speech needs a custom adapter (or a future Maxim CF provider); Model Search is not a Bifrost surface.
+**Bifrost:** Bifrost fronts every OpenAI-compatible outbound dial Polypus can use: leaf backends, Cloudflare chat/embed, composed Switchyard hops (`provider` id `switchyard`), and Cloudflare speech/transcription (plugin → `/run`). Model Search is not a Bifrost surface.
 
 ## Quick start (Apple Silicon)
 

@@ -24,7 +24,7 @@ How to choose:
 
 Context is the client `messages` array unless a type adds session latching (classifier affinity, escalation confirmations). Switchyard does not keep a private notebook per target.
 
-Polypus dials Switchyard over Bifrost (synthetic provider id `switchyard`) for composed `router/…` chat. Leaf callbacks still hit Polypus `:1320`. CF `/ai/run` speech and Model Search stay on the Cloudflare extension (Workers AI OpenAI-compat does not expose `/ai/v1/audio/*`; verified live).
+Polypus dials Switchyard over Bifrost (synthetic provider id `switchyard`) for composed `router/…` chat. Leaf callbacks still hit Polypus `:1320`. CF TTS/STT enter Bifrost then a plugin short-circuits onto extension `/ai/run` (Workers AI OpenAI-compat does not expose `/ai/v1/audio/*`; verified live). Model Search stays on the Cloudflare extension.
 
 ## Common TOML shape
 

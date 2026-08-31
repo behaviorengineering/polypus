@@ -5,13 +5,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 const speechTimeout = 300 * time.Second
@@ -20,7 +22,7 @@ const speechTimeout = 300 * time.Second
 // a fallback speechTimeout is applied so calls cannot hang forever.
 func (c *Client) doSpeech(ctx context.Context, req *http.Request) (*http.Response, error) {
 	if c == nil || c.speechClient == nil {
-		return nil, fmt.Errorf("cloudflare speech: not configured")
+		return nil, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.doSpeech", "not configured")
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -52,11 +54,11 @@ type TranscriptionRequest struct {
 // Synthesize calls Workers AI TTS (Deepgram Aura).
 func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, string, error) {
 	if c == nil {
-		return nil, "", fmt.Errorf("cloudflare speech: not configured")
+		return nil, "", derrors.New(derrors.CodeFailedPrecondition, "cloudflare.Synthesize", "not configured")
 	}
 	input := strings.TrimSpace(req.Input)
 	if input == "" {
-		return nil, "", fmt.Errorf("cloudflare speech: empty input")
+		return nil, "", derrors.New(derrors.CodeInvalid, "cloudflare.Synthesize", "empty input")
 	}
 	model := NormalizeModel(strings.TrimSpace(req.Model))
 	if model == "" {
@@ -72,13 +74,13 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, str
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return nil, "", fmt.Errorf("cloudflare speech: marshal: %w", err)
+		return nil, "", derrors.Wrap(err, derrors.CodeInternal, "cloudflare.Synthesize", "marshal")
 	}
 
 	target := runURL(c.apiBase, model)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
-		return nil, "", fmt.Errorf("cloudflare speech: request: %w", err)
+		return nil, "", derrors.Wrap(err, derrors.CodeInternal, "cloudflare.Synthesize", "request")
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -86,7 +88,8 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, str
 
 	resp, err := c.doSpeech(ctx, httpReq)
 	if err != nil {
-		return nil, "", fmt.Errorf("cloudflare speech: post %s: %w", target, err)
+		return nil, "", derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.Synthesize", "post /run").
+			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -95,7 +98,8 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, str
 		return nil, "", err
 	}
 	if len(audio) == 0 {
-		return nil, "", fmt.Errorf("cloudflare speech: empty audio from %s", target)
+		return nil, "", derrors.New(derrors.CodeUnavailable, "cloudflare.Synthesize", "empty audio").
+			With("target", target)
 	}
 	return audio, contentType, nil
 }
@@ -103,10 +107,10 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, str
 // Transcribe calls Workers AI STT (Deepgram Nova-3).
 func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (string, error) {
 	if c == nil {
-		return "", fmt.Errorf("cloudflare speech: not configured")
+		return "", derrors.New(derrors.CodeFailedPrecondition, "cloudflare.Transcribe", "not configured")
 	}
 	if len(req.Audio) == 0 {
-		return "", fmt.Errorf("cloudflare speech: empty audio")
+		return "", derrors.New(derrors.CodeInvalid, "cloudflare.Transcribe", "empty audio")
 	}
 	model := NormalizeModel(strings.TrimSpace(req.Model))
 	if model == "" {
@@ -132,7 +136,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(req.Audio))
 	if err != nil {
-		return "", fmt.Errorf("cloudflare speech: request: %w", err)
+		return "", derrors.Wrap(err, derrors.CodeInternal, "cloudflare.Transcribe", "request")
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("Content-Type", mime)
@@ -140,16 +144,19 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 
 	resp, err := c.doSpeech(ctx, httpReq)
 	if err != nil {
-		return "", fmt.Errorf("cloudflare speech: post %s: %w", target, err)
+		return "", derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.Transcribe", "post /run").
+			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("cloudflare speech: read body: %w", err)
+		return "", derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.Transcribe", "read body")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("cloudflare speech: returned %d: %s", resp.StatusCode, truncate(string(body), 256))
+		return "", derrors.New(derrors.CodeUnavailable, "cloudflare.Transcribe", "workers ai error").
+			With("status", strconv.Itoa(resp.StatusCode)).
+			With("body", truncate(string(body), 256))
 	}
 	return parseTranscript(body)
 }
@@ -158,10 +165,12 @@ func readAudioBody(resp *http.Response) ([]byte, string, error) {
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, contentType, fmt.Errorf("cloudflare speech: read body: %w", err)
+		return nil, contentType, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "read body")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, contentType, fmt.Errorf("cloudflare speech: returned %d: %s", resp.StatusCode, truncate(string(body), 256))
+		return nil, contentType, derrors.New(derrors.CodeUnavailable, "cloudflare.speech", "workers ai error").
+			With("status", strconv.Itoa(resp.StatusCode)).
+			With("body", truncate(string(body), 256))
 	}
 	if strings.HasPrefix(strings.ToLower(contentType), "application/json") || looksLikeJSON(body) {
 		var envelope struct {
@@ -172,20 +181,20 @@ func readAudioBody(resp *http.Response) ([]byte, string, error) {
 			Result json.RawMessage `json:"result"`
 		}
 		if err := json.Unmarshal(body, &envelope); err != nil {
-			return nil, contentType, fmt.Errorf("cloudflare speech: parse json: %w", err)
+			return nil, contentType, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "parse json")
 		}
 		if !envelope.Success {
 			msg := "cloudflare workers ai error"
 			if len(envelope.Errors) > 0 && envelope.Errors[0].Message != "" {
 				msg = envelope.Errors[0].Message
 			}
-			return nil, contentType, fmt.Errorf("cloudflare speech: %s", msg)
+			return nil, contentType, derrors.New(derrors.CodeUnavailable, "cloudflare.speech", msg)
 		}
 		if len(envelope.Result) > 0 {
 			if envelope.Result[0] == '"' {
 				var audioStr string
 				if err := json.Unmarshal(envelope.Result, &audioStr); err != nil {
-					return nil, contentType, fmt.Errorf("cloudflare speech: parse result string: %w", err)
+					return nil, contentType, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "parse result string")
 				}
 				if dec, err := base64.StdEncoding.DecodeString(audioStr); err == nil && len(dec) > 0 {
 					return dec, contentType, nil
@@ -244,7 +253,7 @@ func parseTranscript(body []byte) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("cloudflare speech: no transcript in response")
+	return "", derrors.New(derrors.CodeUnavailable, "cloudflare.Transcribe", "no transcript in response")
 }
 
 func mimeFromFilename(name string) string {

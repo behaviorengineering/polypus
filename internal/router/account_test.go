@@ -7,7 +7,7 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
-func TestNewAccountRegistersCloudflareChatNotSpeech(t *testing.T) {
+func TestNewAccountRegistersCloudflareChatAndSpeech(t *testing.T) {
 	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 	cfg := config.RouterConfig{
@@ -42,8 +42,11 @@ func TestNewAccountRegistersCloudflareChatNotSpeech(t *testing.T) {
 	if ar == nil || !ar.ChatCompletion || !ar.ChatCompletionStream || !ar.Embedding {
 		t.Fatalf("want chat/stream/embed: %+v", ar)
 	}
-	if ar.Speech || ar.Transcription {
-		t.Fatalf("CF must not enable Bifrost speech: %+v", ar)
+	if !ar.Speech || !ar.Transcription {
+		t.Fatalf("CF must enable Bifrost speech/transcription: %+v", ar)
+	}
+	if ar.SpeechStream || ar.TranscriptionStream {
+		t.Fatalf("CF must not enable speech streams: %+v", ar)
 	}
 }
 

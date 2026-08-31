@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 	"github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -16,9 +17,8 @@ import (
 
 // Client wraps Bifrost for Polypus multi-backend routing (speech, chat, embed).
 type Client struct {
-	bf    *bifrost.Bifrost
-	reg   *Registry
-	cfGet func(config.BackendDef) (*cloudflare.Client, error)
+	bf  *bifrost.Bifrost
+	reg *Registry
 }
 
 // CloudflareClientGet optionally overrides process-scoped cloudflare.GetClient (tests).
@@ -28,7 +28,7 @@ type CloudflareClientGet func(config.BackendDef) (*cloudflare.Client, error)
 func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
 	reg, err := NewRegistry(cfg)
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "router.NewClient", "registry")
 	}
 	var co clientOptions
 	for _, opt := range opts {
@@ -36,18 +36,35 @@ func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
 			opt(&co)
 		}
 	}
-	account := NewAccount(cfg)
-	bf, err := bifrost.Init(context.Background(), schemas.BifrostConfig{
-		Account: account,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("bifrost init: %w", err)
-	}
 	cfGet := co.cfGet
 	if cfGet == nil {
 		cfGet = cloudflare.GetClient
 	}
-	return &Client{bf: bf, reg: reg, cfGet: cfGet}, nil
+	account := NewAccount(cfg)
+	var plugins []schemas.LLMPlugin
+	if hasCloudflareBackend(cfg) {
+		lookup := func(provider string) (config.BackendDef, bool) {
+			return reg.Backend(provider)
+		}
+		plugins = append(plugins, cloudflare.NewRunSpeechPlugin(lookup, cloudflare.ClientGet(cfGet)))
+	}
+	bf, err := bifrost.Init(context.Background(), schemas.BifrostConfig{
+		Account:    account,
+		LLMPlugins: plugins,
+	})
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "router.NewClient", "bifrost init")
+	}
+	return &Client{bf: bf, reg: reg}, nil
+}
+
+func hasCloudflareBackend(cfg config.RouterConfig) bool {
+	for _, b := range cfg.Backends {
+		if b.IsCloudflareExtension() {
+			return true
+		}
+	}
+	return false
 }
 
 type clientOptions struct {
@@ -64,13 +81,6 @@ func WithCloudflareClientGet(fn CloudflareClientGet) ClientOption {
 	}
 }
 
-func (c *Client) cloudflareClient(b config.BackendDef) (*cloudflare.Client, error) {
-	if c != nil && c.cfGet != nil {
-		return c.cfGet(b)
-	}
-	return cloudflare.GetClient(b)
-}
-
 // Close shuts down the Bifrost client.
 func (c *Client) Close() {
 	if c != nil && c.bf != nil {
@@ -83,8 +93,9 @@ func (c *Client) Registry() *Registry {
 	return c.reg
 }
 
-// UsesBifrost reports whether leaf chat/embed (or the Switchyard hop) for backendID
-// should go through Bifrost. Cloudflare TTS/STT stay on the extension (/run).
+// UsesBifrost reports whether leaf dials (or the Switchyard hop) for backendID
+// should go through Bifrost. Cloudflare TTS/STT also enter Bifrost; a plugin
+// short-circuits them onto extension /ai/run.
 func (c *Client) UsesBifrost(backendID string) bool {
 	if c == nil || c.reg == nil {
 		return false
@@ -272,32 +283,15 @@ type TranscriptionRequest struct {
 // Synthesize runs TTS via the resolved backend.
 func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, error) {
 	if strings.TrimSpace(req.Input) == "" {
-		return nil, fmt.Errorf("input required")
+		return nil, derrors.New(derrors.CodeInvalid, "router.Synthesize", "input required")
 	}
 	backendID, downstream, err := c.reg.ResolveTTS(req.Model)
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeNotFound, "router.Synthesize", "resolve tts")
 	}
-	b, ok := c.reg.Backend(string(backendID))
-	if !ok {
-		return nil, fmt.Errorf("backend %q not found", backendID)
-	}
-	if b.IsCloudflareExtension() {
-		cf, err := c.cloudflareClient(b)
-		if err != nil {
-			return nil, err
-		}
-		model := downstream
-		if model == "" {
-			model = req.Model
-		}
-		audio, _, err := cf.Synthesize(ctx, cloudflare.SpeechRequest{
-			Model:          model,
-			Input:          req.Input,
-			Voice:          req.Voice,
-			ResponseFormat: req.ResponseFormat,
-		})
-		return audio, err
+	if _, ok := c.reg.Backend(string(backendID)); !ok {
+		return nil, derrors.New(derrors.CodeNotFound, "router.Synthesize", "backend not found").
+			With("backend", string(backendID))
 	}
 
 	provider := backendID
@@ -318,10 +312,9 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 	if req.Speed != nil {
 		params.Speed = req.Speed
 	}
-	deadline := schemas.NoDeadline
-	if dl, ok := ctx.Deadline(); ok {
-		deadline = dl
-	}
+	ctx, cancel := ensureSpeechDeadline(ctx, c.reg.Config().Timeouts)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
 	bctx := schemas.NewBifrostContext(ctx, deadline)
 	resp, berr := c.bf.SpeechRequest(bctx, &schemas.BifrostSpeechRequest{
 		Provider: provider,
@@ -333,7 +326,7 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 		return nil, bifrostErr(berr)
 	}
 	if resp == nil || len(resp.Audio) == 0 {
-		return nil, fmt.Errorf("empty speech audio from backend")
+		return nil, derrors.New(derrors.CodeUnavailable, "router.Synthesize", "empty speech audio from backend")
 	}
 	return resp.Audio, nil
 }
@@ -341,43 +334,15 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 // Transcribe runs STT via the resolved backend.
 func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]byte, string, error) {
 	if len(req.Audio) == 0 {
-		return nil, "", fmt.Errorf("audio file required")
+		return nil, "", derrors.New(derrors.CodeInvalid, "router.Transcribe", "audio file required")
 	}
 	backendID, downstream, err := c.reg.ResolveSTT(req.Model)
 	if err != nil {
-		return nil, "", err
+		return nil, "", derrors.Wrap(err, derrors.CodeNotFound, "router.Transcribe", "resolve stt")
 	}
-	b, ok := c.reg.Backend(string(backendID))
-	if !ok {
-		return nil, "", fmt.Errorf("backend %q not found", backendID)
-	}
-	if b.IsCloudflareExtension() {
-		cf, err := c.cloudflareClient(b)
-		if err != nil {
-			return nil, "", err
-		}
-		model := downstream
-		if model == "" {
-			model = req.Model
-		}
-		text, err := cf.Transcribe(ctx, cloudflare.TranscriptionRequest{
-			Model:    model,
-			Audio:    req.Audio,
-			Filename: req.Filename,
-			Language: req.Language,
-		})
-		if err != nil {
-			return nil, "", err
-		}
-		format := strings.TrimSpace(req.ResponseFormat)
-		if format == "" {
-			format = "json"
-		}
-		if schemas.IsPlainTextTranscriptionFormat(&format) {
-			return []byte(text), "text/plain; charset=utf-8", nil
-		}
-		body := fmt.Sprintf(`{"text":%q}`, text)
-		return []byte(body), "application/json", nil
+	if _, ok := c.reg.Backend(string(backendID)); !ok {
+		return nil, "", derrors.New(derrors.CodeNotFound, "router.Transcribe", "backend not found").
+			With("backend", string(backendID))
 	}
 
 	provider := backendID
@@ -402,10 +367,9 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	if lang := strings.TrimSpace(req.Language); lang != "" {
 		params.Language = schemas.Ptr(lang)
 	}
-	deadline := schemas.NoDeadline
-	if dl, ok := ctx.Deadline(); ok {
-		deadline = dl
-	}
+	ctx, cancel := ensureSpeechDeadline(ctx, c.reg.Config().Timeouts)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
 	bctx := schemas.NewBifrostContext(ctx, deadline)
 	resp, berr := c.bf.TranscriptionRequest(bctx, &schemas.BifrostTranscriptionRequest{
 		Provider: provider,
@@ -420,7 +384,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 		return nil, "", bifrostErr(berr)
 	}
 	if resp == nil {
-		return nil, "", fmt.Errorf("empty transcription from backend")
+		return nil, "", derrors.New(derrors.CodeUnavailable, "router.Transcribe", "empty transcription from backend")
 	}
 	if schemas.IsPlainTextTranscriptionFormat(resp.ResponseFormat) {
 		return []byte(resp.Text), "text/plain; charset=utf-8", nil
@@ -429,16 +393,32 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	return []byte(body), "application/json", nil
 }
 
+func ensureSpeechDeadline(ctx context.Context, timeouts config.Timeouts) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	d := time.Duration(timeouts.SpeechSeconds()) * time.Second
+	return context.WithTimeout(ctx, d)
+}
+
 func bifrostErr(berr *schemas.BifrostError) error {
 	if berr == nil {
-		return fmt.Errorf("bifrost error")
+		return derrors.New(derrors.CodeInternal, "router.bifrost", "bifrost error")
+	}
+	if berr.Error != nil && berr.Error.Error != nil {
+		out := derrors.Wrap(berr.Error.Error, derrors.CodeUnavailable, "router.bifrost", "provider call")
+		if berr.StatusCode != nil {
+			out = out.With("status", fmt.Sprintf("%d", *berr.StatusCode))
+		}
+		return out
 	}
 	msg := "request failed"
 	if berr.Error != nil && strings.TrimSpace(berr.Error.Message) != "" {
 		msg = strings.TrimSpace(berr.Error.Message)
 	}
+	out := derrors.New(derrors.CodeUnavailable, "router.bifrost", msg)
 	if berr.StatusCode != nil {
-		return fmt.Errorf("bifrost: %s (status %d)", msg, *berr.StatusCode)
+		out = out.With("status", fmt.Sprintf("%d", *berr.StatusCode))
 	}
-	return fmt.Errorf("bifrost: %s", msg)
+	return out
 }

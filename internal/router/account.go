@@ -14,7 +14,8 @@ const ProviderSwitchyard = "switchyard"
 
 // Account implements schemas.Account for Polypus OpenAI-compatible backends,
 // including Cloudflare chat/embed (Workers AI OpenAI-compat URL) and a synthetic
-// Switchyard provider. CF TTS/STT stay on the extension (/run), not Bifrost speech.
+// Switchyard provider. CF TTS/STT are AllowedRequests on Bifrost; a PreLLMHook
+// plugin short-circuits them onto extension /ai/run (no /ai/v1/audio/*).
 type Account struct {
 	backends map[schemas.ModelProvider]config.BackendDef
 	timeouts config.Timeouts
@@ -96,13 +97,21 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 func allowedRequestsForBackend(b config.BackendDef) *schemas.AllowedRequests {
 	allowed := &schemas.AllowedRequests{}
 	if b.IsCloudflareExtension() {
-		// Bifrost fronts CF OpenAI-compat chat/embed only; /run speech stays on extension.
+		// Chat/embed use Workers AI OpenAI-compat. Speech/transcription are enabled so
+		// Bifrost accepts the dial; cfRunSpeechPlugin short-circuits onto /ai/run.
+		// Stream speech is left off (unsupported on the CF path).
 		if b.HasCapability(config.CapChat) || b.HasCapability(config.CapVision) {
 			allowed.ChatCompletion = true
 			allowed.ChatCompletionStream = true
 		}
 		if b.HasCapability(config.CapEmbed) {
 			allowed.Embedding = true
+		}
+		if b.HasCapability(config.CapTTS) {
+			allowed.Speech = true
+		}
+		if b.HasCapability(config.CapSTT) {
+			allowed.Transcription = true
 		}
 		return allowed
 	}
