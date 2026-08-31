@@ -1,10 +1,14 @@
+<p align="center">
+  <img src="media/banner.webp" alt="Polypus. One face. Many arms. Stay local." width="100%" />
+</p>
+
 # Polypus
 
 Local **OpenAI-compatible inference gateway**: one loopback face on `:1320`, many backend arms (chat, vision, embeddings, TTS/STT). Clients never talk to Cloudflare, MLX, or LM Studio directly.
 
 ## Services
 
-Apps call **only** `http://127.0.0.1:1320`. The gateway routes by model prefix (`cf_local/…`, `lm_studio/…`) or capability default in `config.yaml`.
+Apps call **only** `http://127.0.0.1:1320`. The gateway routes by model prefix (`cf_local/…`, `lm_studio/…`, `router/…`) or capability default in `config.yaml`. Named routers are public `model` ids (`router/<name>`); composed policies run on Switchyard `:4000`, leaf traffic still exits through Polypus backends.
 
 ```mermaid
 flowchart TB
@@ -14,6 +18,7 @@ flowchart TB
   end
 
   G["Gateway :1320<br/>OpenAI /v1/*"]
+  SY["Switchyard :4000<br/>composed routers"]
 
   subgraph arms [Backends]
     M["MLX :1322<br/>local TTS and STT"]
@@ -30,6 +35,8 @@ flowchart TB
   G --> M
   G --> CFExt
   G --> LMS
+  G --> SY
+  SY -.->|leaf via :1320| G
   G --> OTLP
   CFExt -->|"INFERENCE_CLOUD_CASE=1"| CF
   C -.-> OTLP
@@ -40,7 +47,7 @@ flowchart TB
 | Process-compose | Port | What it is |
 |-----------------|------|------------|
 | `gateway` (`core`) | `:1320` | Public OpenAI API. This is `POLYPUS_BASE_URL`. |
-| `switchyard` (`switchyard`) | `:4000` | Composed router engine (stage_router). Always-on when routers are configured. |
+| `switchyard` (`switchyard`) | `:4000` | Composed router engine (`stage_router`, `llm_classifier`, `passthrough`, etc.). Always-on when `routers:` is configured. |
 | `mlx` (`mlx`) | `:1322` | Local Apple Silicon speech (Qwen3 TTS, Whisper STT). |
 | `phoenix` (`obs`) | `:6006` / `:4317` | Arize trace UI and OTLP collector. Clients set `openinference.endpoint` to `localhost:4317`. |
 | (external) | `:1234` | LM Studio. Not started by Polypus. |
@@ -63,11 +70,12 @@ make smoke-stt    # TTS then STT round-trip (cf_local default)
 make smoke-local  # TTS via MLX (needs mlx_local up)
 make smoke-stt-local  # TTS+STT via MLX
 make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
+make smoke-router # router/investigator (needs routers: + Switchyard for composed types)
 ```
 
 Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/polypus/config.yaml`). Override with `POLYPUS_CONFIG`. Repo `config.yaml` is a local fallback only (gitignored). Cache: `~/.cache/polypus/`; process-compose socket: `~/.local/state/polypus/`.
 
-**Switchyard (composed routers):** git submodule at `providers/switchyard` (tag `v0.2.0`). Requires **Rust stable** (see `providers/switchyard/rust-toolchain.toml`, currently 1.96.1). `make build` runs `switchyard-build` and installs `bin/switchyard-server` (hard-fail if the submodule or cargo is missing). Generated routes TOML: `~/.cache/polypus/switchyard/routes.toml`. Set `POLYPUS_SWITCHYARD=0` to skip the Switchyard process when using `make serve`. Switchyard routing types and use cases: [docs/switchyard/](docs/switchyard/).
+**Switchyard (composed routers):** git submodule at `providers/switchyard` (tag `v0.2.0`). Requires **Rust stable** (see `providers/switchyard/rust-toolchain.toml`, currently 1.96.1). `make build` runs `switchyard-build` and installs `bin/switchyard-server` (hard-fail if the submodule or cargo is missing). Generated routes TOML: `~/.cache/polypus/switchyard/routes.toml`. Set `POLYPUS_SWITCHYARD=0` to skip the Switchyard process when using `make serve`. Declare routers under `routers:` in config; clients send `model: router/<name>`. Routing types and when to use each: [docs/switchyard/](docs/switchyard/).
 
 `INFERENCE_CLOUD_CASE=1` in `stack/.env` enables the `cf_local` remote backend (requires `CF_AI_API_KEY`, `CF_ACCOUNT_ID`). MLX process start is driven by `processes.mlx` in config (`polypus processes --print mlx`); `POLYPUS_ENABLE_MLX` overrides when set. When `processes.mlx` is omitted, cloud case defaults MLX off and local defaults it on. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`.
 
@@ -93,6 +101,7 @@ make smoke-stt      # cf_local TTS then STT
 make smoke-chat     # cf_local/@cf/google/gemma-4-26b-a4b-it
 make smoke-local    # MLX TTS (when mlx_local is up)
 make smoke-stt-local
+make smoke-router   # default router/investigator (override POLYPUS_ROUTER_SMOKE_MODEL)
 ```
 
 ## Layout
@@ -102,9 +111,13 @@ polypus/
   cmd/polypus/                    # Go gateway binary
   internal/gateway/               # HTTP surface (/health, /v1/models, chat/embed/audio)
   internal/router/                # Bifrost SDK + registry + policy
+  internal/switchyard/            # routers: YAML → routes.toml, Switchyard client
   internal/extension/cloudflare/  # Model Search + /ai/run speech + Bifrost speech plugin
+  providers/switchyard/           # git submodule (switchyard-server)
+  docs/switchyard/                # routing type guides
   config.yaml.example             # template → ~/.config/polypus/config.yaml
   backends/mlx/                   # uv + mlx-audio (host only)
+  media/                          # README banner
   process-compose.yaml            # independent TUI (make serve)
   scripts/pc-up.sh                # process-compose launcher
 ```
@@ -143,6 +156,7 @@ curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq .
 | Service | Default | Notes |
 |---------|---------|-------|
 | Gateway | `127.0.0.1:1320` | Public OpenAI `/v1/*` surface |
+| Switchyard | `127.0.0.1:4000` | Composed `router/…` chat; internal only |
 | MLX backend | `127.0.0.1:1322` | Internal; gateway proxies only |
 | Phoenix UI | `127.0.0.1:6006` | Arize traces |
 | Phoenix OTLP | `127.0.0.1:4317` | OTLP gRPC (OpenInference) |
@@ -165,7 +179,7 @@ POLYPUS_CF_VOICE=luna
 
 Hop timeouts live in `config.yaml` `timeouts:` (chat 120s, Cloudflare chat 60s, thinking 600s, vision 300s). Optional client header `X-Polypus-Timeout` (Go duration or integer seconds) is clamped to `min`..`max` (5s–900s).
 
-Multi-backend routing: see `config.yaml.example`. Model prefix: `backend_id/model` (e.g. `cf_local/@cf/zai-org/glm-4.7-flash`).
+Multi-backend routing: see `config.yaml.example`. Model prefix: `backend_id/model` (e.g. `cf_local/@cf/zai-org/glm-4.7-flash`) or named router `router/<name>` (e.g. `router/investigator`).
 
 ## Docker
 
