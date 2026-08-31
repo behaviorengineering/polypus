@@ -1,11 +1,14 @@
 package cloudflare
 
 import (
+	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/maximhq/bifrost/core/schemas"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const runSpeechPluginName = "polypus-cf-run-speech"
@@ -61,12 +64,12 @@ func (p *runSpeechPlugin) PreLLMHook(
 
 	switch req.RequestType {
 	case schemas.SpeechStreamRequest, schemas.TranscriptionStreamRequest:
-		provider, _, _ := req.GetRequestFields()
+		provider, model, _ := req.GetRequestFields()
 		if b, ok := p.cfBackend(provider); ok {
-			return req, &schemas.LLMPluginShortCircuit{
-				Error: runSpeechPluginErr(derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "speech streaming not supported").
-					With("backend", b.ID)),
-			}, nil
+			err := derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "speech streaming not supported").
+				With("backend", b.ID).
+				With("model", model)
+			return req, shortCircuitFail(ctx, b, model, string(req.RequestType), err, true), nil
 		}
 		return req, nil, nil
 	case schemas.SpeechRequest:
@@ -105,18 +108,28 @@ func (p *runSpeechPlugin) shortCircuitSpeech(
 	b config.BackendDef,
 	sr *schemas.BifrostSpeechRequest,
 ) *schemas.LLMPluginShortCircuit {
+	model := ""
+	if sr != nil {
+		model = sr.Model
+	}
 	if _, ok := ctx.Deadline(); !ok {
-		return &schemas.LLMPluginShortCircuit{
-			Error: runSpeechPluginErr(derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
-				With("backend", b.ID)),
-		}
+		err := derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
+			With("backend", b.ID).
+			With("model", model)
+		return shortCircuitFail(ctx, b, model, "speech", err, true)
 	}
 	cf, err := p.get(b)
 	if err != nil {
-		return &schemas.LLMPluginShortCircuit{
-			Error: runSpeechPluginErr(derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "client").
-				With("backend", b.ID)),
-		}
+		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "client").
+			With("backend", b.ID).
+			With("model", model)
+		return shortCircuitFail(ctx, b, model, "speech", wrapped, false)
+	}
+	if cf == nil {
+		err := derrors.New(derrors.CodeInternal, "cloudflare.runSpeech", "client nil").
+			With("backend", b.ID).
+			With("model", model)
+		return shortCircuitFail(ctx, b, model, "speech", err, true)
 	}
 	input := ""
 	if sr.Input != nil {
@@ -137,16 +150,16 @@ func (p *runSpeechPlugin) shortCircuitSpeech(
 		ResponseFormat: format,
 	})
 	if err != nil {
-		return &schemas.LLMPluginShortCircuit{
-			Error: runSpeechPluginErr(derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "synthesize").
-				With("backend", b.ID)),
-		}
+		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "synthesize").
+			With("backend", b.ID).
+			With("model", model)
+		return shortCircuitFail(ctx, b, model, "speech", wrapped, false)
 	}
 	if len(audio) == 0 {
-		return &schemas.LLMPluginShortCircuit{
-			Error: runSpeechPluginErr(derrors.New(derrors.CodeUnavailable, "cloudflare.runSpeech", "empty speech audio").
-				With("backend", b.ID)),
-		}
+		err := derrors.New(derrors.CodeUnavailable, "cloudflare.runSpeech", "empty speech audio").
+			With("backend", b.ID).
+			With("model", model)
+		return shortCircuitFail(ctx, b, model, "speech", err, false)
 	}
 	return &schemas.LLMPluginShortCircuit{
 		Response: &schemas.BifrostResponse{
@@ -160,18 +173,28 @@ func (p *runSpeechPlugin) shortCircuitTranscription(
 	b config.BackendDef,
 	tr *schemas.BifrostTranscriptionRequest,
 ) *schemas.LLMPluginShortCircuit {
+	model := ""
+	if tr != nil {
+		model = tr.Model
+	}
 	if _, ok := ctx.Deadline(); !ok {
-		return &schemas.LLMPluginShortCircuit{
-			Error: runSpeechPluginErr(derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
-				With("backend", b.ID)),
-		}
+		err := derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
+			With("backend", b.ID).
+			With("model", model)
+		return shortCircuitFail(ctx, b, model, "transcription", err, true)
 	}
 	cf, err := p.get(b)
 	if err != nil {
-		return &schemas.LLMPluginShortCircuit{
-			Error: runSpeechPluginErr(derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "client").
-				With("backend", b.ID)),
-		}
+		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "client").
+			With("backend", b.ID).
+			With("model", model)
+		return shortCircuitFail(ctx, b, model, "transcription", wrapped, false)
+	}
+	if cf == nil {
+		err := derrors.New(derrors.CodeInternal, "cloudflare.runSpeech", "client nil").
+			With("backend", b.ID).
+			With("model", model)
+		return shortCircuitFail(ctx, b, model, "transcription", err, true)
 	}
 	var file []byte
 	filename := ""
@@ -190,10 +213,16 @@ func (p *runSpeechPlugin) shortCircuitTranscription(
 		Language: lang,
 	})
 	if err != nil {
-		return &schemas.LLMPluginShortCircuit{
-			Error: runSpeechPluginErr(derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "transcribe").
-				With("backend", b.ID)),
-		}
+		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "transcribe").
+			With("backend", b.ID).
+			With("model", model)
+		return shortCircuitFail(ctx, b, model, "transcription", wrapped, false)
+	}
+	if strings.TrimSpace(text) == "" {
+		err := derrors.New(derrors.CodeUnavailable, "cloudflare.runSpeech", "empty transcript").
+			With("backend", b.ID).
+			With("model", model)
+		return shortCircuitFail(ctx, b, model, "transcription", err, false)
 	}
 	resp := &schemas.BifrostTranscriptionResponse{Text: text}
 	if tr.Params != nil && tr.Params.ResponseFormat != nil {
@@ -206,14 +235,34 @@ func (p *runSpeechPlugin) shortCircuitTranscription(
 	}
 }
 
-func runSpeechPluginErr(err error) *schemas.BifrostError {
+func shortCircuitFail(
+	ctx context.Context,
+	b config.BackendDef,
+	model, requestType string,
+	err error,
+	isBifrost bool,
+) *schemas.LLMPluginShortCircuit {
+	attrs := []any{
+		"backend", b.ID,
+		"model", model,
+		"request_type", requestType,
+		"err", err,
+	}
+	if tid := traceIDFromCtx(ctx); tid != "" {
+		attrs = append([]any{"trace_id", tid}, attrs...)
+	}
+	slog.Error("polypus: cf speech short-circuit failed", attrs...)
+	return &schemas.LLMPluginShortCircuit{Error: bifrostSpeechErr(err, isBifrost)}
+}
+
+func bifrostSpeechErr(err error, isBifrost bool) *schemas.BifrostError {
 	if err == nil {
 		err = derrors.New(derrors.CodeInternal, "cloudflare.runSpeech", "unknown error")
 	}
 	falseVal := false
 	code := string(derrors.CodeOf(err))
 	return &schemas.BifrostError{
-		IsBifrostError: true,
+		IsBifrostError: isBifrost,
 		AllowFallbacks: &falseVal,
 		Error: &schemas.ErrorField{
 			Message: err.Error(),
@@ -221,4 +270,15 @@ func runSpeechPluginErr(err error) *schemas.BifrostError {
 			Error:   err,
 		},
 	}
+}
+
+func traceIDFromCtx(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		return ""
+	}
+	return sc.TraceID().String()
 }

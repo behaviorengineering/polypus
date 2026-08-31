@@ -160,12 +160,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, chatMaxBody))
 	if err != nil {
-		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "read body"))
 		return
 	}
 	model, err := extractChatModel(body)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, err)
 		return
 	}
 
@@ -183,13 +183,13 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 		backendID, downstream, err = reg.ResolveVision(model)
 	} else {
 		if cfg.DefaultChatBackend == "" {
-			http.Error(w, "polypus: no chat backend configured", http.StatusServiceUnavailable)
+			writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveChatCompletions", "no chat backend configured"))
 			return
 		}
 		backendID, downstream, err = reg.ResolveChat(model)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "resolve backend"))
 		return
 	}
 	if !h.ensureModelAllowed(backendID, model) {
@@ -198,22 +198,24 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 	}
 	backendURL, ok := reg.BackendURL(backendID)
 	if !ok {
-		http.Error(w, errBackendNotFound, http.StatusBadGateway)
+		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveChatCompletions", errBackendNotFound).
+			With("backend", backendID))
 		return
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		http.Error(w, errBackendNotFound, http.StatusBadGateway)
+		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveChatCompletions", errBackendNotFound).
+			With("backend", backendID))
 		return
 	}
 	backendAuth, authErr := mustBackendAuth(backend)
 	if authErr != nil {
-		http.Error(w, authErr.Error(), http.StatusServiceUnavailable)
+		writeHandlerError(w, authErr)
 		return
 	}
 	rewritten, err := rewriteChatModel(body, downstream)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, err)
 		return
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
@@ -231,11 +233,13 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 	cfg := reg.Config()
 	nr, ok := lookupRouter(cfg, routerName)
 	if !ok {
-		http.Error(w, fmt.Sprintf("polypus: unknown router %q", model), http.StatusBadRequest)
+		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unknown router").
+			With("model", model).
+			With("router", routerName))
 		return
 	}
 	if msg := validateNamedRouterForChat(nr, model, vision); msg != "" {
-		http.Error(w, msg, http.StatusBadRequest)
+		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", msg))
 		return
 	}
 
@@ -245,7 +249,9 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 	case dispatchSwitchyard:
 		h.serveSwitchyardRouterChat(w, r, body, model, routerName, cfg.EffectiveSwitchyardBaseURL())
 	default:
-		http.Error(w, fmt.Sprintf("polypus: router %q has unsupported route type", model), http.StatusBadRequest)
+		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unsupported route type").
+			With("model", model).
+			With("router", routerName))
 	}
 }
 
@@ -253,7 +259,7 @@ func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.R
 	reg := h.router.Registry()
 	backendID, downstream, resolveErr := reg.ResolveChat(target)
 	if resolveErr != nil {
-		http.Error(w, resolveErr.Error(), http.StatusBadRequest)
+		writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.servePassthroughRouterChat", "resolve target"))
 		return
 	}
 	if !h.ensureModelAllowed(backendID, target) {
@@ -262,22 +268,24 @@ func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.R
 	}
 	backendURL, ok := reg.BackendURL(backendID)
 	if !ok {
-		http.Error(w, errBackendNotFound, http.StatusBadGateway)
+		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.servePassthroughRouterChat", errBackendNotFound).
+			With("backend", backendID))
 		return
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		http.Error(w, errBackendNotFound, http.StatusBadGateway)
+		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.servePassthroughRouterChat", errBackendNotFound).
+			With("backend", backendID))
 		return
 	}
 	backendAuth, authErr := mustBackendAuth(backend)
 	if authErr != nil {
-		http.Error(w, authErr.Error(), http.StatusServiceUnavailable)
+		writeHandlerError(w, authErr)
 		return
 	}
 	rewritten, rewriteErr := rewriteChatModel(body, downstream)
 	if rewriteErr != nil {
-		http.Error(w, rewriteErr.Error(), http.StatusBadRequest)
+		writeHandlerError(w, rewriteErr)
 		return
 	}
 	var err error
@@ -377,24 +385,24 @@ func writeUpstreamDialError(w http.ResponseWriter, err error, prefix string, unr
 func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, embedMaxBody))
 	if err != nil {
-		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "read body"))
 		return
 	}
 	model, err := extractEmbedModel(body)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, err)
 		return
 	}
 
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	if cfg.DefaultEmbedBackend == "" {
-		http.Error(w, "polypus: no embed backend configured", http.StatusServiceUnavailable)
+		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveEmbeddings", "no embed backend configured"))
 		return
 	}
 	backendID, downstream, err := reg.ResolveEmbed(model)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "resolve backend"))
 		return
 	}
 	if !h.ensureModelAllowed(backendID, model) {
@@ -403,22 +411,24 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	backendURL, ok := reg.BackendURL(backendID)
 	if !ok {
-		http.Error(w, errBackendNotFound, http.StatusBadGateway)
+		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveEmbeddings", errBackendNotFound).
+			With("backend", backendID))
 		return
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		http.Error(w, errBackendNotFound, http.StatusBadGateway)
+		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveEmbeddings", errBackendNotFound).
+			With("backend", backendID))
 		return
 	}
 	backendAuth, authErr := mustBackendAuth(backend)
 	if authErr != nil {
-		http.Error(w, authErr.Error(), http.StatusServiceUnavailable)
+		writeHandlerError(w, authErr)
 		return
 	}
 	rewritten, err := rewriteEmbedModel(body, downstream)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeHandlerError(w, err)
 		return
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", model, backendID, backendURL, downstream)
@@ -435,7 +445,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, writeErr := w.Write(raw)
 			if writeErr != nil {
-				return fmt.Errorf("write response: %w", writeErr)
+				return derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.serveEmbeddings", "write response")
 			}
 			return nil
 		}

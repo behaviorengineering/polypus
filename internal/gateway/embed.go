@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/upstream"
 )
 
@@ -21,11 +21,11 @@ func extractEmbedModel(body []byte) (string, error) {
 		Model string `json:"model"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", fmt.Errorf("invalid json: %w", err)
+		return "", derrors.Wrap(err, derrors.CodeInvalid, "gateway.extractEmbedModel", "invalid json")
 	}
 	model := strings.TrimSpace(payload.Model)
 	if model == "" {
-		return "", fmt.Errorf("model required")
+		return "", derrors.New(derrors.CodeInvalid, "gateway.extractEmbedModel", "model required")
 	}
 	return model, nil
 }
@@ -33,12 +33,12 @@ func extractEmbedModel(body []byte) (string, error) {
 func rewriteEmbedModel(body []byte, model string) ([]byte, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("invalid json: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteEmbedModel", "invalid json")
 	}
 	payload["model"] = model
 	out, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshal: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteEmbedModel", "marshal")
 	}
 	return out, nil
 }
@@ -53,7 +53,7 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("request: %w", err)
+		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyEmbeddings", "request")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -71,7 +71,8 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("post %s: %w", target, err)
+		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyEmbeddings", "post").
+			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -91,7 +92,7 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 	w.WriteHeader(resp.StatusCode)
 	_, err = io.Copy(w, io.LimitReader(resp.Body, embedMaxBody))
 	if err != nil {
-		return fmt.Errorf("write response: %w", err)
+		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyEmbeddings", "write response")
 	}
 	return upstream.StatusFailure(resp.StatusCode)
 }

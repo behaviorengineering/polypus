@@ -17,8 +17,9 @@ import (
 
 // Client wraps Bifrost for Polypus multi-backend routing (speech, chat, embed).
 type Client struct {
-	bf  *bifrost.Bifrost
-	reg *Registry
+	bf               *bifrost.Bifrost
+	reg              *Registry
+	cfSpeechPluginOn bool
 }
 
 // CloudflareClientGet optionally overrides process-scoped cloudflare.GetClient (tests).
@@ -55,7 +56,7 @@ func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "router.NewClient", "bifrost init")
 	}
-	return &Client{bf: bf, reg: reg}, nil
+	return &Client{bf: bf, reg: reg, cfSpeechPluginOn: len(plugins) > 0}, nil
 }
 
 func hasCloudflareBackend(cfg config.RouterConfig) bool {
@@ -120,16 +121,16 @@ func bifrostRawContext(parent context.Context, timeout time.Duration) *schemas.B
 // ChatCompletionRaw sends an OpenAI-shaped chat body via Bifrost (non-streaming).
 func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) ([]byte, error) {
 	if c == nil || c.bf == nil {
-		return nil, fmt.Errorf("bifrost not configured")
+		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.ChatCompletionRaw", "bifrost not configured")
 	}
 	var envelope struct {
 		Messages []schemas.ChatMessage `json:"messages"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, fmt.Errorf("parse chat body: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "router.ChatCompletionRaw", "parse chat body")
 	}
 	if len(envelope.Messages) == 0 {
-		return nil, fmt.Errorf("messages required")
+		return nil, derrors.New(derrors.CodeInvalid, "router.ChatCompletionRaw", "messages required")
 	}
 	bctx := bifrostRawContext(ctx, timeout)
 	resp, berr := c.bf.ChatCompletionRequest(bctx, &schemas.BifrostChatRequest{
@@ -142,11 +143,13 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string,
 		return nil, bifrostErr(berr)
 	}
 	if resp == nil {
-		return nil, fmt.Errorf("empty chat response from backend")
+		return nil, derrors.New(derrors.CodeUnavailable, "router.ChatCompletionRaw", "empty chat response from backend").
+			With("backend", backendID).
+			With("model", model)
 	}
 	out, err := json.Marshal(resp)
 	if err != nil {
-		return nil, fmt.Errorf("marshal chat response: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "router.ChatCompletionRaw", "marshal chat response")
 	}
 	return out, nil
 }
@@ -156,16 +159,16 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string,
 // The channel is closed when the stream ends; streamErr receives at most one terminal error.
 func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) (<-chan []byte, <-chan error, error) {
 	if c == nil || c.bf == nil {
-		return nil, nil, fmt.Errorf("bifrost not configured")
+		return nil, nil, derrors.New(derrors.CodeFailedPrecondition, "router.ChatCompletionStreamRaw", "bifrost not configured")
 	}
 	var envelope struct {
 		Messages []schemas.ChatMessage `json:"messages"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, nil, fmt.Errorf("parse chat body: %w", err)
+		return nil, nil, derrors.Wrap(err, derrors.CodeInvalid, "router.ChatCompletionStreamRaw", "parse chat body")
 	}
 	if len(envelope.Messages) == 0 {
-		return nil, nil, fmt.Errorf("messages required")
+		return nil, nil, derrors.New(derrors.CodeInvalid, "router.ChatCompletionStreamRaw", "messages required")
 	}
 	// Streams use client cancel only (no Bifrost wall-clock deadline), matching hop
 	// timeout rules on the HTTP proxy path. The timeout arg is reserved for API symmetry.
@@ -198,12 +201,12 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 			}
 			raw, err := json.Marshal(chunk.BifrostChatResponse)
 			if err != nil {
-				errCh <- fmt.Errorf("marshal stream chunk: %w", err)
+				errCh <- derrors.Wrap(err, derrors.CodeInternal, "router.ChatCompletionStreamRaw", "marshal stream chunk")
 				return
 			}
 			select {
 			case <-ctx.Done():
-				errCh <- ctx.Err()
+				errCh <- derrors.Wrap(ctx.Err(), derrors.CodeCanceled, "router.ChatCompletionStreamRaw", "context done")
 				return
 			case out <- raw:
 			}
@@ -215,7 +218,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 // EmbeddingRaw sends an OpenAI-shaped embeddings body via Bifrost.
 func (c *Client) EmbeddingRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) ([]byte, error) {
 	if c == nil || c.bf == nil {
-		return nil, fmt.Errorf("bifrost not configured")
+		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.EmbeddingRaw", "bifrost not configured")
 	}
 	input, err := parseEmbeddingInput(body)
 	if err != nil {
@@ -232,11 +235,13 @@ func (c *Client) EmbeddingRaw(ctx context.Context, backendID, model string, body
 		return nil, bifrostErr(berr)
 	}
 	if resp == nil {
-		return nil, fmt.Errorf("empty embedding response from backend")
+		return nil, derrors.New(derrors.CodeUnavailable, "router.EmbeddingRaw", "empty embedding response from backend").
+			With("backend", backendID).
+			With("model", model)
 	}
 	out, err := json.Marshal(resp)
 	if err != nil {
-		return nil, fmt.Errorf("marshal embedding response: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "router.EmbeddingRaw", "marshal embedding response")
 	}
 	return out, nil
 }
@@ -246,10 +251,10 @@ func parseEmbeddingInput(body []byte) (*schemas.EmbeddingInput, error) {
 		Input json.RawMessage `json:"input"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, fmt.Errorf("parse embedding body: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "router.parseEmbeddingInput", "parse embedding body")
 	}
 	if len(envelope.Input) == 0 || string(envelope.Input) == "null" {
-		return nil, fmt.Errorf("input required")
+		return nil, derrors.New(derrors.CodeInvalid, "router.parseEmbeddingInput", "input required")
 	}
 	var text string
 	if err := json.Unmarshal(envelope.Input, &text); err == nil {
@@ -259,7 +264,7 @@ func parseEmbeddingInput(body []byte) (*schemas.EmbeddingInput, error) {
 	if err := json.Unmarshal(envelope.Input, &texts); err == nil {
 		return &schemas.EmbeddingInput{Texts: texts}, nil
 	}
-	return nil, fmt.Errorf("input must be string or string array")
+	return nil, derrors.New(derrors.CodeInvalid, "router.parseEmbeddingInput", "input must be string or string array")
 }
 
 // SpeechRequest is a normalized OpenAI TTS request.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/upstream"
 )
 
@@ -47,7 +48,7 @@ func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request,
 	w.WriteHeader(http.StatusOK)
 	_, err = w.Write(raw)
 	if err != nil {
-		return fmt.Errorf("write response: %w", err)
+		return derrors.Wrap(err, derrors.CodeInternal, "gateway.bifrostChatResponse", "write response")
 	}
 	return nil
 }
@@ -71,7 +72,9 @@ func writeBifrostChatSSE(w http.ResponseWriter, chunks <-chan []byte, errCh <-ch
 	for raw := range chunks {
 		start()
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
-			return fmt.Errorf("write stream: %w: %w", err, upstream.ErrResponseWritten)
+			return fmt.Errorf("%w: %w",
+				derrors.Wrap(err, derrors.CodeInternal, "gateway.writeBifrostChatSSE", "write stream"),
+				upstream.ErrResponseWritten)
 		}
 		if flusher != nil {
 			flusher.Flush()
@@ -81,11 +84,15 @@ func writeBifrostChatSSE(w http.ResponseWriter, chunks <-chan []byte, errCh <-ch
 		if !started {
 			return err
 		}
-		return fmt.Errorf("%w: %w", err, upstream.ErrResponseWritten)
+		return fmt.Errorf("%w: %w",
+			derrors.Wrap(err, derrors.CodeUnavailable, "gateway.writeBifrostChatSSE", "stream error after headers"),
+			upstream.ErrResponseWritten)
 	}
 	start()
 	if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
-		return fmt.Errorf("write stream done: %w: %w", err, upstream.ErrResponseWritten)
+		return fmt.Errorf("%w: %w",
+			derrors.Wrap(err, derrors.CodeInternal, "gateway.writeBifrostChatSSE", "write stream done"),
+			upstream.ErrResponseWritten)
 	}
 	if flusher != nil {
 		flusher.Flush()

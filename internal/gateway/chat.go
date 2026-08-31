@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/upstream"
 )
@@ -51,11 +52,11 @@ func extractChatModel(body []byte) (string, error) {
 		Model string `json:"model"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", fmt.Errorf("invalid json: %w", err)
+		return "", derrors.Wrap(err, derrors.CodeInvalid, "gateway.extractChatModel", "invalid json")
 	}
 	model := strings.TrimSpace(payload.Model)
 	if model == "" {
-		return "", fmt.Errorf("model required")
+		return "", derrors.New(derrors.CodeInvalid, "gateway.extractChatModel", "model required")
 	}
 	return model, nil
 }
@@ -63,12 +64,12 @@ func extractChatModel(body []byte) (string, error) {
 func rewriteChatModel(body []byte, model string) ([]byte, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("invalid json: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteChatModel", "invalid json")
 	}
 	payload["model"] = model
 	out, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshal: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteChatModel", "marshal")
 	}
 	return out, nil
 }
@@ -140,7 +141,7 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("request: %w", err)
+		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "request")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if streaming {
@@ -164,7 +165,8 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("post %s: %w", target, err)
+		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "post").
+			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -175,7 +177,7 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, chatMaxBody))
 	if err != nil {
 		observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, -1)
-		return fmt.Errorf("read response: %w", err)
+		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "read response")
 	}
 	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, len(raw))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -189,7 +191,7 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 	w.WriteHeader(resp.StatusCode)
 	_, err = w.Write(raw)
 	if err != nil {
-		return fmt.Errorf("write response: %w", err)
+		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "write response")
 	}
 	return upstream.StatusFailure(resp.StatusCode)
 }
@@ -200,7 +202,7 @@ func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.
 	n, err := io.Copy(w, io.LimitReader(resp.Body, chatMaxBody))
 	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, int(n))
 	if err != nil {
-		return fmt.Errorf("write stream: %w", err)
+		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "write stream")
 	}
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()

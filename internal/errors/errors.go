@@ -33,6 +33,8 @@ const (
 	CodeFailedPrecondition Code = "failed_precondition"
 	// CodeUnavailable is a downstream hop that failed or is unreachable.
 	CodeUnavailable Code = "unavailable"
+	// CodeNotReady is local config or dependency not ready to serve (HTTP 503).
+	CodeNotReady Code = "not_ready"
 	// CodeInternal is an unexpected local failure.
 	CodeInternal Code = "internal"
 	// CodeConflict is a version or state clash.
@@ -51,6 +53,7 @@ var (
 	ErrCanceled           = &Error{code: CodeCanceled, message: "canceled"}
 	ErrFailedPrecondition = &Error{code: CodeFailedPrecondition, message: "failed precondition"}
 	ErrUnavailable        = &Error{code: CodeUnavailable, message: "unavailable"}
+	ErrNotReady           = &Error{code: CodeNotReady, message: "not ready"}
 	ErrInternal           = &Error{code: CodeInternal, message: "internal"}
 	ErrConflict           = &Error{code: CodeConflict, message: "conflict"}
 )
@@ -236,6 +239,8 @@ func HTTPStatus(err error) int {
 		return http.StatusGatewayTimeout
 	case CodeCanceled:
 		return StatusClientClosedRequest
+	case CodeNotReady:
+		return http.StatusServiceUnavailable
 	case CodeInternal:
 		return http.StatusInternalServerError
 	default:

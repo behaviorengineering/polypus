@@ -80,6 +80,9 @@ func TestHTTPStatusTimeout(t *testing.T) {
 	if HTTPStatus(ErrTimeout) != http.StatusGatewayTimeout {
 		t.Fatalf("timeout status=%d", HTTPStatus(ErrTimeout))
 	}
+	if HTTPStatus(ErrNotReady) != http.StatusServiceUnavailable {
+		t.Fatalf("not_ready status=%d", HTTPStatus(ErrNotReady))
+	}
 	if HTTPStatus(fmt.Errorf("plain")) != http.StatusInternalServerError {
 		t.Fatalf("plain=%d", HTTPStatus(fmt.Errorf("x")))
 	}

@@ -1,9 +1,8 @@
 package gateway
 
 import (
-	"fmt"
-
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func bearerAuthHeader(b config.BackendDef) (string, error) {
@@ -12,7 +11,7 @@ func bearerAuthHeader(b config.BackendDef) (string, error) {
 	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {
-		return "", err
+		return "", derrors.Wrap(err, derrors.CodeNotReady, "gateway.bearerAuthHeader", "resolve bearer")
 	}
 	return "Bearer " + token, nil
 }
@@ -20,7 +19,7 @@ func bearerAuthHeader(b config.BackendDef) (string, error) {
 func mustBackendAuth(b config.BackendDef) (string, error) {
 	auth, err := bearerAuthHeader(b)
 	if err != nil {
-		return "", fmt.Errorf("backend auth: %w", err)
+		return "", derrors.Wrap(err, derrors.CodeNotReady, "gateway.mustBackendAuth", "backend auth")
 	}
 	return auth, nil
 }
