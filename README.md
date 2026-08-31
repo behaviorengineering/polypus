@@ -193,7 +193,11 @@ make docker-build                      # optional gateway image (Dockerfile)
 
 ## Releases
 
-Pushing an annotated tag `v*` on `main` triggers [GoReleaser](https://goreleaser.com) via `.github/workflows/release.yml`. Each release ships `polypus` binaries for linux/darwin/windows (amd64/arm64), `checksums.txt`, and a grouped changelog.
+**Auto patch (default):** Every push to `main` that includes releasable changes creates `vX.Y.(Z+1)` and publishes binaries via [GoReleaser](https://goreleaser.com) (`.github/workflows/auto-patch-release.yml`). Skipped when commits since the last tag are only `docs:`, `chore:`, or `ci:`, or the push subject contains `[skip release]`.
+
+**Manual bump:** Run the **Auto patch release** workflow with `bump: minor|major|patch`, or push an annotated `v*` tag on `main` (`.github/workflows/release.yml`).
+
+Each release ships `polypus` binaries for linux/darwin/windows (amd64/arm64), `checksums.txt`, and a grouped changelog.
 
 ```bash
 polypus version   # print installed build version
