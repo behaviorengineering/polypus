@@ -74,7 +74,7 @@ Default model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`
 
 ### 4. Smoke audio
 
-Default path is **cf_local** (does not require setting `INFERENCE_CLOUD_CASE` in the Make shell; the gateway process still needs cloud case + keys). For MLX:
+Default path is **cf_local** (gateway needs `CF_AI_API_KEY` / `CF_ACCOUNT_ID`). For MLX:
 
 ```bash
 make smoke
@@ -100,7 +100,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 ### 8. cf_local down
 
 - Probe: `curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq '.data | length'`
-- Needs: `INFERENCE_CLOUD_CASE=1`, `CF_AI_API_KEY`, `CF_ACCOUNT_ID` in the process environment.
+- Needs: `CF_AI_API_KEY`, `CF_ACCOUNT_ID` in the process environment.
 
 ### 9. lm_studio down
 

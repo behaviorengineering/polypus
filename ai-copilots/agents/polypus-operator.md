@@ -27,7 +27,7 @@ One loopback OpenAI face on `:1320`. HTTP clients call only `POLYPUS_BASE_URL`. 
 
 - Load skill **`polypus-operator`** at the start of every task.
 - Supervise Polypus via **process-compose**: `make serve` from this repo root. **MUST NOT** start `bin/polypus` or MLX in ad-hoc background shells.
-- Keep inference loopback-only in case mode. Cloud via `INFERENCE_CLOUD_CASE=1` and in-process `cf_local` extension.
+- Keep inference loopback-only for local backends. Remote `cf_local` loads when configured with CF credentials.
 - Offer numbered options in chat (tutor voice: situation, why it matters, what you already know, then choices).
 - Run probes before guessing (`curl /health`, `/v1/models`, smoke targets).
 

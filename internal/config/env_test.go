@@ -14,17 +14,6 @@ func TestExpandEnv(t *testing.T) {
 	}
 }
 
-func TestInferenceCloudCaseAllowed(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
-	if !InferenceCloudCaseAllowed() {
-		t.Fatal("expected allowed")
-	}
-	t.Setenv("INFERENCE_CLOUD_CASE", "0")
-	if InferenceCloudCaseAllowed() {
-		t.Fatal("expected disabled")
-	}
-}
-
 func TestBackendAuthResolveBearerToken(t *testing.T) {
 	t.Setenv("CF_AI_API_KEY", "secret-token")
 	token, err := BackendAuth{BearerEnv: "CF_AI_API_KEY"}.ResolveBearerToken()
@@ -37,15 +26,21 @@ func TestBackendAuthResolveBearerToken(t *testing.T) {
 }
 
 func TestLoadRouterConfigRemoteFields(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 	t.Setenv("CF_ACCOUNT_ID", "acct")
 
 	dir := t.TempDir()
 	path := dir + "/config.yaml"
 	content := `
-default_chat_backend: cf_local
-default_tts_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
 backends:
   cf_local:
     remote: true
@@ -79,13 +74,17 @@ backends:
 	}
 }
 
-func TestStripRemoteBackendsWhenDisabled(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "0")
+func TestRemoteBackendLoadsWithCredentialsOnly(t *testing.T) {
+	t.Setenv("CF_AI_API_KEY", "secret")
 	dir := t.TempDir()
 	path := dir + "/config.yaml"
 	content := `
-default_tts_backend: cf_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: cf_local
+stt_backend:
+  enabled: true
+  default: cf_local
 backends:
   cf_local:
     remote: true
@@ -93,9 +92,6 @@ backends:
     base_url: https://api.cloudflare.com/client/v4/accounts/x/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
-    capabilities: [chat, tts]
-  mlx_local:
-    base_url: http://127.0.0.1:1322
     capabilities: [tts, stt, voices]
 `
 	if err := writeTestFile(path, content); err != nil {
@@ -103,15 +99,15 @@ backends:
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
 
-	cfg, err := LoadRouterConfig(ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	cfg, err := LoadRouterConfig(ServeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cfg.Backends["cf_local"]; ok {
-		t.Fatal("cf_local should be stripped without cloud opt-in")
+	if _, ok := cfg.Backends["cf_local"]; !ok {
+		t.Fatal("cf_local should load when credentials are set")
 	}
-	if cfg.DefaultTTSBackend != "mlx_local" {
-		t.Fatalf("default tts: %q", cfg.DefaultTTSBackend)
+	if !cfg.TTS.Enabled || cfg.TTS.Default != "cf_local" {
+		t.Fatalf("tts: %+v", cfg.TTS)
 	}
 }
 

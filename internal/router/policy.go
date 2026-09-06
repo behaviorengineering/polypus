@@ -24,9 +24,6 @@ func ValidateBackend(b config.BackendDef, policy config.RouterPolicy) error {
 		return fmt.Errorf("backend url required")
 	}
 	if b.Remote {
-		if policy.RequireCloudOptIn && !config.InferenceCloudCaseAllowed() {
-			return fmt.Errorf("remote backend requires INFERENCE_CLOUD_CASE=1")
-		}
 		return validateRemoteBackendURL(raw)
 	}
 	return validateLocalBackendURL(raw, policy.RejectNonLoopbackBackends)

@@ -145,10 +145,18 @@ func TestNewHandlerWithRouterSkipsBifrost(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_chat_backend: leaf
-default_tts_backend: leaf
-default_stt_backend: leaf
-default_proxy_backend: leaf
+chat_backend:
+  enabled: true
+  default: leaf
+tts_backend:
+  enabled: true
+  default: leaf
+stt_backend:
+  enabled: true
+  default: leaf
+proxy_backend:
+  enabled: true
+  default: leaf
 backends:
   leaf:
     base_url: %s
@@ -208,10 +216,18 @@ func TestLeafChatViaRecordingBifrost(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_chat_backend: leaf
-default_tts_backend: leaf
-default_stt_backend: leaf
-default_proxy_backend: leaf
+chat_backend:
+  enabled: true
+  default: leaf
+tts_backend:
+  enabled: true
+  default: leaf
+stt_backend:
+  enabled: true
+  default: leaf
+proxy_backend:
+  enabled: true
+  default: leaf
 backends:
   leaf:
     base_url: %s
@@ -259,10 +275,18 @@ func TestLeafChatStreamViaRecordingBifrost(t *testing.T) {
 
 	dir := t.TempDir()
 	content := `
-default_chat_backend: leaf
-default_tts_backend: leaf
-default_stt_backend: leaf
-default_proxy_backend: leaf
+chat_backend:
+  enabled: true
+  default: leaf
+tts_backend:
+  enabled: true
+  default: leaf
+stt_backend:
+  enabled: true
+  default: leaf
+proxy_backend:
+  enabled: true
+  default: leaf
 backends:
   leaf:
     base_url: http://127.0.0.1:9
@@ -309,10 +333,18 @@ func TestSwitchyardComposedViaRecordingBifrost(t *testing.T) {
 
 	dir := t.TempDir()
 	content := `
-default_chat_backend: leaf
-default_tts_backend: leaf
-default_stt_backend: leaf
-default_proxy_backend: leaf
+chat_backend:
+  enabled: true
+  default: leaf
+tts_backend:
+  enabled: true
+  default: leaf
+stt_backend:
+  enabled: true
+  default: leaf
+proxy_backend:
+  enabled: true
+  default: leaf
 backends:
   leaf:
     base_url: http://127.0.0.1:9
@@ -368,7 +400,6 @@ routers:
 
 func TestCFLeafChatViaRecordingBifrost(t *testing.T) {
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "test-key")
 
 	cfHits := 0
@@ -379,10 +410,18 @@ func TestCFLeafChatViaRecordingBifrost(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_chat_backend: cf_local
-default_tts_backend: cf_local
-default_stt_backend: cf_local
-default_proxy_backend: cf_local
+chat_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: cf_local
+stt_backend:
+  enabled: true
+  default: cf_local
+proxy_backend:
+  enabled: true
+  default: cf_local
 backends:
   cf_local:
     remote: true
@@ -428,16 +467,25 @@ backends:
 
 func TestCFEmbedViaRecordingBifrost(t *testing.T) {
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "test-key")
 
 	dir := t.TempDir()
 	content := `
-default_chat_backend: cf_local
-default_embed_backend: cf_local
-default_tts_backend: cf_local
-default_stt_backend: cf_local
-default_proxy_backend: cf_local
+chat_backend:
+  enabled: true
+  default: cf_local
+embed_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: cf_local
+stt_backend:
+  enabled: true
+  default: cf_local
+proxy_backend:
+  enabled: true
+  default: cf_local
 backends:
   cf_local:
     remote: true
@@ -487,10 +535,18 @@ func TestSpeechDomainErrorMapsHTTPStatus(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_chat_backend: leaf
-default_tts_backend: leaf
-default_stt_backend: leaf
-default_proxy_backend: leaf
+chat_backend:
+  enabled: true
+  default: leaf
+tts_backend:
+  enabled: true
+  default: leaf
+stt_backend:
+  enabled: true
+  default: leaf
+proxy_backend:
+  enabled: true
+  default: leaf
 backends:
   leaf:
     base_url: %s

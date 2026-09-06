@@ -1,16 +1,25 @@
 # Polypus router: Cloudflare Workers AI via in-process extension.
-# Use when INFERENCE_CLOUD_CASE=1. Clients call Polypus gateway :1320 only.
+# Clients call Polypus gateway :1320 only. Needs CF_AI_API_KEY and CF_ACCOUNT_ID.
 # Copy to ~/.config/polypus/config.yaml or set POLYPUS_CONFIG.
 
 processes:
   mlx: false
 
-default_tts_backend: cf_local
-default_stt_backend: cf_local
-default_proxy_backend: cf_local
-default_chat_backend: cf_local
-default_vision_backend: cf_local
-
+tts_backend:
+  enabled: true
+  default: cf_local
+stt_backend:
+  enabled: true
+  default: cf_local
+proxy_backend:
+  enabled: true
+  default: cf_local
+chat_backend:
+  enabled: true
+  default: cf_local
+vision_backend:
+  enabled: true
+  default: cf_local
 timeouts:
   min: 5s
   max: 900s
@@ -37,5 +46,6 @@ backends:
         - "@cf/zai-org/glm-4.7-flash"
         - "@cf/ibm-granite/granite-4.0-h-micro"
         - "@cf/google/gemma-4-26b-a4b-it"
+        - "@cf/openai/gpt-oss-20b"
         - "@cf/deepgram/aura-2-en"
         - "@cf/deepgram/nova-3"

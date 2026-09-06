@@ -28,7 +28,7 @@ func TestRouterCatalogModelsSorted(t *testing.T) {
 
 func TestMergeBackendInventoriesAllowList(t *testing.T) {
 	cfg := config.RouterConfig{
-		DefaultChatBackend: "leaf",
+		Chat: config.CapabilityBackend{Enabled: true, Default: "leaf"},
 		Backends: map[string]config.BackendDef{
 			"leaf": {
 				ID: "leaf",

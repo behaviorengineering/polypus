@@ -14,13 +14,18 @@ smoke_cf_gateway_model() {
 
 load_polypus_smoke_env() {
   POLYPUS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  PARENT_ROOT="$(cd "$POLYPUS_DIR/.." && pwd)"
 
-  if [[ -f "$PARENT_ROOT/stack/.env.example" ]]; then
-    PARENT_MONOREPO_ROOT="$PARENT_ROOT"
-  else
-    PARENT_MONOREPO_ROOT=""
-  fi
+  PARENT_MONOREPO_ROOT=""
+  for _polypus_parent_candidate in \
+    "$(cd "$POLYPUS_DIR/../.." && pwd)" \
+    "$(cd "$POLYPUS_DIR/../cr-case" 2>/dev/null && pwd)" \
+    "$(cd "$POLYPUS_DIR/../cr-case-intake" 2>/dev/null && pwd)"; do
+    if [[ -n "$_polypus_parent_candidate" && -f "$_polypus_parent_candidate/stack/.env.example" ]]; then
+      PARENT_MONOREPO_ROOT="$_polypus_parent_candidate"
+      break
+    fi
+  done
+  unset _polypus_parent_candidate
 
   if [[ -n "$PARENT_MONOREPO_ROOT" && -f "$PARENT_MONOREPO_ROOT/stack/.env" ]]; then
     set -a

@@ -436,8 +436,8 @@ func seedModelsFromEnv(cfg config.RouterConfig) []openaiModel {
 			}
 		}
 	}
-	add(cfg.DefaultTTSBackend, os.Getenv("POLYPUS_DEFAULT_MODEL"))
-	add(cfg.DefaultSTTBackend, os.Getenv("POLYPUS_DEFAULT_STT_MODEL"))
+	add(cfg.EffectiveTTSBackend(), os.Getenv("POLYPUS_DEFAULT_MODEL"))
+	add(cfg.EffectiveSTTBackend(), os.Getenv("POLYPUS_DEFAULT_STT_MODEL"))
 	return out
 }
 
@@ -452,11 +452,12 @@ func seedModelsForBackend(cfg config.RouterConfig, backendID string) []openaiMod
 }
 
 func isDefaultBackend(cfg config.RouterConfig, backendID string) bool {
-	return backendID == cfg.DefaultTTSBackend ||
-		backendID == cfg.DefaultSTTBackend ||
-		backendID == cfg.DefaultChatBackend ||
-		backendID == cfg.DefaultVisionBackend ||
-		backendID == cfg.DefaultEmbedBackend
+	return backendID == cfg.EffectiveTTSBackend() ||
+		backendID == cfg.EffectiveSTTBackend() ||
+		backendID == cfg.EffectiveChatBackend() ||
+		backendID == cfg.EffectiveVisionBackend() ||
+		backendID == cfg.EffectiveEmbedBackend() ||
+		backendID == cfg.EffectiveProxyBackend()
 }
 
 func firstNonEmpty(vals ...string) string {

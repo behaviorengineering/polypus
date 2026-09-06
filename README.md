@@ -38,7 +38,7 @@ flowchart TB
   G --> SY
   SY -.->|leaf via :1320| G
   G --> OTLP
-  CFExt -->|"INFERENCE_CLOUD_CASE=1"| CF
+  CFExt -->|CF credentials| CF
   C -.-> OTLP
   N -.-> OTLP
   OTLP --> P
@@ -52,7 +52,7 @@ flowchart TB
 | `phoenix` (`obs`) | `:6006` / `:4317` | Arize trace UI and OTLP collector. Clients set `openinference.endpoint` to `localhost:4317`. |
 | (external) | `:1234` | LM Studio. Not started by Polypus. |
 
-**Cloudflare (`cf_local`):** When `INFERENCE_CLOUD_CASE=1`, the gateway uses Workers AI. **OpenAI-shaped** chat and embeddings dial through Bifrost to the Workers AI `/ai/v1` base URL. **TTS/STT** also enter Bifrost; a PreLLMHook plugin short-circuits them onto the in-process Cloudflare extension `/ai/run` path (Workers AI has no `/ai/v1/audio/*` OpenAI-compat routes; live spike returned `400 No route for that URI`). Model Search catalog stays on the extension. Extension HTTP clients are process-scoped (keyed by backend id + bearer). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` only.
+**Cloudflare (`cf_local`):** When `cf_local` is configured with `CF_AI_API_KEY` and `CF_ACCOUNT_ID`, the gateway uses Workers AI. **OpenAI-shaped** chat and embeddings dial through Bifrost to the Workers AI `/ai/v1` base URL. **TTS/STT** also enter Bifrost; a PreLLMHook plugin short-circuits them onto the in-process Cloudflare extension `/ai/run` path (Workers AI has no `/ai/v1/audio/*` OpenAI-compat routes; live spike returned `400 No route for that URI`). Model Search catalog stays on the extension. Extension HTTP clients are process-scoped (keyed by backend id + bearer). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` or the process environment.
 
 **Bifrost:** Bifrost fronts every OpenAI-compatible outbound dial Polypus can use: leaf backends, Cloudflare chat/embed, composed Switchyard hops (`provider` id `switchyard`), and Cloudflare speech/transcription (plugin → `/run`). Model Search is not a Bifrost surface.
 
@@ -77,7 +77,7 @@ Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/po
 
 **Switchyard (composed routers):** git submodule at `providers/switchyard` (tag `v0.2.0`). Requires **Rust stable** (see `providers/switchyard/rust-toolchain.toml`, currently 1.96.1). `make build` runs `switchyard-build` and installs `bin/switchyard-server` (hard-fail if the submodule or cargo is missing). Generated routes TOML: `~/.cache/polypus/switchyard/routes.toml`. Set `POLYPUS_SWITCHYARD=0` to skip the Switchyard process when using `make serve`. Declare routers under `routers:` in config; clients send `model: router/<name>`. Routing types and when to use each: [docs/switchyard/](docs/switchyard/).
 
-`INFERENCE_CLOUD_CASE=1` in `stack/.env` enables the `cf_local` remote backend (requires `CF_AI_API_KEY`, `CF_ACCOUNT_ID`). MLX process start is driven by `processes.mlx` in config (`polypus processes --print mlx`); `POLYPUS_ENABLE_MLX` overrides when set. When `processes.mlx` is omitted, cloud case defaults MLX off and local defaults it on. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`.
+`CF_AI_API_KEY` and `CF_ACCOUNT_ID` in `stack/.env` (or the process environment) enable the `cf_local` remote backend when it is listed in config. MLX process start is driven by `processes.mlx` in config (`polypus processes --print mlx`); `POLYPUS_ENABLE_MLX` overrides when set. When `processes.mlx` is omitted, serve defaults MLX on unless you set `POLYPUS_ENABLE_MLX=0`. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`.
 
 Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_OTLP_ENDPOINT` and dumps with `POLYPUS_FAILURE_DUMP_DIR`. Skip probe noise with `POLYPUS_OTEL_SKIP_PATHS` (default `/health,/health/backends`).
 
@@ -88,7 +88,6 @@ Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use 
 Prereqs for cloud speech and cf_local chat (`stack/.env`):
 
 ```env
-INFERENCE_CLOUD_CASE=1
 CF_AI_API_KEY=...
 CF_ACCOUNT_ID=...
 ```
@@ -169,8 +168,7 @@ POLYPUS_PORT=1320
 POLYPUS_BASE_URL=http://127.0.0.1:1320
 POLYPUS_MLX_HOST=127.0.0.1
 POLYPUS_MLX_PORT=1322
-INFERENCE_CLOUD_CASE=1          # enables cf_local remote backend
-CF_AI_API_KEY=...
+CF_AI_API_KEY=...               # required when backends.cf_local is configured
 CF_ACCOUNT_ID=...
 POLYPUS_CF_TTS_MODEL=@cf/deepgram/aura-2-en
 POLYPUS_CF_STT_MODEL=@cf/deepgram/nova-3
@@ -222,4 +220,4 @@ Product skill `polypus-operator` stays under `ai-copilots/` (symlinked into `.cu
 
 ## License
 
-See repository license. Cloud speech (`cf_local`) sends audio/text to Cloudflare only when `INFERENCE_CLOUD_CASE=1` and keys are set.
+See repository license. Cloud speech (`cf_local`) sends audio/text to Cloudflare when that backend is configured and CF credentials are set.

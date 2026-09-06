@@ -16,7 +16,6 @@ import (
 )
 
 func TestRunSpeechPluginShortCircuitsTTS(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 
 	runHits := 0
@@ -86,7 +85,6 @@ func TestRunSpeechPluginShortCircuitsTTS(t *testing.T) {
 }
 
 func TestRunSpeechPluginRejectsMissingDeadline(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 	b := config.BackendDef{
 		ID:           "cf_local",
@@ -149,7 +147,6 @@ func TestRunSpeechPluginRejectsNilSpeechPayload(t *testing.T) {
 }
 
 func TestRunSpeechPluginRejectsStream(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 	b := config.BackendDef{
 		ID:           "cf_local",

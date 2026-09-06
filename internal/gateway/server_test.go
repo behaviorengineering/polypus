@@ -43,11 +43,21 @@ func TestModelsAllowFilterAndInventory(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
-default_vision_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+vision_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: %s
@@ -153,10 +163,18 @@ func TestModelsListAggregatesBackends(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_embed_backend: lm_studio
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+embed_backend:
+  enabled: true
+  default: lm_studio
 backends:
   mlx_local:
     base_url: %s
@@ -210,9 +228,15 @@ func TestModelsRetrieveAndNotFound(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: %s
@@ -263,9 +287,15 @@ func TestModelsListFallsBackToEnvDefaults(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: %s
@@ -425,9 +455,15 @@ func TestSTTRoutesToPrefixBackend(t *testing.T) {
 	altURL := alt.URL
 	mlxURL := mlx.URL
 	content := fmt.Sprintf(`
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: %s
@@ -552,11 +588,21 @@ func TestChatRoutesToCFBackend(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_chat_backend: cf_local
-default_vision_backend: cf_local
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+vision_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: %s
@@ -603,11 +649,21 @@ func TestVisionRoutesToCFBackend(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_chat_backend: cf_local
-default_vision_backend: cf_local
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+vision_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -653,11 +709,21 @@ func TestVisionRoutesImageOnly(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_chat_backend: cf_local
-default_vision_backend: cf_local
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+vision_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -736,10 +802,18 @@ func TestEmbedRoutesToLMStudioBackend(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_embed_backend: lm_studio
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+embed_backend:
+  enabled: true
+  default: lm_studio
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -803,11 +877,21 @@ func TestCloudflareExtensionGatewayInventory(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_chat_backend: cf_local
-default_vision_backend: cf_local
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+vision_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: %s
@@ -828,7 +912,6 @@ backends:
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 
 	handler, err := NewHandler(config.ServeOptions{BackendURL: mlx.URL})

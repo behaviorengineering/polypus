@@ -8,11 +8,6 @@ import (
 
 const ExtensionCloudflare = "cloudflare"
 
-// InferenceCloudCaseAllowed reports whether remote cloud backends may start.
-func InferenceCloudCaseAllowed() bool {
-	return strings.TrimSpace(os.Getenv("INFERENCE_CLOUD_CASE")) == "1"
-}
-
 // ExpandEnv replaces ${VAR} placeholders in s from the process environment.
 func ExpandEnv(s string) string {
 	return os.Expand(s, func(key string) string {

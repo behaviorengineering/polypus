@@ -182,7 +182,7 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 	if vision {
 		backendID, downstream, err = reg.ResolveVision(model)
 	} else {
-		if cfg.DefaultChatBackend == "" {
+		if cfg.EffectiveChatBackend() == "" {
 			writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveChatCompletions", "no chat backend configured"))
 			return
 		}
@@ -396,7 +396,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 	reg := h.router.Registry()
 	cfg := reg.Config()
-	if cfg.DefaultEmbedBackend == "" {
+	if cfg.EffectiveEmbedBackend() == "" {
 		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveEmbeddings", "no embed backend configured"))
 		return
 	}
