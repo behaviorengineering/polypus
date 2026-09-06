@@ -95,7 +95,7 @@ See [harness.md](harness.md). L1 runs in this repo; L2/L3 may require host tooli
 
 ### 7. Empty content / XML parse fail
 
-See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides it. Check Phoenix http://127.0.0.1:6006 and `logs/inference-failures/<trace_id>.json`.
+See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides it. Check Phoenix http://127.0.0.1:6006 and `logs/inference-failures/<trace_id>.json` (olly dump).
 
 ### 8. cf_local down
 
@@ -117,7 +117,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 
 - Phoenix UI: http://127.0.0.1:6006
 - OTLP gRPC: `:4317` (`openinference.endpoint` for clients)
-- Failure dumps: `logs/inference-failures/`
+- Failure dumps: `logs/inference-failures/` via [olly](https://github.com/behaviorengineering/olly) via [olly](https://github.com/behaviorengineering/olly)
 - Disable tracing: `POLYPUS_OTEL=0`
 
 ## Client contract
