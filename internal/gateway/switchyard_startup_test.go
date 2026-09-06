@@ -13,10 +13,18 @@ func TestNewHandlerDoesNotWriteSwitchyardTOML(t *testing.T) {
 	dir := t.TempDir()
 	tomlPath := filepath.Join(dir, "routes.toml")
 	content := `
-default_chat_backend: leaf
-default_tts_backend: leaf
-default_stt_backend: leaf
-default_proxy_backend: leaf
+chat_backend:
+  enabled: true
+  default: leaf
+tts_backend:
+  enabled: true
+  default: leaf
+stt_backend:
+  enabled: true
+  default: leaf
+proxy_backend:
+  enabled: true
+  default: leaf
 switchyard:
   config_path: ` + tomlPath + `
 backends:
@@ -54,10 +62,18 @@ func TestEnsureSwitchyardConfigWritesTOML(t *testing.T) {
 	dir := t.TempDir()
 	tomlPath := filepath.Join(dir, "routes.toml")
 	content := `
-default_chat_backend: leaf
-default_tts_backend: leaf
-default_stt_backend: leaf
-default_proxy_backend: leaf
+chat_backend:
+  enabled: true
+  default: leaf
+tts_backend:
+  enabled: true
+  default: leaf
+stt_backend:
+  enabled: true
+  default: leaf
+proxy_backend:
+  enabled: true
+  default: leaf
 switchyard:
   config_path: ` + tomlPath + `
 backends:

@@ -44,8 +44,15 @@ func TestLoadRouterConfigRemoteFields(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/config.yaml"
 	content := `
-default_chat_backend: cf_local
-default_tts_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
 backends:
   cf_local:
     remote: true
@@ -84,8 +91,12 @@ func TestStripRemoteBackendsWhenDisabled(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/config.yaml"
 	content := `
-default_tts_backend: cf_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: cf_local
+stt_backend:
+  enabled: true
+  default: cf_local
 backends:
   cf_local:
     remote: true
@@ -110,8 +121,8 @@ backends:
 	if _, ok := cfg.Backends["cf_local"]; ok {
 		t.Fatal("cf_local should be stripped without cloud opt-in")
 	}
-	if cfg.DefaultTTSBackend != "mlx_local" {
-		t.Fatalf("default tts: %q", cfg.DefaultTTSBackend)
+	if !cfg.TTS.Enabled || cfg.TTS.Default != "mlx_local" {
+		t.Fatalf("default tts: %+v", cfg.TTS)
 	}
 }
 

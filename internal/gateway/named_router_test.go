@@ -30,10 +30,18 @@ func TestNamedRouterPassthrough(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_chat_backend: cf_local
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -75,10 +83,18 @@ routers:
 func TestNamedRouterComposed503WhenSwitchyardDown(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_chat_backend: cf_local
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -149,10 +165,18 @@ func TestNamedRouterComposedProxiesToSwitchyard(t *testing.T) {
 
 	dir := t.TempDir()
 	content := `
-default_chat_backend: cf_local
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -222,10 +246,18 @@ func TestNamedRouterLLMClassifierProxiesToSwitchyard(t *testing.T) {
 
 	dir := t.TempDir()
 	content := `
-default_chat_backend: cf_local
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -289,10 +321,18 @@ func TestModelsListIncludesRouters(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: %s
@@ -346,10 +386,18 @@ routers:
 func TestNamedRouterVisionRejected(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_chat_backend: cf_local
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322

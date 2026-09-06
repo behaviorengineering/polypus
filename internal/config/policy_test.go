@@ -26,9 +26,15 @@ func TestLoadRouterConfigPolicyBlock(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/config.yaml"
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 policy:
   reject_non_loopback_backends: false
   require_cloud_opt_in: true
@@ -63,10 +69,18 @@ func TestLoadRouterConfigPolicyNoCloudOptIn(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/config.yaml"
 	content := `
-default_chat_backend: cf_local
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 policy:
   require_cloud_opt_in: false
 backends:

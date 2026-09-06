@@ -46,12 +46,24 @@ Speech smoke defaults to cf_local (`make smoke` / `make smoke-stt`). MLX: `POLYP
 ## config.yaml structure
 
 ```yaml
-default_chat_backend: cf_local
-default_vision_backend: cf_local
-default_embed_backend: lm_studio
-default_tts_backend: cf_local
-default_stt_backend: cf_local
-
+chat_backend:
+  enabled: true
+  default: cf_local
+vision_backend:
+  enabled: true
+  default: cf_local
+embed_backend:
+  enabled: true
+  default: lm_studio
+tts_backend:
+  enabled: true
+  default: cf_local
+stt_backend:
+  enabled: true
+  default: cf_local
+proxy_backend:
+  enabled: true
+  default: cf_local
 timeouts:
   min: 5s
   max: 900s
@@ -83,7 +95,7 @@ backends:
       allow: [...]
 ```
 
-When `INFERENCE_CLOUD_CASE` is unset, remote backends are stripped at load time so local-only dev still works.
+When `INFERENCE_CLOUD_CASE` is unset, remote backends are stripped at load time so local-only dev still works. Capability defaults use `*_backend` blocks (`enabled` + `default`): `chat_backend`, `vision_backend`, `embed_backend`, `tts_backend`, `stt_backend`, `proxy_backend`. Set `enabled: false` (or omit) to skip a capability. Cloudflare defaults need `INFERENCE_CLOUD_CASE=1` so `cf_local` remains after strip. `proxy_backend` covers voices and may inherit `tts_backend.default` when enabled with an empty default.
 
 Client header `X-Polypus-Timeout` (duration or seconds) clamps to `timeouts.min`..`timeouts.max` (5s to 900s).
 

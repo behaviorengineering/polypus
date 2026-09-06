@@ -9,9 +9,9 @@ import (
 func testRegistry(t *testing.T) *Registry {
 	t.Helper()
 	cfg := config.RouterConfig{
-		DefaultTTSBackend:   "mlx_local",
-		DefaultSTTBackend:   "mlx_local",
-		DefaultProxyBackend: "mlx_local",
+		TTS: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		STT: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		Proxy: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
 		Backends: map[string]config.BackendDef{
 			"mlx_local": {
 				ID:           "mlx_local",
@@ -69,9 +69,9 @@ func TestNewRegistryRejectsCloudflareWithoutAccountID(t *testing.T) {
 	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 	cfg := config.RouterConfig{
-		DefaultTTSBackend:   "mlx_local",
-		DefaultSTTBackend:   "mlx_local",
-		DefaultProxyBackend: "mlx_local",
+		TTS: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		STT: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		Proxy: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
 		Backends: map[string]config.BackendDef{
 			"mlx_local": {
 				ID:           "mlx_local",
@@ -107,7 +107,7 @@ func TestResolveSTTPrefixBackend(t *testing.T) {
 
 func TestResolveSTTRejectsTTSOnlyBackend(t *testing.T) {
 	cfg := config.RouterConfig{
-		DefaultSTTBackend: "mlx_local",
+		STT: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
 		Backends: map[string]config.BackendDef{
 			"mlx_local": {
 				ID:           "mlx_local",
@@ -136,10 +136,10 @@ func TestResolveChatRequiresDefaultBackend(t *testing.T) {
 
 func TestResolveChatPrefixBackend(t *testing.T) {
 	cfg := config.RouterConfig{
-		DefaultChatBackend:  "cf_local",
-		DefaultTTSBackend:   "mlx_local",
-		DefaultSTTBackend:   "mlx_local",
-		DefaultProxyBackend: "mlx_local",
+		Chat: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		TTS: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		STT: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		Proxy: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
 		Backends: map[string]config.BackendDef{
 			"mlx_local": {
 				ID:           "mlx_local",
@@ -168,10 +168,10 @@ func TestResolveChatPrefixBackend(t *testing.T) {
 
 func TestResolveEmbedPrefixBackend(t *testing.T) {
 	cfg := config.RouterConfig{
-		DefaultEmbedBackend: "lm_studio",
-		DefaultTTSBackend:   "mlx_local",
-		DefaultSTTBackend:   "mlx_local",
-		DefaultProxyBackend: "mlx_local",
+		Embed: config.CapabilityBackend{Enabled: true, Default: "lm_studio"},
+		TTS: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		STT: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		Proxy: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
 		Backends: map[string]config.BackendDef{
 			"mlx_local": {
 				ID:           "mlx_local",
@@ -200,10 +200,10 @@ func TestResolveEmbedPrefixBackend(t *testing.T) {
 
 func TestResolveChatRejectsMLXBackend(t *testing.T) {
 	cfg := config.RouterConfig{
-		DefaultChatBackend:  "mlx_local",
-		DefaultTTSBackend:   "mlx_local",
-		DefaultSTTBackend:   "mlx_local",
-		DefaultProxyBackend: "mlx_local",
+		Chat: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		TTS: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		STT: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		Proxy: config.CapabilityBackend{Enabled: true, Default: "mlx_local"},
 		Backends: map[string]config.BackendDef{
 			"mlx_local": {
 				ID:           "mlx_local",

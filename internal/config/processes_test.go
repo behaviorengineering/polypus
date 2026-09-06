@@ -30,7 +30,7 @@ func TestLoadProcessFlagsMLXTrue(t *testing.T) {
 func TestLoadProcessFlagsMLXFalse(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := []byte("processes:\n  mlx: false\ndefault_tts_backend: cf_local\nbackends:\n  cf_local:\n    base_url: http://127.0.0.1:9\n    capabilities: [tts]\n")
+	content := []byte("processes:\n  mlx: false\ntts_backend:\n  enabled: true\n  default: cf_local\nbackends:\n  cf_local:\n    base_url: http://127.0.0.1:9\n    capabilities: [tts]\n")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestLoadProcessFlagsMLXFalse(t *testing.T) {
 func TestLoadProcessFlagsOmitted(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := []byte("default_tts_backend: cf_local\nbackends:\n  cf_local:\n    base_url: http://127.0.0.1:9\n    capabilities: [tts]\n")
+	content := []byte("tts_backend:\n  enabled: true\n  default: cf_local\nbackends:\n  cf_local:\n    base_url: http://127.0.0.1:9\n    capabilities: [tts]\n")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -88,9 +88,15 @@ func TestLoadRouterConfigAcceptsProcesses(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	content := []byte(`processes:
   mlx: false
-default_tts_backend: cf_local
-default_stt_backend: cf_local
-default_proxy_backend: cf_local
+tts_backend:
+  enabled: true
+  default: cf_local
+stt_backend:
+  enabled: true
+  default: cf_local
+proxy_backend:
+  enabled: true
+  default: cf_local
 backends:
   cf_local:
     base_url: http://127.0.0.1:9
@@ -106,8 +112,8 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DefaultTTSBackend != "cf_local" {
-		t.Fatalf("tts: %q", cfg.DefaultTTSBackend)
+	if !cfg.TTS.Enabled || cfg.TTS.Default != "cf_local" {
+		t.Fatalf("tts: %+v", cfg.TTS)
 	}
 }
 

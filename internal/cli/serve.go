@@ -39,6 +39,19 @@ func runServe(args []string) int {
 		fmt.Fprintf(os.Stderr, "polypus serve: router config: %v\n", err)
 		return 1
 	}
+	printCap := func(name string, cap config.CapabilityBackend) {
+		if !cap.Enabled {
+			fmt.Fprintf(os.Stderr, "polypus serve: %s disabled\n", name)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "polypus serve: %s default=%s\n", name, cap.Default)
+	}
+	printCap("chat_backend", rcfg.Chat)
+	printCap("vision_backend", rcfg.Vision)
+	printCap("embed_backend", rcfg.Embed)
+	printCap("tts_backend", rcfg.TTS)
+	printCap("stt_backend", rcfg.STT)
+	printCap("proxy_backend", rcfg.Proxy)
 	for _, id := range rcfg.BackendIDs() {
 		b := rcfg.Backends[id]
 		fmt.Fprintf(os.Stderr, "  backend %s: %s (%v)\n", id, b.BaseURL, b.Capabilities)

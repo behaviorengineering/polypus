@@ -41,26 +41,26 @@ func (r *Registry) ProxyBackendURL() string {
 
 // ResolveEmbed picks backend and model for text embeddings.
 func (r *Registry) ResolveEmbed(model string) (string, string, error) {
-	return r.resolveCapability(config.CapEmbed, r.cfg.DefaultEmbedBackend, model)
+	return r.resolveCapability(config.CapEmbed, r.cfg.EffectiveEmbedBackend(), model)
 }
 
 // ResolveChat picks backend and model for text chat completions.
 func (r *Registry) ResolveChat(model string) (string, string, error) {
-	return r.resolveCapability(config.CapChat, r.cfg.DefaultChatBackend, model)
+	return r.resolveCapability(config.CapChat, r.cfg.EffectiveChatBackend(), model)
 }
 
 // ResolveVision picks backend and model for multimodal chat completions.
 func (r *Registry) ResolveVision(model string) (string, string, error) {
-	defaultBackend := r.cfg.DefaultVisionBackend
+	defaultBackend := r.cfg.EffectiveVisionBackend()
 	if defaultBackend == "" {
-		defaultBackend = r.cfg.DefaultChatBackend
+		defaultBackend = r.cfg.EffectiveChatBackend()
 	}
 	return r.resolveCapability(config.CapVision, defaultBackend, model)
 }
 
 // ResolveTTS picks provider and model for speech synthesis.
 func (r *Registry) ResolveTTS(model string) (schemas.ModelProvider, string, error) {
-	id, downstream, err := r.resolveCapability(config.CapTTS, r.cfg.DefaultTTSBackend, model)
+	id, downstream, err := r.resolveCapability(config.CapTTS, r.cfg.EffectiveTTSBackend(), model)
 	if err != nil {
 		return "", "", err
 	}
@@ -69,7 +69,7 @@ func (r *Registry) ResolveTTS(model string) (schemas.ModelProvider, string, erro
 
 // ResolveSTT picks provider and model for transcription.
 func (r *Registry) ResolveSTT(model string) (schemas.ModelProvider, string, error) {
-	id, downstream, err := r.resolveCapability(config.CapSTT, r.cfg.DefaultSTTBackend, model)
+	id, downstream, err := r.resolveCapability(config.CapSTT, r.cfg.EffectiveSTTBackend(), model)
 	if err != nil {
 		return "", "", err
 	}

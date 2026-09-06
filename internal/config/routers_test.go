@@ -10,9 +10,15 @@ import (
 func TestLoadRouterKnownFieldsRejectsUnknown(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
 routers:
   scribe:
     capability: chat
@@ -42,10 +48,18 @@ backends:
 func TestLoadRouterForbidsRouterBackend(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: mlx_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: mlx_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -68,10 +82,18 @@ backends:
 func TestLoadRouterStageRouterValidation(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -131,10 +153,18 @@ routers:
 func TestLoadRouterRejectsDisallowedLeaf(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -166,10 +196,18 @@ routers:
 func TestLoadRouterRejectsPassthroughStageFields(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -202,10 +240,18 @@ routers:
 func TestLoadRouterRejectsStageRouterTarget(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -270,10 +316,18 @@ func TestSwitchyardEnabled(t *testing.T) {
 func TestLoadRouterRejectsInvalidRouterName(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -305,10 +359,18 @@ routers:
 func TestLoadRouterRequiresCapability(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -339,10 +401,18 @@ routers:
 func TestLoadRouterLLMClassifierCustom(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -416,10 +486,18 @@ routers:
 func TestLoadRouterLLMClassifierRejectsCapabilityMode(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -467,10 +545,18 @@ routers:
 func TestLoadRouterLLMClassifierRejectsTargetNameCollision(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -534,10 +620,18 @@ routers:
 func TestLoadRouterLLMClassifierRejectsDisallowedLeaf(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -585,10 +679,18 @@ routers:
 func TestLoadRouterRejectsTargetClashWithStageRouter(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -645,10 +747,18 @@ routers:
 func TestLoadRouterRejectsTargetClashWithOtherClassifierTable(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -712,10 +822,18 @@ routers:
 func TestLoadRouterRejectsHashFallbackWithoutAffinity(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -765,10 +883,18 @@ routers:
 func TestLoadRouterRejectsInvalidResponseSchema(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322
@@ -817,10 +943,18 @@ routers:
 func TestLoadRouterRejectsEmptyObjectResponseSchema(t *testing.T) {
 	dir := t.TempDir()
 	content := `
-default_tts_backend: mlx_local
-default_stt_backend: mlx_local
-default_proxy_backend: mlx_local
-default_chat_backend: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+chat_backend:
+  enabled: true
+  default: cf_local
 backends:
   mlx_local:
     base_url: http://127.0.0.1:1322

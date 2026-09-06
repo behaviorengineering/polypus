@@ -42,19 +42,73 @@ func (b BackendDef) IsCloudflareExtension() bool {
 	return b.HasExtension(ExtensionCloudflare)
 }
 
+// CapabilityBackend is an optional capability default (chat, vision, embed, TTS, STT, proxy).
+type CapabilityBackend struct {
+	Enabled bool
+	Default string
+}
+
 // RouterConfig holds multi-backend routing for the Polypus gateway.
 type RouterConfig struct {
-	DefaultEmbedBackend  string                `yaml:"default_embed_backend"`
-	DefaultChatBackend   string                `yaml:"default_chat_backend"`
-	DefaultVisionBackend string                `yaml:"default_vision_backend"`
-	DefaultTTSBackend    string                `yaml:"default_tts_backend"`
-	DefaultSTTBackend    string                `yaml:"default_stt_backend"`
-	DefaultProxyBackend  string                `yaml:"default_proxy_backend"`
-	Timeouts             Timeouts              `yaml:"-"`
-	Policy               RouterPolicy          `yaml:"policy"`
-	Backends             map[string]BackendDef `yaml:"backends"`
-	Routers              map[string]NamedRouter
-	Switchyard           SwitchyardConfig
+	Chat       CapabilityBackend `yaml:"-"`
+	Vision     CapabilityBackend `yaml:"-"`
+	Embed      CapabilityBackend `yaml:"-"`
+	TTS        CapabilityBackend `yaml:"-"`
+	STT        CapabilityBackend `yaml:"-"`
+	Proxy      CapabilityBackend `yaml:"-"`
+	Timeouts   Timeouts          `yaml:"-"`
+	Policy     RouterPolicy      `yaml:"policy"`
+	Backends   map[string]BackendDef `yaml:"backends"`
+	Routers    map[string]NamedRouter
+	Switchyard SwitchyardConfig
+}
+
+// EffectiveChatBackend returns the chat default when chat is enabled; otherwise empty.
+func (c RouterConfig) EffectiveChatBackend() string {
+	if !c.Chat.Enabled {
+		return ""
+	}
+	return c.Chat.Default
+}
+
+// EffectiveVisionBackend returns the vision default when vision is enabled; otherwise empty.
+func (c RouterConfig) EffectiveVisionBackend() string {
+	if !c.Vision.Enabled {
+		return ""
+	}
+	return c.Vision.Default
+}
+
+// EffectiveEmbedBackend returns the embed default when embed is enabled; otherwise empty.
+func (c RouterConfig) EffectiveEmbedBackend() string {
+	if !c.Embed.Enabled {
+		return ""
+	}
+	return c.Embed.Default
+}
+
+// EffectiveTTSBackend returns the TTS default when TTS is enabled; otherwise empty.
+func (c RouterConfig) EffectiveTTSBackend() string {
+	if !c.TTS.Enabled {
+		return ""
+	}
+	return c.TTS.Default
+}
+
+// EffectiveSTTBackend returns the STT default when STT is enabled; otherwise empty.
+func (c RouterConfig) EffectiveSTTBackend() string {
+	if !c.STT.Enabled {
+		return ""
+	}
+	return c.STT.Default
+}
+
+// EffectiveProxyBackend returns the proxy/voices default when proxy is enabled; otherwise empty.
+func (c RouterConfig) EffectiveProxyBackend() string {
+	if !c.Proxy.Enabled {
+		return ""
+	}
+	return c.Proxy.Default
 }
 
 // HasCapability reports whether the backend supports a capability.
@@ -67,19 +121,24 @@ func (b BackendDef) HasCapability(cap Capability) bool {
 	return false
 }
 
+type capabilityBackendFile struct {
+	Enabled *bool  `yaml:"enabled"`
+	Default string `yaml:"default"`
+}
+
 type routerFile struct {
-	DefaultEmbedBackend  string                      `yaml:"default_embed_backend"`
-	DefaultChatBackend   string                      `yaml:"default_chat_backend"`
-	DefaultVisionBackend string                      `yaml:"default_vision_backend"`
-	DefaultTTSBackend    string                      `yaml:"default_tts_backend"`
-	DefaultSTTBackend    string                      `yaml:"default_stt_backend"`
-	DefaultProxyBackend  string                      `yaml:"default_proxy_backend"`
-	Timeouts             timeoutsFile                `yaml:"timeouts"`
-	Policy               routerPolicyFile            `yaml:"policy"`
-	Processes            processesFile               `yaml:"processes"`
-	Backends             map[string]backendFileEntry `yaml:"backends"`
-	Switchyard           switchyardFile              `yaml:"switchyard"`
-	Routers              map[string]namedRouterFile  `yaml:"routers"`
+	ChatBackend    capabilityBackendFile       `yaml:"chat_backend"`
+	VisionBackend  capabilityBackendFile       `yaml:"vision_backend"`
+	EmbedBackend   capabilityBackendFile       `yaml:"embed_backend"`
+	TTSBackend     capabilityBackendFile       `yaml:"tts_backend"`
+	STTBackend     capabilityBackendFile       `yaml:"stt_backend"`
+	ProxyBackend   capabilityBackendFile       `yaml:"proxy_backend"`
+	Timeouts       timeoutsFile                `yaml:"timeouts"`
+	Policy         routerPolicyFile            `yaml:"policy"`
+	Processes      processesFile               `yaml:"processes"`
+	Backends       map[string]backendFileEntry `yaml:"backends"`
+	Switchyard     switchyardFile              `yaml:"switchyard"`
+	Routers        map[string]namedRouterFile  `yaml:"routers"`
 }
 
 type backendFileEntry struct {
@@ -89,6 +148,17 @@ type backendFileEntry struct {
 	Auth         BackendAuth    `yaml:"auth"`
 	Capabilities []string       `yaml:"capabilities"`
 	Models       *BackendModels `yaml:"models"`
+}
+
+func parseCapabilityBackend(file capabilityBackendFile) CapabilityBackend {
+	enabled := false
+	if file.Enabled != nil {
+		enabled = *file.Enabled
+	}
+	return CapabilityBackend{
+		Enabled: enabled,
+		Default: strings.TrimSpace(file.Default),
+	}
 }
 
 // LoadRouterConfig builds routing from config file and POLYPUS_* env.
@@ -135,12 +205,12 @@ func stripRemoteBackendsWhenDisabled(cfg *RouterConfig) {
 			*field = ""
 		}
 	}
-	clearIfRemoved(&cfg.DefaultEmbedBackend)
-	clearIfRemoved(&cfg.DefaultChatBackend)
-	clearIfRemoved(&cfg.DefaultVisionBackend)
-	clearIfRemoved(&cfg.DefaultTTSBackend)
-	clearIfRemoved(&cfg.DefaultSTTBackend)
-	clearIfRemoved(&cfg.DefaultProxyBackend)
+	clearIfRemoved(&cfg.Chat.Default)
+	clearIfRemoved(&cfg.Vision.Default)
+	clearIfRemoved(&cfg.Embed.Default)
+	clearIfRemoved(&cfg.TTS.Default)
+	clearIfRemoved(&cfg.STT.Default)
+	clearIfRemoved(&cfg.Proxy.Default)
 }
 
 func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
@@ -170,17 +240,17 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
 	cfg := RouterConfig{
-		DefaultEmbedBackend:  strings.TrimSpace(file.DefaultEmbedBackend),
-		DefaultChatBackend:   strings.TrimSpace(file.DefaultChatBackend),
-		DefaultVisionBackend: strings.TrimSpace(file.DefaultVisionBackend),
-		DefaultTTSBackend:    strings.TrimSpace(file.DefaultTTSBackend),
-		DefaultSTTBackend:    strings.TrimSpace(file.DefaultSTTBackend),
-		DefaultProxyBackend:  strings.TrimSpace(file.DefaultProxyBackend),
-		Timeouts:             timeouts,
-		Policy:               file.Policy.merge(),
-		Backends:             make(map[string]BackendDef, len(file.Backends)),
-		Routers:              routers,
-		Switchyard:           mergeSwitchyardFile(file.Switchyard),
+		Chat:       parseCapabilityBackend(file.ChatBackend),
+		Vision:     parseCapabilityBackend(file.VisionBackend),
+		Embed:      parseCapabilityBackend(file.EmbedBackend),
+		TTS:        parseCapabilityBackend(file.TTSBackend),
+		STT:        parseCapabilityBackend(file.STTBackend),
+		Proxy:      parseCapabilityBackend(file.ProxyBackend),
+		Timeouts:   timeouts,
+		Policy:     file.Policy.merge(),
+		Backends:   make(map[string]BackendDef, len(file.Backends)),
+		Routers:    routers,
+		Switchyard: mergeSwitchyardFile(file.Switchyard),
 	}
 	for id, entry := range file.Backends {
 		id = strings.TrimSpace(id)
@@ -208,11 +278,11 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 func defaultRouterFromEnv(opts ServeOptions) RouterConfig {
 	backend := strings.TrimRight(strings.TrimSpace(opts.BackendURL), "/")
 	return RouterConfig{
-		DefaultTTSBackend:   "mlx_local",
-		DefaultSTTBackend:   "mlx_local",
-		DefaultProxyBackend: "mlx_local",
-		Policy:              DefaultRouterPolicy(),
-		Timeouts:            DefaultTimeouts(),
+		TTS:   CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		STT:   CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		Proxy: CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		Policy:   DefaultRouterPolicy(),
+		Timeouts: DefaultTimeouts(),
 		Backends: map[string]BackendDef{
 			"mlx_local": {
 				ID:           "mlx_local",
@@ -225,22 +295,28 @@ func defaultRouterFromEnv(opts ServeOptions) RouterConfig {
 
 func applyRouterEnvOverrides(cfg *RouterConfig, opts ServeOptions) {
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_EMBED_BACKEND")); v != "" {
-		cfg.DefaultEmbedBackend = v
+		cfg.Embed.Default = v
+		cfg.Embed.Enabled = true
 	}
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_CHAT_BACKEND")); v != "" {
-		cfg.DefaultChatBackend = v
+		cfg.Chat.Default = v
+		cfg.Chat.Enabled = true
 	}
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_VISION_BACKEND")); v != "" {
-		cfg.DefaultVisionBackend = v
+		cfg.Vision.Default = v
+		cfg.Vision.Enabled = true
 	}
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_TTS_BACKEND")); v != "" {
-		cfg.DefaultTTSBackend = v
+		cfg.TTS.Default = v
+		cfg.TTS.Enabled = true
 	}
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_STT_BACKEND")); v != "" {
-		cfg.DefaultSTTBackend = v
+		cfg.STT.Default = v
+		cfg.STT.Enabled = true
 	}
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_PROXY_BACKEND")); v != "" {
-		cfg.DefaultProxyBackend = v
+		cfg.Proxy.Default = v
+		cfg.Proxy.Enabled = true
 	}
 	// CLI --backend overrides mlx_local URL when present.
 	if opts.BackendURL != "" {
@@ -274,22 +350,50 @@ func SwitchyardEnabled() bool {
 	}
 }
 
+func normalizeCapabilityBackend(cfg *RouterConfig, cap *CapabilityBackend, field string, allowMLXFill bool) error {
+	if !cap.Enabled {
+		cap.Default = ""
+		return nil
+	}
+	if cap.Default == "" {
+		if allowMLXFill {
+			if _, ok := cfg.Backends["mlx_local"]; ok {
+				cap.Default = "mlx_local"
+				return nil
+			}
+		}
+		return fmt.Errorf("router: %s.default required (configured backend unavailable; set INFERENCE_CLOUD_CASE=1 or set %s.enabled: false)", field, field)
+	}
+	return nil
+}
+
 func normalizeRouterConfig(cfg *RouterConfig) error {
 	if len(cfg.Backends) == 0 {
 		return fmt.Errorf("router: no backends configured")
 	}
-	if cfg.DefaultTTSBackend == "" {
-		if _, ok := cfg.Backends["mlx_local"]; ok {
-			cfg.DefaultTTSBackend = "mlx_local"
-		} else {
-			return fmt.Errorf("router: default_tts_backend required (mlx_local not in backends)")
-		}
+	if err := normalizeCapabilityBackend(cfg, &cfg.Chat, "chat_backend", false); err != nil {
+		return err
 	}
-	if cfg.DefaultSTTBackend == "" {
-		cfg.DefaultSTTBackend = cfg.DefaultTTSBackend
+	if err := normalizeCapabilityBackend(cfg, &cfg.Vision, "vision_backend", false); err != nil {
+		return err
 	}
-	if cfg.DefaultProxyBackend == "" {
-		cfg.DefaultProxyBackend = cfg.DefaultTTSBackend
+	if err := normalizeCapabilityBackend(cfg, &cfg.Embed, "embed_backend", false); err != nil {
+		return err
+	}
+	if err := normalizeCapabilityBackend(cfg, &cfg.TTS, "tts_backend", true); err != nil {
+		return err
+	}
+	if cfg.STT.Enabled && cfg.STT.Default == "" && cfg.TTS.Enabled && cfg.TTS.Default != "" {
+		cfg.STT.Default = cfg.TTS.Default
+	}
+	if err := normalizeCapabilityBackend(cfg, &cfg.STT, "stt_backend", true); err != nil {
+		return err
+	}
+	if cfg.Proxy.Enabled && cfg.Proxy.Default == "" && cfg.TTS.Enabled && cfg.TTS.Default != "" {
+		cfg.Proxy.Default = cfg.TTS.Default
+	}
+	if err := normalizeCapabilityBackend(cfg, &cfg.Proxy, "proxy_backend", true); err != nil {
+		return err
 	}
 	for id, b := range cfg.Backends {
 		if b.ID == "" {
@@ -314,27 +418,33 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 		}
 		cfg.Backends[id] = b
 	}
-	if err := requireBackend(cfg, cfg.DefaultTTSBackend, CapTTS, "default_tts_backend"); err != nil {
-		return err
-	}
-	if err := requireBackend(cfg, cfg.DefaultSTTBackend, CapSTT, "default_stt_backend"); err != nil {
-		return err
-	}
-	if err := requireBackend(cfg, cfg.DefaultProxyBackend, CapVoices, "default_proxy_backend"); err != nil {
-		return err
-	}
-	if cfg.DefaultEmbedBackend != "" {
-		if err := requireBackend(cfg, cfg.DefaultEmbedBackend, CapEmbed, "default_embed_backend"); err != nil {
+	if cfg.Chat.Enabled {
+		if err := requireBackend(cfg, cfg.Chat.Default, CapChat, "chat_backend.default"); err != nil {
 			return err
 		}
 	}
-	if cfg.DefaultChatBackend != "" {
-		if err := requireBackend(cfg, cfg.DefaultChatBackend, CapChat, "default_chat_backend"); err != nil {
+	if cfg.Vision.Enabled {
+		if err := requireBackend(cfg, cfg.Vision.Default, CapVision, "vision_backend.default"); err != nil {
 			return err
 		}
 	}
-	if cfg.DefaultVisionBackend != "" {
-		if err := requireBackend(cfg, cfg.DefaultVisionBackend, CapVision, "default_vision_backend"); err != nil {
+	if cfg.Embed.Enabled {
+		if err := requireBackend(cfg, cfg.Embed.Default, CapEmbed, "embed_backend.default"); err != nil {
+			return err
+		}
+	}
+	if cfg.TTS.Enabled {
+		if err := requireBackend(cfg, cfg.TTS.Default, CapTTS, "tts_backend.default"); err != nil {
+			return err
+		}
+	}
+	if cfg.STT.Enabled {
+		if err := requireBackend(cfg, cfg.STT.Default, CapSTT, "stt_backend.default"); err != nil {
+			return err
+		}
+	}
+	if cfg.Proxy.Enabled {
+		if err := requireBackend(cfg, cfg.Proxy.Default, CapVoices, "proxy_backend.default"); err != nil {
 			return err
 		}
 	}
@@ -344,7 +454,11 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 func requireBackend(cfg *RouterConfig, id string, cap Capability, field string) error {
 	b, ok := cfg.Backends[id]
 	if !ok {
-		return fmt.Errorf("router: %s %q not found in backends", field, id)
+		hint := ""
+		if cfg.Policy.RequireCloudOptIn && !InferenceCloudCaseAllowed() {
+			hint = " (if remote, set INFERENCE_CLOUD_CASE=1)"
+		}
+		return fmt.Errorf("router: %s %q not found in backends%s", field, id, hint)
 	}
 	if !b.HasCapability(cap) {
 		return fmt.Errorf("router: %s %q lacks capability %s", field, id, cap)
@@ -354,8 +468,10 @@ func requireBackend(cfg *RouterConfig, id string, cap Capability, field string) 
 
 // ProxyBackendURL returns the base URL for non-routed paths (e.g. /v1/audio/voices).
 func (c RouterConfig) ProxyBackendURL() string {
-	if b, ok := c.Backends[c.DefaultProxyBackend]; ok {
-		return b.BaseURL
+	if id := c.EffectiveProxyBackend(); id != "" {
+		if b, ok := c.Backends[id]; ok {
+			return b.BaseURL
+		}
 	}
 	for _, b := range c.Backends {
 		if b.HasCapability(CapVoices) {

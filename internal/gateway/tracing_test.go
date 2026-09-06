@@ -45,11 +45,21 @@ func TestChatCompletionsPropagatesTraceparent(t *testing.T) {
 
 	dir := t.TempDir()
 	content := fmt.Sprintf(`
-default_tts_backend: cf_local
-default_stt_backend: cf_local
-default_proxy_backend: cf_local
-default_chat_backend: cf_local
-default_vision_backend: cf_local
+tts_backend:
+  enabled: true
+  default: cf_local
+stt_backend:
+  enabled: true
+  default: cf_local
+proxy_backend:
+  enabled: true
+  default: cf_local
+chat_backend:
+  enabled: true
+  default: cf_local
+vision_backend:
+  enabled: true
+  default: cf_local
 backends:
   cf_local:
     base_url: %s
