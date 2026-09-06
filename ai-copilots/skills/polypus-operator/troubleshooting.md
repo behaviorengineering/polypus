@@ -39,7 +39,7 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 | Resource | Location |
 |----------|----------|
 | Phoenix UI | http://127.0.0.1:6006 |
-| Inference failure JSON | `logs/inference-failures/<trace_id>.json` |
+| Inference failure JSON | `logs/inference-failures/<trace_id>.json` (via [olly](https://github.com/behaviorengineering/olly) dump processor) |
 | Gateway trace noise | Set `POLYPUS_OTEL_SKIP_PATHS=/health,/health/backends,/v1/models` |
 
 ## Restart after config change

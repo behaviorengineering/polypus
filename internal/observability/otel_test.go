@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/behaviorengineering/olly/dump"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
@@ -191,7 +192,11 @@ func TestEndSpanRecordsTimeout(t *testing.T) {
 
 func TestFailureDumpWritesOnServerError(t *testing.T) {
 	dir := t.TempDir()
-	processor := newFailureDumpProcessor(dir, 0, 0)
+	processor := dump.NewProcessor(dump.Config{
+		Dir:              dir,
+		RedactStatusText: redactURLsInText,
+		RedactAttribute:  dumpRedactAttribute,
+	})
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
@@ -213,11 +218,11 @@ func TestFailureDumpWritesOnServerError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var doc dumpedTrace
+	var doc dump.TraceDocument
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if doc.Reason != "request_span_error" {
+	if doc.Reason != "envelope_error" {
 		t.Fatalf("reason=%s", doc.Reason)
 	}
 	if doc.SpanCount != 2 {
@@ -227,7 +232,7 @@ func TestFailureDumpWritesOnServerError(t *testing.T) {
 
 func TestFailureDumpSkipsSuccessfulRequest(t *testing.T) {
 	dir := t.TempDir()
-	processor := newFailureDumpProcessor(dir, 0, 0)
+	processor := dump.NewProcessor(dump.Config{Dir: dir})
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 

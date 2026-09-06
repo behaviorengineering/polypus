@@ -79,7 +79,7 @@ Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/po
 
 `CF_AI_API_KEY` and `CF_ACCOUNT_ID` in `stack/.env` (or the process environment) enable the `cf_local` remote backend when it is listed in config. MLX process start is driven by `processes.mlx` in config (`polypus processes --print mlx`); `POLYPUS_ENABLE_MLX` overrides when set. When `processes.mlx` is omitted, serve defaults MLX on unless you set `POLYPUS_ENABLE_MLX=0`. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`.
 
-Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_OTLP_ENDPOINT` and dumps with `POLYPUS_FAILURE_DUMP_DIR`. Skip probe noise with `POLYPUS_OTEL_SKIP_PATHS` (default `/health,/health/backends`).
+Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_OTLP_ENDPOINT` and dumps with `POLYPUS_FAILURE_DUMP_DIR`. Skip probe noise with `POLYPUS_OTEL_SKIP_PATHS` (default `/health,/health/backends`). Provider setup and local failure dumps use [`olly`](https://github.com/behaviorengineering/olly).
 
 ## Live smoke
 

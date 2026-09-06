@@ -8,16 +8,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/behaviorengineering/olly"
+	"github.com/behaviorengineering/olly/dump"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const instrumentationName = "github.com/behaviorengineering/polypus"
@@ -29,65 +27,63 @@ func init() {
 	skipHTTPPaths.Store(append([]string(nil), defaultSkipPaths...))
 }
 
-// Init installs the global tracer provider, W3C propagator, and optional dump processor.
+// Init installs the global tracer provider, W3C propagator, and optional dump processor via olly.
 func Init(cfg Config) (func(context.Context) error, error) {
 	skip := cfg.SkipPaths
 	if skip == nil {
 		skip = defaultSkipPaths
 	}
 	skipHTTPPaths.Store(append([]string(nil), skip...))
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
-	if !cfg.Enabled {
-		otel.SetTracerProvider(noop.NewTracerProvider())
-		return func(context.Context) error { return nil }, nil
-	}
 
 	serviceName := cfg.ServiceName
 	if serviceName == "" {
 		serviceName = defaultServiceName
 	}
-	res, err := resource.New(context.Background(),
-		resource.WithAttributes(
-			attribute.String("service.name", serviceName),
-		),
-	)
+
+	ollyCfg := olly.Config{
+		Enabled:          cfg.Enabled,
+		ServiceName:      serviceName,
+		OTLPEndpoint:     cfg.OTLPEndpoint,
+		AllowOTLPFailure: true,
+		BatchTimeout:     2 * time.Second,
+		OTLPTimeout:      5 * time.Second,
+		Dump: dump.Config{
+			Dir:              cfg.DumpDir,
+			MaxAgeHours:      cfg.DumpMaxAgeH,
+			MaxFiles:         cfg.DumpMaxFiles,
+			RedactAttribute:  dumpRedactAttribute,
+			RedactStatusText: redactURLsInText,
+			Diagnostics:      stderrDiag{},
+		},
+	}
+	if !cfg.Enabled {
+		ollyCfg.OTLPEndpoint = ""
+		ollyCfg.Dump.Dir = ""
+	}
+
+	shutdown, err := olly.Init(ollyCfg)
 	if err != nil {
-		return nil, fmt.Errorf("observability: resource: %w", err)
+		return nil, err
 	}
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+	return shutdown, nil
+}
 
-	opts := []sdktrace.TracerProviderOption{
-		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-	}
-	if cfg.DumpDir != "" {
-		opts = append(opts, sdktrace.WithSpanProcessor(newFailureDumpProcessor(
-			cfg.DumpDir, cfg.DumpMaxAgeH, cfg.DumpMaxFiles,
-		)))
-	}
-	if cfg.OTLPEndpoint != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		exporter, expErr := otlptracegrpc.New(ctx,
-			otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint),
-			otlptracegrpc.WithInsecure(),
-		)
-		if expErr != nil {
-			fmt.Fprintf(os.Stderr, "polypus otel: OTLP exporter failed (%v); dump-only tracing continues\n", expErr)
-		} else {
-			opts = append(opts, sdktrace.WithBatcher(
-				exporter,
-				sdktrace.WithBatchTimeout(2*time.Second),
-				sdktrace.WithMaxExportBatchSize(512),
-			))
-		}
-	}
+type stderrDiag struct{}
 
-	tp := sdktrace.NewTracerProvider(opts...)
-	otel.SetTracerProvider(tp)
-	return tp.Shutdown, nil
+func (stderrDiag) Printf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+}
+
+func dumpRedactAttribute(key string, value any) any {
+	str, ok := value.(string)
+	if !ok {
+		return value
+	}
+	return sanitizeAttrValue(key, str)
 }
 
 // Tracer returns the Polypus tracer.
