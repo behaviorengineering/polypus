@@ -1,3 +1,11 @@
 # Overview
 
-High-level project grounding for review. Digest expands this from mission.md and architecture.md.
+# Mission
+
+Describe what this repo exists to do.
+
+## Architecture
+
+# Architecture
+
+Describe the high-level shape of the system.
