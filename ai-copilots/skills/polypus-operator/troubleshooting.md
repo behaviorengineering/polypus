@@ -22,7 +22,7 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 | Model in host job config but smoke fails | Allow-list drift | Align Polypus `models.allow` with host job model ids |
 | Empty `message.content`, job XML fail | Thinking on; text in `reasoning_content` | [thinking-policy.md](thinking-policy.md); host L2 harness if available |
 | Chat hits MLX `:1322` | Wrong `chat_backend.default` or missing prefix | Set `chat_backend`; use `cf_local/` or `lm_studio/` prefix |
-| cf_local missing from `/v1/models` | `INFERENCE_CLOUD_CASE` unset or catalog sync failed | Set in process env; probe inventory view; check CF credentials |
+| cf_local missing from `/v1/models` | Catalog sync failed or credentials missing | Probe inventory view; check `CF_AI_API_KEY` / `CF_ACCOUNT_ID` |
 | cf_local 401/403 | Missing CF credentials | `CF_AI_API_KEY`, `CF_ACCOUNT_ID` |
 | LM Studio errors | Server not started | User starts LM Studio on `:1234` |
 | OCR/embed fails, chat OK | `lm_studio` down or model not allowed | Probe `:1234`; check embed allow-list |

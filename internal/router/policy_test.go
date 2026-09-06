@@ -24,19 +24,7 @@ func TestValidateBackendURLRejectsPrivateLAN(t *testing.T) {
 	}
 }
 
-func TestValidateRemoteBackendRequiresOptIn(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "0")
-	b := config.BackendDef{
-		Remote:  true,
-		BaseURL: "https://api.cloudflare.com/client/v4/accounts/x/ai/v1",
-	}
-	if err := ValidateBackend(b, config.DefaultRouterPolicy()); err == nil {
-		t.Fatal("expected opt-in required")
-	}
-}
-
-func TestValidateRemoteBackendAllowedWithOptIn(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
+func TestValidateRemoteBackendAllowedWithoutCloudEnv(t *testing.T) {
 	t.Setenv("CF_AI_API_KEY", "secret")
 	b := config.BackendDef{
 		Remote:  true,
@@ -52,21 +40,7 @@ func TestValidateLocalBackendAllowsLANWhenPolicyOff(t *testing.T) {
 	b := config.BackendDef{
 		BaseURL: "http://192.168.1.50:8000",
 	}
-	policy := config.RouterPolicy{RejectNonLoopbackBackends: false, RequireCloudOptIn: true}
-	if err := ValidateBackend(b, policy); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestValidateRemoteBackendWithoutCloudOptInPolicy(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "0")
-	b := config.BackendDef{
-		Remote:  true,
-		BaseURL: "https://api.cloudflare.com/client/v4/accounts/x/ai/v1",
-		Auth:    config.BackendAuth{BearerEnv: "CF_AI_API_KEY"},
-	}
-	t.Setenv("CF_AI_API_KEY", "secret")
-	policy := config.RouterPolicy{RejectNonLoopbackBackends: true, RequireCloudOptIn: false}
+	policy := config.RouterPolicy{RejectNonLoopbackBackends: false}
 	if err := ValidateBackend(b, policy); err != nil {
 		t.Fatal(err)
 	}

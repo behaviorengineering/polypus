@@ -912,7 +912,6 @@ backends:
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 
 	handler, err := NewHandler(config.ServeOptions{BackendURL: mlx.URL})

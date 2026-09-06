@@ -36,7 +36,6 @@ func TestHasCloudflareBackend(t *testing.T) {
 
 func TestClientSynthesizeCFViaBifrostPlugin(t *testing.T) {
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 
 	runHits := 0
@@ -58,11 +57,11 @@ func TestClientSynthesizeCFViaBifrostPlugin(t *testing.T) {
 	t.Cleanup(cf.Close)
 
 	cfg := config.RouterConfig{
-		Timeouts:            config.DefaultTimeouts(),
-		TTS: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
-		STT: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
-		Chat: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
-		Proxy: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		Timeouts: config.DefaultTimeouts(),
+		TTS:      config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		STT:      config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		Chat:     config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		Proxy:    config.CapabilityBackend{Enabled: true, Default: "cf_local"},
 		Backends: map[string]config.BackendDef{
 			"cf_local": {
 				ID:        "cf_local",
@@ -107,7 +106,6 @@ func TestClientSynthesizeCFViaBifrostPlugin(t *testing.T) {
 
 func TestClientTranscribeCFViaBifrostPlugin(t *testing.T) {
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 
 	runHits := 0
@@ -129,11 +127,11 @@ func TestClientTranscribeCFViaBifrostPlugin(t *testing.T) {
 	t.Cleanup(cf.Close)
 
 	cfg := config.RouterConfig{
-		Timeouts:            config.DefaultTimeouts(),
-		TTS: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
-		STT: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
-		Chat: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
-		Proxy: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		Timeouts: config.DefaultTimeouts(),
+		TTS:      config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		STT:      config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		Chat:     config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		Proxy:    config.CapabilityBackend{Enabled: true, Default: "cf_local"},
 		Backends: map[string]config.BackendDef{
 			"cf_local": {
 				ID:        "cf_local",
@@ -191,11 +189,11 @@ func TestNewClientOmitsCFSpeechPluginWithoutCloudflare(t *testing.T) {
 	t.Cleanup(leaf.Close)
 
 	cfg := config.RouterConfig{
-		Timeouts:            config.DefaultTimeouts(),
-		TTS: config.CapabilityBackend{Enabled: true, Default: "leaf"},
-		STT: config.CapabilityBackend{Enabled: true, Default: "leaf"},
-		Chat: config.CapabilityBackend{Enabled: true, Default: "leaf"},
-		Proxy: config.CapabilityBackend{Enabled: true, Default: "leaf"},
+		Timeouts: config.DefaultTimeouts(),
+		TTS:      config.CapabilityBackend{Enabled: true, Default: "leaf"},
+		STT:      config.CapabilityBackend{Enabled: true, Default: "leaf"},
+		Chat:     config.CapabilityBackend{Enabled: true, Default: "leaf"},
+		Proxy:    config.CapabilityBackend{Enabled: true, Default: "leaf"},
 		Backends: map[string]config.BackendDef{
 			"leaf": {
 				ID:           "leaf",

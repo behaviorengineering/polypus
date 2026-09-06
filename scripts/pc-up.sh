@@ -12,9 +12,10 @@ if ! command -v process-compose >/dev/null 2>&1; then
 fi
 
 PARENT_MONOREPO_ROOT=""
-# Nested as providers/polypus → ../..; standalone sibling of the monorepo → ../cr-case-intake.
+# Nested as providers/polypus → ../..; standalone sibling stacks → ../cr-case or ../cr-case-intake.
 for _polypus_parent_candidate in \
   "$(cd "$POLYPUS_DIR/../.." && pwd)" \
+  "$(cd "$POLYPUS_DIR/../cr-case" 2>/dev/null && pwd)" \
   "$(cd "$POLYPUS_DIR/../cr-case-intake" 2>/dev/null && pwd)"; do
   if [[ -n "$_polypus_parent_candidate" && -f "$_polypus_parent_candidate/stack/.env.example" ]]; then
     PARENT_MONOREPO_ROOT="$_polypus_parent_candidate"
@@ -47,7 +48,6 @@ export POLYPUS_MLX_HOST="${POLYPUS_MLX_HOST:-127.0.0.1}"
 export POLYPUS_MLX_PORT="${POLYPUS_MLX_PORT:-1322}"
 export POLYPUS_SWITCHYARD_HOST="${POLYPUS_SWITCHYARD_HOST:-127.0.0.1}"
 export POLYPUS_SWITCHYARD_PORT="${POLYPUS_SWITCHYARD_PORT:-4000}"
-export INFERENCE_CLOUD_CASE="${INFERENCE_CLOUD_CASE:-0}"
 export POLYPUS_CONFIG="${POLYPUS_CONFIG:-}"
 export POLYPUS_BACKEND_URL="${POLYPUS_BACKEND_URL:-}"
 export PHOENIX_PORT="${PHOENIX_PORT:-6006}"
@@ -64,7 +64,7 @@ if [[ -z "$POLYPUS_CONFIG" ]]; then
     export POLYPUS_CONFIG="$_polypus_home_cfg"
   elif [[ -f "$POLYPUS_DIR/config.yaml" ]]; then
     export POLYPUS_CONFIG="$POLYPUS_DIR/config.yaml"
-  elif [[ "$INFERENCE_CLOUD_CASE" == "1" ]]; then
+  elif [[ -n "${CF_AI_API_KEY:-}" ]]; then
     if [[ -f "$POLYPUS_DIR/config.cloud.yaml" ]]; then
       export POLYPUS_CONFIG="$POLYPUS_DIR/config.cloud.yaml"
     else
@@ -103,8 +103,6 @@ if [[ -z "$ENABLE_MLX" ]]; then
   set -e
   if [[ "$_cfg_mlx_rc" -eq 0 && ( "$_cfg_mlx" == "0" || "$_cfg_mlx" == "1" ) ]]; then
     ENABLE_MLX="$_cfg_mlx"
-  elif [[ "$INFERENCE_CLOUD_CASE" == "1" ]]; then
-    ENABLE_MLX=0
   else
     ENABLE_MLX=1
   fi

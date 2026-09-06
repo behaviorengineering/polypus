@@ -50,14 +50,14 @@ type CapabilityBackend struct {
 
 // RouterConfig holds multi-backend routing for the Polypus gateway.
 type RouterConfig struct {
-	Chat       CapabilityBackend `yaml:"-"`
-	Vision     CapabilityBackend `yaml:"-"`
-	Embed      CapabilityBackend `yaml:"-"`
-	TTS        CapabilityBackend `yaml:"-"`
-	STT        CapabilityBackend `yaml:"-"`
-	Proxy      CapabilityBackend `yaml:"-"`
-	Timeouts   Timeouts          `yaml:"-"`
-	Policy     RouterPolicy      `yaml:"policy"`
+	Chat       CapabilityBackend     `yaml:"-"`
+	Vision     CapabilityBackend     `yaml:"-"`
+	Embed      CapabilityBackend     `yaml:"-"`
+	TTS        CapabilityBackend     `yaml:"-"`
+	STT        CapabilityBackend     `yaml:"-"`
+	Proxy      CapabilityBackend     `yaml:"-"`
+	Timeouts   Timeouts              `yaml:"-"`
+	Policy     RouterPolicy          `yaml:"policy"`
 	Backends   map[string]BackendDef `yaml:"backends"`
 	Routers    map[string]NamedRouter
 	Switchyard SwitchyardConfig
@@ -127,18 +127,18 @@ type capabilityBackendFile struct {
 }
 
 type routerFile struct {
-	ChatBackend    capabilityBackendFile       `yaml:"chat_backend"`
-	VisionBackend  capabilityBackendFile       `yaml:"vision_backend"`
-	EmbedBackend   capabilityBackendFile       `yaml:"embed_backend"`
-	TTSBackend     capabilityBackendFile       `yaml:"tts_backend"`
-	STTBackend     capabilityBackendFile       `yaml:"stt_backend"`
-	ProxyBackend   capabilityBackendFile       `yaml:"proxy_backend"`
-	Timeouts       timeoutsFile                `yaml:"timeouts"`
-	Policy         routerPolicyFile            `yaml:"policy"`
-	Processes      processesFile               `yaml:"processes"`
-	Backends       map[string]backendFileEntry `yaml:"backends"`
-	Switchyard     switchyardFile              `yaml:"switchyard"`
-	Routers        map[string]namedRouterFile  `yaml:"routers"`
+	ChatBackend   capabilityBackendFile       `yaml:"chat_backend"`
+	VisionBackend capabilityBackendFile       `yaml:"vision_backend"`
+	EmbedBackend  capabilityBackendFile       `yaml:"embed_backend"`
+	TTSBackend    capabilityBackendFile       `yaml:"tts_backend"`
+	STTBackend    capabilityBackendFile       `yaml:"stt_backend"`
+	ProxyBackend  capabilityBackendFile       `yaml:"proxy_backend"`
+	Timeouts      timeoutsFile                `yaml:"timeouts"`
+	Policy        routerPolicyFile            `yaml:"policy"`
+	Processes     processesFile               `yaml:"processes"`
+	Backends      map[string]backendFileEntry `yaml:"backends"`
+	Switchyard    switchyardFile              `yaml:"switchyard"`
+	Routers       map[string]namedRouterFile  `yaml:"routers"`
 }
 
 type backendFileEntry struct {
@@ -173,44 +173,12 @@ func LoadRouterConfig(opts ServeOptions) (RouterConfig, error) {
 	if cfg.Timeouts.Max == 0 {
 		cfg.Timeouts = DefaultTimeouts()
 	}
-	stripRemoteBackendsWhenDisabled(&cfg)
 	applyRouterEnvOverrides(&cfg, opts)
 	applySwitchyardEnvOverrides(&cfg)
 	if err := normalizeRouterConfig(&cfg); err != nil {
 		return RouterConfig{}, err
 	}
 	return cfg, nil
-}
-
-// stripRemoteBackendsWhenDisabled removes remote backends when cloud opt-in is off.
-func stripRemoteBackendsWhenDisabled(cfg *RouterConfig) {
-	if !cfg.Policy.RequireCloudOptIn {
-		return
-	}
-	if InferenceCloudCaseAllowed() {
-		return
-	}
-	removed := make(map[string]struct{})
-	for id, b := range cfg.Backends {
-		if b.Remote {
-			delete(cfg.Backends, id)
-			removed[id] = struct{}{}
-		}
-	}
-	if len(removed) == 0 {
-		return
-	}
-	clearIfRemoved := func(field *string) {
-		if _, ok := removed[*field]; ok {
-			*field = ""
-		}
-	}
-	clearIfRemoved(&cfg.Chat.Default)
-	clearIfRemoved(&cfg.Vision.Default)
-	clearIfRemoved(&cfg.Embed.Default)
-	clearIfRemoved(&cfg.TTS.Default)
-	clearIfRemoved(&cfg.STT.Default)
-	clearIfRemoved(&cfg.Proxy.Default)
 }
 
 func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
@@ -278,9 +246,9 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 func defaultRouterFromEnv(opts ServeOptions) RouterConfig {
 	backend := strings.TrimRight(strings.TrimSpace(opts.BackendURL), "/")
 	return RouterConfig{
-		TTS:   CapabilityBackend{Enabled: true, Default: "mlx_local"},
-		STT:   CapabilityBackend{Enabled: true, Default: "mlx_local"},
-		Proxy: CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		TTS:      CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		STT:      CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		Proxy:    CapabilityBackend{Enabled: true, Default: "mlx_local"},
 		Policy:   DefaultRouterPolicy(),
 		Timeouts: DefaultTimeouts(),
 		Backends: map[string]BackendDef{
@@ -362,7 +330,7 @@ func normalizeCapabilityBackend(cfg *RouterConfig, cap *CapabilityBackend, field
 				return nil
 			}
 		}
-		return fmt.Errorf("router: %s.default required (configured backend unavailable; set INFERENCE_CLOUD_CASE=1 or set %s.enabled: false)", field, field)
+		return fmt.Errorf("router: %s.default required (configured backend unavailable; set %s.enabled: false or pick a backend that exists)", field, field)
 	}
 	return nil
 }
@@ -401,9 +369,6 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 		}
 		if b.BaseURL == "" {
 			return fmt.Errorf("router: backends.%s.base_url required", id)
-		}
-		if b.Remote && cfg.Policy.RequireCloudOptIn && !InferenceCloudCaseAllowed() {
-			return fmt.Errorf("router: backends.%s.remote requires INFERENCE_CLOUD_CASE=1", id)
 		}
 		if b.Remote {
 			if _, err := b.Auth.ResolveBearerToken(); err != nil {
@@ -454,11 +419,7 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 func requireBackend(cfg *RouterConfig, id string, cap Capability, field string) error {
 	b, ok := cfg.Backends[id]
 	if !ok {
-		hint := ""
-		if cfg.Policy.RequireCloudOptIn && !InferenceCloudCaseAllowed() {
-			hint = " (if remote, set INFERENCE_CLOUD_CASE=1)"
-		}
-		return fmt.Errorf("router: %s %q not found in backends%s", field, id, hint)
+		return fmt.Errorf("router: %s %q not found in backends", field, id)
 	}
 	if !b.HasCapability(cap) {
 		return fmt.Errorf("router: %s %q lacks capability %s", field, id, cap)

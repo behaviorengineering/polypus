@@ -43,7 +43,7 @@ backends:
 #       - allenai/olmocr-2-7b
 #       - text-embedding-nomic-embed-text-v1.5
 
-# Optional Cloudflare in-process extension (INFERENCE_CLOUD_CASE=1):
+# Optional Cloudflare in-process extension (needs CF_AI_API_KEY + CF_ACCOUNT_ID):
 # cf_local:
 #   remote: true
 #   extension: cloudflare
@@ -60,7 +60,6 @@ backends:
 # Case-mode breach guardrails (defaults match omission of this block).
 # policy:
 #   reject_non_loopback_backends: true
-#   require_cloud_opt_in: true
 
 # Hop timeouts (optional). Omitted keys use code defaults.
 # Client header X-Polypus-Timeout (e.g. 600s) is clamped to min..max.

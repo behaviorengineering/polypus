@@ -400,7 +400,6 @@ routers:
 
 func TestCFLeafChatViaRecordingBifrost(t *testing.T) {
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "test-key")
 
 	cfHits := 0
@@ -468,7 +467,6 @@ backends:
 
 func TestCFEmbedViaRecordingBifrost(t *testing.T) {
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "test-key")
 
 	dir := t.TempDir()

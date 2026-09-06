@@ -8,7 +8,6 @@ import (
 )
 
 func TestNewAccountRegistersCloudflareChatAndSpeech(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 	cfg := config.RouterConfig{
 		Timeouts: config.DefaultTimeouts(),

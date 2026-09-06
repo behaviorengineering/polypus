@@ -1,5 +1,5 @@
 # Polypus router: Cloudflare Workers AI via in-process extension.
-# Use when INFERENCE_CLOUD_CASE=1. Clients call Polypus gateway :1320 only.
+# Clients call Polypus gateway :1320 only. Needs CF_AI_API_KEY and CF_ACCOUNT_ID.
 # Copy to ~/.config/polypus/config.yaml or set POLYPUS_CONFIG.
 
 processes:

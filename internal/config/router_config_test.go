@@ -210,7 +210,6 @@ backends:
 }
 
 func TestTTSBackendCFCloudOK(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "1")
 	t.Setenv("CF_AI_API_KEY", "secret")
 	dir := t.TempDir()
 	content := `
@@ -246,8 +245,8 @@ backends:
 	}
 }
 
-func TestTTSBackendEnabledAfterStripFailsWithoutMLX(t *testing.T) {
-	t.Setenv("INFERENCE_CLOUD_CASE", "0")
+func TestTTSBackendRemoteRequiresCredentials(t *testing.T) {
+	t.Setenv("CF_AI_API_KEY", "")
 	dir := t.TempDir()
 	content := `
 tts_backend:
@@ -278,14 +277,11 @@ backends:
 	t.Setenv("POLYPUS_CONFIG", path)
 	_, err := LoadRouterConfig(ServeOptions{})
 	if err == nil {
-		t.Fatal("expected error when TTS enabled but CF stripped")
+		t.Fatal("expected error when CF credentials missing")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "tts_backend.default required") {
-		t.Fatalf("want tts_backend.default required, got %v", err)
-	}
-	if strings.Contains(msg, "mlx_local not in backends") {
-		t.Fatalf("must not invent mlx error: %v", err)
+	if !strings.Contains(msg, "CF_AI_API_KEY") {
+		t.Fatalf("want missing CF_AI_API_KEY, got %v", err)
 	}
 }
 
@@ -319,4 +315,3 @@ backends:
 		t.Fatalf("proxy: %+v", cfg.Proxy)
 	}
 }
-

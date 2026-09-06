@@ -106,7 +106,6 @@ backends:
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
-	t.Setenv("INFERENCE_CLOUD_CASE", "0")
 
 	cfg, err := LoadRouterConfig(ServeOptions{BackendURL: "http://127.0.0.1:9"})
 	if err != nil {
