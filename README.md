@@ -4,6 +4,8 @@
 
 # Polypus
 
+Agents: start at [AGENTS.md](AGENTS.md). Operator pack: [ai-copilots/](ai-copilots/).
+
 Local **OpenAI-compatible inference gateway**: one loopback face on `:1320`, many backend arms (chat, vision, embeddings, TTS/STT). Clients never talk to Cloudflare, MLX, or LM Studio directly.
 
 ## Services
