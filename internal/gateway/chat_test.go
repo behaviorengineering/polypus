@@ -19,6 +19,29 @@ func TestMergeReasoningIntoContent(t *testing.T) {
 	}
 }
 
+func TestEnsureStreamChoiceFinishReason(t *testing.T) {
+	missing := []byte(`{"id":"c1","choices":[{"index":0,"delta":{"content":"Hi"}}]}`)
+	out, changed := ensureStreamChoiceFinishReason(missing)
+	if !changed {
+		t.Fatal("expected finish_reason null injection")
+	}
+	if !strings.Contains(string(out), `"finish_reason":null`) {
+		t.Fatalf("body=%s", out)
+	}
+
+	already := []byte(`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
+	out, changed = ensureStreamChoiceFinishReason(already)
+	if changed {
+		t.Fatalf("should not rewrite terminal finish_reason: %s", out)
+	}
+
+	nullPresent := []byte(`{"choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}`)
+	out, changed = ensureStreamChoiceFinishReason(nullPresent)
+	if changed {
+		t.Fatalf("should not rewrite existing null finish_reason: %s", out)
+	}
+}
+
 func TestChatBodyIsStream(t *testing.T) {
 	if chatBodyIsStream([]byte(`{"stream":true}`)) != true {
 		t.Fatal("expected stream")

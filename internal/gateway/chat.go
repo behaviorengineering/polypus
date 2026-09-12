@@ -329,6 +329,45 @@ func mergeReasoningIntoContent(body []byte) ([]byte, bool) {
 	return out, true
 }
 
+// ensureStreamChoiceFinishReason adds "finish_reason":null on each stream choice
+// that omits the key. Bifrost marshals nil finish reasons with omitempty, which
+// breaks OpenAI-compat clients (llm-go) that require the field on every chunk.
+func ensureStreamChoiceFinishReason(body []byte) ([]byte, bool) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
+		return body, false
+	}
+	rawChoices, ok := root["choices"]
+	if !ok {
+		return body, false
+	}
+	var choices []map[string]json.RawMessage
+	if err := json.Unmarshal(rawChoices, &choices); err != nil || len(choices) == 0 {
+		return body, false
+	}
+	changed := false
+	for i := range choices {
+		if _, has := choices[i]["finish_reason"]; has {
+			continue
+		}
+		choices[i]["finish_reason"] = json.RawMessage("null")
+		changed = true
+	}
+	if !changed {
+		return body, false
+	}
+	updatedChoices, err := json.Marshal(choices)
+	if err != nil {
+		return body, false
+	}
+	root["choices"] = updatedChoices
+	out, err := json.Marshal(root)
+	if err != nil {
+		return body, false
+	}
+	return out, true
+}
+
 func jsonStringField(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""

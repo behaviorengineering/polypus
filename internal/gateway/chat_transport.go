@@ -54,6 +54,8 @@ func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request,
 }
 
 // writeBifrostChatSSE frames Bifrost chat chunks as OpenAI SSE.
+// Mid-stream choices that omit finish_reason get "finish_reason":null so
+// OpenAI-compat clients that require the key (for example llm-go) can parse.
 // Headers are not committed until the first chunk (or successful empty DONE) so
 // dial/stream setup errors can still map to HTTP error status.
 func writeBifrostChatSSE(w http.ResponseWriter, chunks <-chan []byte, errCh <-chan error) error {
@@ -71,6 +73,9 @@ func writeBifrostChatSSE(w http.ResponseWriter, chunks <-chan []byte, errCh <-ch
 	}
 	for raw := range chunks {
 		start()
+		if fixed, ok := ensureStreamChoiceFinishReason(raw); ok {
+			raw = fixed
+		}
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
 			return fmt.Errorf("%w: %w",
 				derrors.Wrap(err, derrors.CodeInternal, "gateway.writeBifrostChatSSE", "write stream"),
