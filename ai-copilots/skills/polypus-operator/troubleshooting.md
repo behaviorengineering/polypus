@@ -30,6 +30,7 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 | Smoke passes, host job fails | L3 fixture or different model | Run host L3 harness for that model when available |
 | TTS works, STT fails | STT model not allowed or wrong backend | Check `stt_backend.default` and allow list |
 | `router/…` returns 503 | Switchyard down or not ready | `/health/backends` → `switchyard`; `make serve-down && make serve`; `make smoke-router` |
+| Leaf or Switchyard dial returns 503 after recent 5xx | Upstream circuit breaker open (`internal/upstream.Board`) | Wait for the open window (~30s) or fix the upstream; clients MAY budget-retry 503, MUST NOT expect Polypus to sleep-retry chat (see SKILL.md resilience ownership) |
 | `router/…` returns 502 | Switchyard up but chat hop failed | Check Switchyard logs; upstream leaf error (distinct from 503 unavailable) |
 | `router/…` unknown / 400 | Router not in `routers:` or typo | Check `config.yaml` `routers:`; probe `/v1/models` for `router/<name>` |
 | Passthrough router fails, composed OK | Leaf allow-list or backend | Validate `route.target` leaf in `models.allow` |

@@ -122,7 +122,40 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 
 ## Client contract
 
-Downstream apps should use `POLYPUS_BASE_URL` only (`http://127.0.0.1:1320`). Backend tables live in `~/.config/polypus/config.yaml`, not in client repos. Model ids in client job configs must match allow-list entries with the correct prefix.
+Downstream apps MUST use `POLYPUS_BASE_URL` only (`http://127.0.0.1:1320`). Backend tables live in `~/.config/polypus/config.yaml`, not in client repos. Model ids in client job configs MUST match allow-list entries with the correct prefix.
+
+### Resilience ownership (breaker vs retries)
+
+**Moral:** Polypus fail-opens; clients sleep-and-retry. Do not put both jobs in one place.
+
+| Concern | Owner | What it does |
+|---------|-------|----------------|
+| Circuit breaker | Polypus (`internal/upstream.Board`) | After consecutive dial failures, stops hitting a sick upstream and returns **503** (open / half-open limit). Fixed open window; not exponential backoff. |
+| Retries / exponential backoff | HTTP clients | Budgeted retry only on clearly “try later” answers (**503**, **429**, honor `Retry-After` when present). |
+
+**CONSTRAINT:** Polypus MUST own per-upstream circuit breaking for gateway dials. MUST NOT add a gateway-wide sleep-and-retry (exponential backoff) loop around chat or streamed hops.
+
+- Enforcement: dials go through `upstream.Board.Execute`; chat/stream handlers fail fast when the breaker is open.
+- Violation: remove gateway retry/sleep; keep fail-open + clear 503.
+
+**CONSTRAINT:** Clients MUST treat retries as their concern. MUST NOT stack a blind exponential loop on every **5xx** while Polypus already shed load with **503**. MUST NOT assume Polypus will replay a request after bytes have started streaming.
+
+- Enforcement: client HTTP stacks retry only on 503/429 (and similar retryable statuses) with a small budget; cancel with the caller context.
+- Violation: strip gateway-style retry from the client; keep a budgeted “try later” policy only.
+
+CORRECT:
+```text
+Breaker open → Polypus returns 503
+Client waits (Retry-After or short backoff), retries once or twice, then fails
+```
+
+PROHIBITED:
+```text
+Polypus sleeps with exponential backoff inside the chat hop, and
+the client also retries every 502/503 without a budget
+```
+
+Bifrost may expose per-provider `MaxRetries` on leaf dials; that is hop-local and optional. It is not a substitute for Polypus’s breaker, and it does not move retry ownership away from clients for end-to-end chat.
 
 ## Refresh this pack
 
