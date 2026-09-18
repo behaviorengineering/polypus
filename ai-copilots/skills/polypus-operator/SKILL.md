@@ -115,10 +115,13 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 
 ## Observability
 
-- Phoenix UI: http://127.0.0.1:6006
-- OTLP gRPC: `:4317` (`openinference.endpoint` for clients)
-- Failure dumps: `logs/inference-failures/` via [olly](https://github.com/behaviorengineering/olly) via [olly](https://github.com/behaviorengineering/olly)
+- Phoenix UI: http://127.0.0.1:6006 (LLM / OpenInference)
+- Phoenix OTLP gRPC: `:4317` (`openinference.endpoint` for clients)
+- HyperDX UI: http://127.0.0.1:8080 (app traces / logs)
+- HyperDX OTLP: gRPC `:4319`, HTTP `:4318` (point app `olly` / OTEL exporters here; keep Phoenix on `:4317`)
+- Failure dumps: `logs/inference-failures/` via [olly](https://github.com/behaviorengineering/olly)
 - Disable tracing: `POLYPUS_OTEL=0`
+- Skip containers: `POLYPUS_PHOENIX=0`, `POLYPUS_HYPERDX=0`
 
 ## Client contract
 

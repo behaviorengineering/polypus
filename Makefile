@@ -34,7 +34,7 @@ help:
 	@echo "  make build         Build $(BINARY) + bin/switchyard-server"
 	@echo "  make switchyard-build  Build bin/switchyard-server (Rust; also part of make build)"
 	@echo "  make mlx-sync      uv sync for backends/mlx"
-	@echo "  make serve         process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 (POLYPUS_PHOENIX=0 to skip)"
+	@echo "  make serve         process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 + HyperDX :8080 (POLYPUS_PHOENIX=0 / POLYPUS_HYPERDX=0 to skip)"
 	@echo "  make serve-down    Stop this Polypus process-compose project only"
 	@echo "  make smoke         curl TTS smoke via gateway (cf_local default)"
 	@echo "  make smoke-local   TTS smoke via MLX (POLYPUS_SMOKE_LOCAL=1)"
@@ -68,7 +68,7 @@ mlx-sync:
 	./backends/mlx/scripts/sync.sh
 
 serve: build
-	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-phoenix.sh scripts/pc-switchyard.sh
+	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-phoenix.sh scripts/pc-hyperdx.sh scripts/pc-switchyard.sh
 	./scripts/pc-up.sh
 
 serve-down:

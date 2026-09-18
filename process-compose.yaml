@@ -1,7 +1,7 @@
 # Polypus gateway + backends (standalone process-compose project).
 # Start: make serve  (or: scripts/pc-up.sh)
 # Stop:  make serve-down
-# Namespaces: pc-up.sh selects core plus mlx and obs (Phoenix).
+# Namespaces: pc-up.sh selects core plus mlx, obs (Phoenix), and hyperdx.
 
 version: "0.5"
 
@@ -23,6 +23,9 @@ environment:
   - "CF_ACCOUNT_ID=${CF_ACCOUNT_ID}"
   - "PHOENIX_PORT=${PHOENIX_PORT}"
   - "PHOENIX_OTLP_PORT=${PHOENIX_OTLP_PORT}"
+  - "HYPERDX_PORT=${HYPERDX_PORT}"
+  - "HYPERDX_OTLP_GRPC_PORT=${HYPERDX_OTLP_GRPC_PORT}"
+  - "HYPERDX_OTLP_HTTP_PORT=${HYPERDX_OTLP_HTTP_PORT}"
   - "POLYPUS_OTEL=${POLYPUS_OTEL}"
   - "POLYPUS_OTLP_ENDPOINT=${POLYPUS_OTLP_ENDPOINT}"
   - "POLYPUS_FAILURE_DUMP_DIR=${POLYPUS_FAILURE_DUMP_DIR}"
@@ -67,6 +70,24 @@ processes:
     shutdown:
       signal: 15
       timeout_seconds: 30
+
+  hyperdx:
+    namespace: hyperdx
+    command: "${POLYPUS_DIR}/scripts/pc-hyperdx.sh"
+    working_dir: "${POLYPUS_DIR}"
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 8080
+        path: /
+      period_seconds: 5
+      failure_threshold: 72
+    availability:
+      restart: on_failure
+      backoff_seconds: 5
+    shutdown:
+      signal: 15
+      timeout_seconds: 60
 
   gateway:
     namespace: core
