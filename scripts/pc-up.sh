@@ -52,6 +52,9 @@ export POLYPUS_CONFIG="${POLYPUS_CONFIG:-}"
 export POLYPUS_BACKEND_URL="${POLYPUS_BACKEND_URL:-}"
 export PHOENIX_PORT="${PHOENIX_PORT:-6006}"
 export PHOENIX_OTLP_PORT="${PHOENIX_OTLP_PORT:-4317}"
+export HYPERDX_PORT="${HYPERDX_PORT:-8080}"
+export HYPERDX_OTLP_GRPC_PORT="${HYPERDX_OTLP_GRPC_PORT:-4319}"
+export HYPERDX_OTLP_HTTP_PORT="${HYPERDX_OTLP_HTTP_PORT:-4318}"
 
 # Machine-wide config: ~/.config/polypus/config.yaml (XDG_CONFIG_HOME when set).
 if [[ -z "$POLYPUS_CONFIG" ]]; then
@@ -129,6 +132,15 @@ if [[ "$ENABLE_PHOENIX" == "1" ]]; then
   fi
 fi
 
+ENABLE_HYPERDX="${POLYPUS_HYPERDX:-1}"
+if [[ "$ENABLE_HYPERDX" == "1" ]]; then
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    NAMESPACES+=(hyperdx)
+  else
+    echo "WARN: Docker not available; HyperDX skipped (UI :${HYPERDX_PORT}, OTLP :${HYPERDX_OTLP_GRPC_PORT}/:${HYPERDX_OTLP_HTTP_PORT}). Set POLYPUS_HYPERDX=0 to silence." >&2
+  fi
+fi
+
 chmod +x "$POLYPUS_DIR/scripts/"*.sh "$POLYPUS_DIR/backends/mlx/scripts/"*.sh 2>/dev/null || true
 
 # Runtime state: ~/.local/state/polypus (XDG_STATE_HOME when set).
@@ -153,7 +165,10 @@ done
 
 echo "Polypus gateway: http://${POLYPUS_HOST}:${POLYPUS_PORT}/  namespaces: ${NAMESPACES[*]}"
 if [[ " ${NAMESPACES[*]} " == *" obs "* ]]; then
-  echo "Phoenix UI: http://127.0.0.1:${PHOENIX_PORT}/  OTLP gRPC: 127.0.0.1:${PHOENIX_OTLP_PORT}"
+  echo "Phoenix UI: http://127.0.0.1:${PHOENIX_PORT}/  OTLP gRPC: 127.0.0.1:${PHOENIX_OTLP_PORT} (OpenInference)"
+fi
+if [[ " ${NAMESPACES[*]} " == *" hyperdx "* ]]; then
+  echo "HyperDX UI: http://127.0.0.1:${HYPERDX_PORT}/  OTLP gRPC: 127.0.0.1:${HYPERDX_OTLP_GRPC_PORT}  OTLP HTTP: 127.0.0.1:${HYPERDX_OTLP_HTTP_PORT} (app traces)"
 fi
 echo "process-compose TUI (this project only); 0 quit."
 

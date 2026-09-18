@@ -1,5 +1,7 @@
-# Phoenix OTLP (started by process-compose obs namespace via scripts/pc-phoenix.sh).
-# Host gateway: make serve (process-compose). Phoenix: make serve with POLYPUS_PHOENIX=1.
+# Observability containers (process-compose via scripts/pc-phoenix.sh / pc-hyperdx.sh).
+# Host gateway: make serve (process-compose).
+# Phoenix: POLYPUS_PHOENIX=1 (default). HyperDX: POLYPUS_HYPERDX=1 (default).
+# OTLP: Phoenix keeps host :4317 (OpenInference). HyperDX uses :4319 (gRPC) and :4318 (HTTP).
 services:
   phoenix:
     image: ${PHOENIX_IMAGE:-arizephoenix/phoenix:latest}
@@ -13,5 +15,21 @@ services:
     volumes:
       - phoenix_data:/data
 
+  hyperdx:
+    image: ${HYPERDX_IMAGE:-clickhouse/clickstack-local:latest}
+    container_name: polypus-hyperdx
+    restart: "no"
+    ports:
+      - "${HYPERDX_PORT:-8080}:8080"
+      - "${HYPERDX_OTLP_GRPC_PORT:-4319}:4317"
+      - "${HYPERDX_OTLP_HTTP_PORT:-4318}:4318"
+    volumes:
+      - hyperdx_db:/data/db
+      - hyperdx_ch_data:/var/lib/clickhouse
+      - hyperdx_ch_logs:/var/log/clickhouse-server
+
 volumes:
   phoenix_data:
+  hyperdx_db:
+  hyperdx_ch_data:
+  hyperdx_ch_logs:

@@ -26,11 +26,13 @@ flowchart TB
     M["MLX :1322<br/>local TTS and STT"]
     CFExt["cf_local extension<br/>in-process"]
     P["Phoenix UI :6006"]
+    H["HyperDX UI :8080"]
   end
 
   LMS["LM Studio :1234<br/>chat, vision, embed<br/>you start this"]
   CF[Cloudflare Workers AI]
   OTLP["OTLP gRPC :4317"]
+  OTLPApp["OTLP :4319 / :4318"]
 
   C --> G
   N --> G
@@ -40,10 +42,14 @@ flowchart TB
   G --> SY
   SY -.->|leaf via :1320| G
   G --> OTLP
+  G -.-> OTLPApp
   CFExt -->|CF credentials| CF
   C -.-> OTLP
   N -.-> OTLP
+  C -.-> OTLPApp
+  N -.-> OTLPApp
   OTLP --> P
+  OTLPApp --> H
 ```
 
 | Process-compose | Port | What it is |
@@ -51,7 +57,8 @@ flowchart TB
 | `gateway` (`core`) | `:1320` | Public OpenAI API. This is `POLYPUS_BASE_URL`. |
 | `switchyard` (`switchyard`) | `:4000` | Composed router engine (`stage_router`, `llm_classifier`, `passthrough`, etc.). Always-on when `routers:` is configured. |
 | `mlx` (`mlx`) | `:1322` | Local Apple Silicon speech (Qwen3 TTS, Whisper STT). |
-| `phoenix` (`obs`) | `:6006` / `:4317` | Arize trace UI and OTLP collector. Clients set `openinference.endpoint` to `localhost:4317`. |
+| `phoenix` (`obs`) | `:6006` / `:4317` | Arize LLM trace UI and OTLP. Clients set `openinference.endpoint` to `localhost:4317`. |
+| `hyperdx` (`hyperdx`) | `:8080` / `:4319` / `:4318` | HyperDX (ClickStack local) for app traces/logs. OTLP gRPC `:4319`, HTTP `:4318` (avoids Phoenix `:4317`). |
 | (external) | `:1234` | LM Studio. Not started by Polypus. |
 
 **Cloudflare (`cf_local`):** When `cf_local` is configured with `CF_AI_API_KEY` and `CF_ACCOUNT_ID`, the gateway uses Workers AI. **OpenAI-shaped** chat and embeddings dial through Bifrost to the Workers AI `/ai/v1` base URL. **TTS/STT** also enter Bifrost; a PreLLMHook plugin short-circuits them onto the in-process Cloudflare extension `/ai/run` path (Workers AI has no `/ai/v1/audio/*` OpenAI-compat routes; live spike returned `400 No route for that URI`). Model Search catalog stays on the extension. Extension HTTP clients are process-scoped (keyed by backend id + bearer). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` or the process environment.
@@ -65,7 +72,7 @@ mkdir -p ~/.config/polypus
 cp config.yaml.example ~/.config/polypus/config.yaml   # once; edit allow-lists there
 make mlx-sync
 make build        # gateway bin/polypus + bin/switchyard-server
-make serve        # process-compose TUI: gateway :1320 + backends + Phoenix :6006
+make serve        # process-compose TUI: gateway :1320 + backends + Phoenix :6006 + HyperDX :8080
 make serve-down   # stop this Polypus project only
 make smoke        # TTS smoke (cf_local default) → /tmp/polypus-smoke.mp3
 make smoke-stt    # TTS then STT round-trip (cf_local default)
@@ -79,7 +86,7 @@ Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/po
 
 **Switchyard (composed routers):** git submodule at `providers/switchyard` (tag `v0.2.0`). Requires **Rust stable** (see `providers/switchyard/rust-toolchain.toml`, currently 1.96.1). `make build` runs `switchyard-build` and installs `bin/switchyard-server` (hard-fail if the submodule or cargo is missing). Generated routes TOML: `~/.cache/polypus/switchyard/routes.toml`. Set `POLYPUS_SWITCHYARD=0` to skip the Switchyard process when using `make serve`. Declare routers under `routers:` in config; clients send `model: router/<name>`. Routing types and when to use each: [docs/switchyard/](docs/switchyard/).
 
-`CF_AI_API_KEY` and `CF_ACCOUNT_ID` in `stack/.env` (or the process environment) enable the `cf_local` remote backend when it is listed in config. MLX process start is driven by `processes.mlx` in config (`polypus processes --print mlx`); `POLYPUS_ENABLE_MLX` overrides when set. When `processes.mlx` is omitted, serve defaults MLX on unless you set `POLYPUS_ENABLE_MLX=0`. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317`.
+`CF_AI_API_KEY` and `CF_ACCOUNT_ID` in `stack/.env` (or the process environment) enable the `cf_local` remote backend when it is listed in config. MLX process start is driven by `processes.mlx` in config (`polypus processes --print mlx`); `POLYPUS_ENABLE_MLX` overrides when set. When `processes.mlx` is omitted, serve defaults MLX on unless you set `POLYPUS_ENABLE_MLX=0`. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317` for OpenInference. HyperDX (ClickStack local) is on by default (`POLYPUS_HYPERDX=0` to skip): UI http://127.0.0.1:8080 , OTLP gRPC `:4319` and HTTP `:4318` for app traces (separate from Phoenix so both can run). First HyperDX start pulls a large image and needs enough RAM for ClickHouse.
 
 Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_OTLP_ENDPOINT` and dumps with `POLYPUS_FAILURE_DUMP_DIR`. Skip probe noise with `POLYPUS_OTEL_SKIP_PATHS` (default `/health,/health/backends`). Provider setup and local failure dumps use [`olly`](https://github.com/behaviorengineering/olly).
 
@@ -159,8 +166,11 @@ curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq .
 | Gateway | `127.0.0.1:1320` | Public OpenAI `/v1/*` surface |
 | Switchyard | `127.0.0.1:4000` | Composed `router/…` chat; internal only |
 | MLX backend | `127.0.0.1:1322` | Internal; gateway proxies only |
-| Phoenix UI | `127.0.0.1:6006` | Arize traces |
+| Phoenix UI | `127.0.0.1:6006` | Arize LLM / OpenInference traces |
 | Phoenix OTLP | `127.0.0.1:4317` | OTLP gRPC (OpenInference) |
+| HyperDX UI | `127.0.0.1:8080` | App traces, logs, errors (ClickStack local) |
+| HyperDX OTLP gRPC | `127.0.0.1:4319` | App OTLP gRPC (host maps to container `:4317`) |
+| HyperDX OTLP HTTP | `127.0.0.1:4318` | App OTLP HTTP |
 
 ## Environment
 
@@ -183,13 +193,16 @@ Multi-backend routing: see `config.yaml.example`. Model prefix: `backend_id/mode
 
 ## Docker
 
-Phoenix only (gateway runs on the host via `make serve`):
+Phoenix and HyperDX (gateway runs on the host via `make serve`):
 
 ```bash
-make serve                             # host: gateway + backends + Phoenix
+make serve                             # host: gateway + backends + Phoenix + HyperDX
 docker compose up phoenix              # Phoenix alone: UI :6006, OTLP :4317
+docker compose up hyperdx              # HyperDX alone: UI :8080, OTLP :4319/:4318
 make docker-build                      # optional gateway image (Dockerfile)
 ```
+
+Set `POLYPUS_PHOENIX=0` and/or `POLYPUS_HYPERDX=0` to skip either container under `make serve`.
 
 ## Releases
 
