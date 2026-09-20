@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/behaviorengineering/olly/dump"
+	"github.com/behaviorengineering/olly/pkg/dump"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
