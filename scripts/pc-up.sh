@@ -123,21 +123,104 @@ if [[ "$ENABLE_MLX" == "1" ]]; then
   fi
 fi
 
-ENABLE_PHOENIX="${POLYPUS_PHOENIX:-1}"
-if [[ "$ENABLE_PHOENIX" == "1" ]]; then
-  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    NAMESPACES+=(obs)
-  else
-    echo "WARN: Docker not available; Phoenix skipped (OTLP :${PHOENIX_OTLP_PORT}). Set POLYPUS_PHOENIX=0 to silence." >&2
+# Timed Docker preflight (once). Bare `docker info` can hang for minutes when the
+# CLI is installed but the daemon is stopped or still starting.
+_polypus_docker_probe() {
+  local timeout_s="${POLYPUS_DOCKER_PROBE_TIMEOUT:-3}"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$timeout_s" docker info >/dev/null 2>&1
+    return $?
   fi
-fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$timeout_s" docker info >/dev/null 2>&1
+    return $?
+  fi
+  docker info >/dev/null 2>&1 &
+  local pid=$!
+  local end=$((SECONDS + timeout_s))
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( SECONDS >= end )); then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 0.1
+  done
+  wait "$pid"
+}
 
+_polypus_docker_ok() {
+  if [[ -n "${_POLYPUS_DOCKER_OK:-}" ]]; then
+    [[ "$_POLYPUS_DOCKER_OK" == "1" ]]
+    return
+  fi
+  _POLYPUS_DOCKER_OK=0
+  if ! command -v docker >/dev/null 2>&1; then
+    return 1
+  fi
+  local timeout_s="${POLYPUS_DOCKER_PROBE_TIMEOUT:-3}"
+  local rc=0
+  echo "Preflight: Docker probe (${timeout_s}s timeout)..." >&2
+  set +e
+  _polypus_docker_probe
+  rc=$?
+  set -e
+  if [[ "$rc" -eq 0 ]]; then
+    _POLYPUS_DOCKER_OK=1
+    return 0
+  fi
+  if [[ "$rc" -eq 124 ]]; then
+    echo "WARN: Docker probe timed out after ${timeout_s}s (daemon not ready?)." >&2
+  fi
+  return 1
+}
+
+_polypus_confirm_continue_without_docker() {
+  local wanted=()
+  [[ "${1:-}" == "1" ]] && wanted+=("Phoenix")
+  [[ "${2:-}" == "1" ]] && wanted+=("HyperDX")
+  local joined=""
+  case "${#wanted[@]}" in
+    1) joined="${wanted[0]}" ;;
+    2) joined="${wanted[0]} and ${wanted[1]}" ;;
+    *) joined="observability containers" ;;
+  esac
+
+  echo "" >&2
+  echo "Docker is down (or not ready), so ${joined} cannot start." >&2
+  echo "The gateway can still run without those observability containers." >&2
+
+  if [[ "${POLYPUS_DOCKER_CONTINUE:-}" == "1" ]]; then
+    echo "Continuing without ${joined} (POLYPUS_DOCKER_CONTINUE=1)." >&2
+    return 0
+  fi
+  if ! [[ -t 0 ]]; then
+    echo "No TTY for confirm. Start Docker, set POLYPUS_PHOENIX=0 / POLYPUS_HYPERDX=0, or POLYPUS_DOCKER_CONTINUE=1 to skip." >&2
+    exit 1
+  fi
+
+  local ans=""
+  read -r -p "Continue without ${joined}? [y/N] " ans
+  case "${ans}" in
+    y|Y|yes|YES)
+      return 0
+      ;;
+    *)
+      echo "Aborted. Start Docker Desktop, then rerun make serve." >&2
+      exit 1
+      ;;
+  esac
+}
+
+ENABLE_PHOENIX="${POLYPUS_PHOENIX:-1}"
 ENABLE_HYPERDX="${POLYPUS_HYPERDX:-1}"
-if [[ "$ENABLE_HYPERDX" == "1" ]]; then
-  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    NAMESPACES+=(hyperdx)
+if [[ "$ENABLE_PHOENIX" == "1" || "$ENABLE_HYPERDX" == "1" ]]; then
+  if _polypus_docker_ok; then
+    [[ "$ENABLE_PHOENIX" == "1" ]] && NAMESPACES+=(obs)
+    [[ "$ENABLE_HYPERDX" == "1" ]] && NAMESPACES+=(hyperdx)
   else
-    echo "WARN: Docker not available; HyperDX skipped (UI :${HYPERDX_PORT}, OTLP :${HYPERDX_OTLP_GRPC_PORT}/:${HYPERDX_OTLP_HTTP_PORT}). Set POLYPUS_HYPERDX=0 to silence." >&2
+    _polypus_confirm_continue_without_docker "$ENABLE_PHOENIX" "$ENABLE_HYPERDX"
+    echo "Skipping observability containers this run." >&2
   fi
 fi
 

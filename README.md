@@ -202,7 +202,7 @@ docker compose up hyperdx              # HyperDX alone: UI :8080, OTLP :4319/:43
 make docker-build                      # optional gateway image (Dockerfile)
 ```
 
-Set `POLYPUS_PHOENIX=0` and/or `POLYPUS_HYPERDX=0` to skip either container under `make serve`.
+Set `POLYPUS_PHOENIX=0` and/or `POLYPUS_HYPERDX=0` to skip either container under `make serve`. `pc-up.sh` probes Docker with a 3s timeout (`POLYPUS_DOCKER_PROBE_TIMEOUT`); if the daemon is down it asks whether to continue without those containers (`POLYPUS_DOCKER_CONTINUE=1` skips the prompt).
 
 ## Releases
 
