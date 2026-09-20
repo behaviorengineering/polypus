@@ -122,6 +122,10 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 - Failure dumps: `logs/inference-failures/` via [olly](https://github.com/behaviorengineering/olly)
 - Disable tracing: `POLYPUS_OTEL=0`
 - Skip containers: `POLYPUS_PHOENIX=0`, `POLYPUS_HYPERDX=0`
+- Docker probe timeout (default 3s): `POLYPUS_DOCKER_PROBE_TIMEOUT`
+- Skip Docker confirm when daemon is down: `POLYPUS_DOCKER_CONTINUE=1`
+- `make serve-down` stops processes only; named Phoenix/HyperDX volumes are kept (pack skill `process-compose-docker`)
+- Shared practice: skill `process-compose-docker` (cursor-packs)
 
 ## Client contract
 

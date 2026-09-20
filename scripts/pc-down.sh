@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Stop the Polypus process-compose project only.
+# MUST NOT remove Docker volumes (Phoenix / HyperDX data survives serve-down).
 set -euo pipefail
 
 if [[ -z "${PROCESS_COMPOSE_POLYPUS_SOCK:-}" ]]; then
@@ -21,4 +22,5 @@ if [[ ! -S "$SOCK" ]]; then
   exit 0
 fi
 
+# process-compose down stops processes only. Do not add docker compose down -v here.
 exec process-compose down -U -u "$SOCK"
