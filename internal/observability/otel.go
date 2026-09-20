@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/behaviorengineering/olly"
-	"github.com/behaviorengineering/olly/dump"
+	"github.com/behaviorengineering/olly/pkg/olly"
+	"github.com/behaviorengineering/olly/pkg/dump"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
