@@ -22,10 +22,22 @@ func runSystemOne(ctx context.Context, opts Options) ([]Result, error) {
 	row := timed(ChannelSystemOne, "evaluate", opts.SystemOneModel, func() (string, error) {
 		return systemOnePing(ctx, opts)
 	})
+	if row.Status == "fail" && !opts.RequireCF && isSystemOneBillingSkip(row.Detail) {
+		row.Status = "skip"
+		row.Detail = "Workers AI third-party billing: " + row.Detail
+		return []Result{row}, nil
+	}
 	if row.Status == "fail" {
 		return []Result{row}, fmt.Errorf("systemone smoke failed")
 	}
 	return []Result{row}, nil
+}
+
+func isSystemOneBillingSkip(detail string) bool {
+	d := strings.ToLower(detail)
+	return strings.Contains(d, "insufficient balance") ||
+		strings.Contains(d, "status 402") ||
+		strings.Contains(d, "use byok")
 }
 
 func systemOnePing(ctx context.Context, opts Options) (string, error) {

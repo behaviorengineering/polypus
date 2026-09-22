@@ -15,9 +15,10 @@ import (
 
 const systemOneTimeout = 120 * time.Second
 
-// SystemOne calls Workers AI typesafe/jev (or another systemone-capable model)
-// via POST /ai/run/{model}. Request body is the TypeSafe wire payload without
-// the model field (model is in the URL). Response is unwrapped from the
+// SystemOne calls Workers AI typesafe/jev (or another systemone-capable model).
+// Cloudflare's REST surface for this third-party model is POST /ai/run with
+// body {"model":"<id>","input":{...}}, not /ai/run/{model} with a bare payload
+// (that returns "No route for that URI"). Response is unwrapped from the
 // Workers AI {success, result, errors} envelope when present.
 func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]byte, error) {
 	if c == nil {
@@ -27,12 +28,19 @@ func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]by
 	if model == "" {
 		return nil, derrors.New(derrors.CodeInvalid, "cloudflare.SystemOne", "model required")
 	}
-	payload, err := stripModelField(body)
+	input, err := stripModelField(body)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.SystemOne", "request body")
 	}
+	payload, err := json.Marshal(struct {
+		Model string          `json:"model"`
+		Input json.RawMessage `json:"input"`
+	}{Model: model, Input: input})
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "cloudflare.SystemOne", "marshal run body")
+	}
 
-	target := runURL(c.apiBase, model)
+	target := runEndpointURL(c.apiBase)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "cloudflare.SystemOne", "request")
@@ -53,7 +61,8 @@ func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]by
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.SystemOne", "read body")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.SystemOne", "workers ai error").
+		msg := workersAIErrorMessage(raw)
+		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.SystemOne", msg).
 			With("status", strconv.Itoa(resp.StatusCode)).
 			With("body", truncate(string(raw), 256))
 	}
@@ -74,7 +83,7 @@ func (c *Client) doSystemOne(ctx context.Context, req *http.Request) (*http.Resp
 }
 
 // stripModelField removes top-level "model" from a JSON object so CF /run
-// receives only state + questions (and any other TypeSafe fields).
+// input receives only state + questions (and any other TypeSafe fields).
 func stripModelField(body []byte) ([]byte, error) {
 	body = bytes.TrimSpace(body)
 	if len(body) == 0 {
@@ -120,4 +129,23 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 	}
 	// Bare TypeSafe response (no Workers AI envelope).
 	return raw, nil
+}
+
+func runEndpointURL(apiBase string) string {
+	return strings.TrimRight(apiBase, "/") + "/run"
+}
+
+// workersAIErrorMessage prefers Cloudflare's errors[0].message when present.
+func workersAIErrorMessage(raw []byte) string {
+	var envelope struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err == nil && len(envelope.Errors) > 0 {
+		if msg := strings.TrimSpace(envelope.Errors[0].Message); msg != "" {
+			return msg
+		}
+	}
+	return "workers ai error"
 }

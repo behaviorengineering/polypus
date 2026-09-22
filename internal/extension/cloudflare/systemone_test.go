@@ -17,7 +17,7 @@ func TestSystemOneUnwrapsEnvelope(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method %s", r.Method)
 		}
-		if !strings.HasSuffix(r.URL.Path, "/run/typesafe/jev") {
+		if !strings.HasSuffix(r.URL.Path, "/run") || strings.Contains(r.URL.Path, "/run/") {
 			t.Errorf("path %s", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
@@ -28,13 +28,20 @@ func TestSystemOneUnwrapsEnvelope(t *testing.T) {
 		if err := json.Unmarshal(body, &m); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := m["model"]; ok {
-			t.Fatal("model should be stripped from CF body")
+		if string(m["model"]) != `"typesafe/jev"` {
+			t.Fatalf("model %s", m["model"])
 		}
-		if _, ok := m["state"]; !ok {
+		var input map[string]json.RawMessage
+		if err := json.Unmarshal(m["input"], &input); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := input["model"]; ok {
+			t.Fatal("model should not be nested under input")
+		}
+		if _, ok := input["state"]; !ok {
 			t.Fatal("state missing")
 		}
-		if _, ok := m["questions"]; !ok {
+		if _, ok := input["questions"]; !ok {
 			t.Fatal("questions missing")
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -124,6 +131,29 @@ func TestSystemOneSuccessFalse(t *testing.T) {
 	}
 	_, err := c.SystemOne(context.Background(), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
 	if err == nil || !strings.Contains(err.Error(), "quota exceeded") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestSystemOneHTTPErrorUsesCFMessage(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"errors":  []map[string]any{{"message": "Insufficient balance; add money to your gateway or use BYOK", "code": 2021}},
+			"result":  map[string]any{},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Client{
+		apiBase:      srv.URL + "/client/v4/accounts/acct/ai",
+		apiKey:       "k",
+		speechClient: srv.Client(),
+	}
+	_, err := c.SystemOne(context.Background(), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
+	if err == nil || !strings.Contains(err.Error(), "Insufficient balance") {
 		t.Fatalf("err=%v", err)
 	}
 }
