@@ -49,7 +49,17 @@ curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq '.data[].id'
 
 Compare to `config.yaml` `backends.*.models.allow`. Enabled list = first call; full upstream = second.
 
-### 3. Smoke chat (L1 transport)
+### 3. Smoke all Cloudflare channels
+
+With the gateway up and CF keys set:
+
+```bash
+make smoke-all
+```
+
+Runs chat (gemma), TTS (aura), STT (nova), and systemone (`typesafe/jev`) via `bin/polypus-smoke`. Any failure fails the command. On **push to main**, CI expands [`config.ci-smoke.yaml.example`](../../../config.ci-smoke.yaml.example) with secrets `CF_AI_API_KEY` and `CF_ACCOUNT_ID` and runs the same probes (`-require-cf`).
+
+### 3a. Smoke chat only (L1 transport)
 
 ```bash
 make smoke-chat
@@ -59,7 +69,7 @@ Default model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_
 
 ### 3b. Smoke named router (when `routers:` configured)
 
-Run after step 3 when `/v1/models` lists `router/…` ids or `~/.config/polypus/config.yaml` has `routers:` with a composed (`stage_router`) entry:
+Run after step 3a when `/v1/models` lists `router/…` ids or `~/.config/polypus/config.yaml` has `routers:` with a composed (`stage_router`) entry:
 
 ```bash
 make smoke-router
@@ -71,6 +81,16 @@ Default model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`
 - **Passthrough only** (e.g. `router/scribe`) → `POLYPUS_ROUTER_SMOKE_MODEL=router/scribe make smoke-router`; Switchyard not required (`POLYPUS_SWITCHYARD=0` OK).
 
 `/health/backends` probing Switchyard is **not** a substitute for this smoke; it only checks `:4000/health`.
+
+### 3c. Smoke systemone (TypeSafe / Jev)
+
+Requires `systemone_backend` enabled, `typesafe/jev` on the allow list, and `CF_AI_API_KEY` (skips when unset locally; CI uses `-require-cf`):
+
+```bash
+make smoke-systemone
+```
+
+Clients speak TypeSafe wire format at `POST /v1/systemone` (point `TYPESAFE_BASE_URL` at `:1320`).
 
 ### 4. Smoke audio
 

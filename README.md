@@ -6,7 +6,7 @@
 
 Agents: start at [AGENTS.md](AGENTS.md). Operator pack: [ai-copilots/](ai-copilots/).
 
-Local **OpenAI-compatible inference gateway**: one loopback face on `:1320`, many backend arms (chat, vision, embeddings, TTS/STT). Clients never talk to Cloudflare, MLX, or LM Studio directly.
+Local **OpenAI-compatible inference gateway** plus a TypeSafe/Decider **systemone** surface: one loopback face on `:1320`, many backend arms (chat, vision, embeddings, TTS/STT, structured evaluation). Clients never talk to Cloudflare, MLX, or LM Studio directly.
 
 ## Services
 
@@ -19,7 +19,7 @@ flowchart TB
     N[n8n and other apps]
   end
 
-  G["Gateway :1320<br/>OpenAI /v1/*"]
+  G["Gateway :1320<br/>OpenAI /v1/* + /v1/systemone"]
   SY["Switchyard :4000<br/>composed routers"]
 
   subgraph arms [Backends]
@@ -61,7 +61,7 @@ flowchart TB
 | `hyperdx` (`hyperdx`) | `:8080` / `:4319` / `:4318` | HyperDX (ClickStack local) for app traces/logs. OTLP gRPC `:4319`, HTTP `:4318` (avoids Phoenix `:4317`). |
 | (external) | `:1234` | LM Studio. Not started by Polypus. |
 
-**Cloudflare (`cf_local`):** When `cf_local` is configured with `CF_AI_API_KEY` and `CF_ACCOUNT_ID`, the gateway uses Workers AI. **OpenAI-shaped** chat and embeddings dial through Bifrost to the Workers AI `/ai/v1` base URL. **TTS/STT** also enter Bifrost; a PreLLMHook plugin short-circuits them onto the in-process Cloudflare extension `/ai/run` path (Workers AI has no `/ai/v1/audio/*` OpenAI-compat routes; live spike returned `400 No route for that URI`). Model Search catalog stays on the extension. Extension HTTP clients are process-scoped (keyed by backend id + bearer). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` or the process environment.
+**Cloudflare (`cf_local`):** When `cf_local` is configured with `CF_AI_API_KEY` and `CF_ACCOUNT_ID`, the gateway uses Workers AI. **OpenAI-shaped** chat and embeddings dial through Bifrost to the Workers AI `/ai/v1` base URL. **TTS/STT** also enter Bifrost; a PreLLMHook plugin short-circuits them onto the in-process Cloudflare extension `/ai/run` path (Workers AI has no `/ai/v1/audio/*` OpenAI-compat routes; live spike returned `400 No route for that URI`). **System One** (`POST /v1/systemone`) is a dedicated gateway path (not Bifrost): TypeSafe/Decider wire format in, Cloudflare `typesafe/jev` via `/ai/run` (envelope unwrap), or transparent passthrough to any backend that already speaks `/v1/systemone`. Model Search catalog stays on the extension. Extension HTTP clients are process-scoped (keyed by backend id + bearer). No sidecar on `:1323`. Case apps still never store remote URLs; credentials live in `stack/.env` or the process environment.
 
 **Bifrost:** Bifrost fronts every OpenAI-compatible outbound dial Polypus can use: leaf backends, Cloudflare chat/embed, composed Switchyard hops (`provider` id `switchyard`), and Cloudflare speech/transcription (plugin → `/run`). Model Search is not a Bifrost surface.
 
@@ -80,6 +80,8 @@ make smoke-local  # TTS via MLX (needs mlx_local up)
 make smoke-stt-local  # TTS+STT via MLX
 make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
 make smoke-router # router/investigator (needs routers: + Switchyard for composed types)
+make smoke-systemone  # TypeSafe /v1/systemone via cf_local/typesafe/jev (skips without CF_AI_API_KEY)
+make smoke-all    # chat + TTS + STT + systemone via bin/polypus-smoke (gateway must be up)
 ```
 
 Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/polypus/config.yaml`). Override with `POLYPUS_CONFIG`. Repo `config.yaml` is a local fallback only (gitignored). Cache: `~/.cache/polypus/`; process-compose socket: `~/.local/state/polypus/`.
@@ -92,9 +94,11 @@ Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_
 
 ## Live smoke
 
-Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat smoke already defaults to a cf_local chat model.
+Public package: import `github.com/behaviorengineering/polypus/pkg/polypus` for `Serve` / `Smoke`. Quality runners live in `internal/smoke`; `cmd/polypus-smoke` is a thin CLI.
 
-Prereqs for cloud speech and cf_local chat (`stack/.env`):
+Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat defaults to gemma; systemone to `typesafe/jev`.
+
+Prereqs for cloud channels (`stack/.env` locally; GitHub Actions secrets on **push to main**):
 
 ```env
 CF_AI_API_KEY=...
@@ -104,23 +108,30 @@ CF_ACCOUNT_ID=...
 ```bash
 make build
 make serve
-make smoke          # cf_local TTS
+make smoke-all      # chat + TTS + STT + systemone (polypus-smoke)
+make smoke          # cf_local TTS only
 make smoke-stt      # cf_local TTS then STT
-make smoke-chat     # cf_local/@cf/google/gemma-4-26b-a4b-it
+make smoke-chat     # gemma chat
 make smoke-local    # MLX TTS (when mlx_local is up)
 make smoke-stt-local
-make smoke-router   # default router/investigator (override POLYPUS_ROUTER_SMOKE_MODEL)
+make smoke-router   # default router/investigator
+make smoke-systemone
 ```
+
+CI on `main` runs the same multi-channel smoke with repository secrets `CF_AI_API_KEY` / `CF_ACCOUNT_ID`, using [`config.ci-smoke.yaml.example`](config.ci-smoke.yaml.example) (chat + TTS + STT + systemone on `cf_local` only; no MLX or Switchyard). PRs stay unit/vet/build only.
 
 ## Layout
 
 ```text
 polypus/
-  cmd/polypus/                    # Go gateway binary
-  internal/gateway/               # HTTP surface (/health, /v1/models, chat/embed/audio)
+  pkg/polypus/                    # Public product API (Serve, Smoke)
+  cmd/polypus/                    # Thin gateway binary
+  cmd/polypus-smoke/              # Thin multi-channel smoke CLI
+  internal/gateway/               # HTTP surface (/health, /v1/models, chat/embed/audio, /v1/systemone)
+  internal/smoke/                 # Quality probes (chat/tts/stt/systemone)
   internal/router/                # Bifrost SDK + registry + policy
   internal/switchyard/            # routers: YAML → routes.toml, Switchyard client
-  internal/extension/cloudflare/  # Model Search + /ai/run speech + Bifrost speech plugin
+  internal/extension/cloudflare/  # Model Search + /ai/run speech + systemone + Bifrost speech plugin
   providers/switchyard/           # git submodule (switchyard-server)
   docs/switchyard/                # routing type guides
   config.yaml.example             # template → ~/.config/polypus/config.yaml
@@ -143,6 +154,25 @@ polypus/
 | `POST` | `/v1/audio/speech` | TTS |
 | `POST` | `/v1/audio/transcriptions` | STT |
 | `GET` | `/v1/audio/voices` | Voice list |
+| `POST` | `/v1/systemone` | TypeSafe / Decider structured evaluation (noul / choice / score) |
+
+Point TypeSafe SDKs at the gateway with `TYPESAFE_BASE_URL=http://127.0.0.1:1320` and model `cf_local/typesafe/jev` (or bare `typesafe/jev` when `systemone_backend.default` is `cf_local`).
+
+```bash
+curl -sS http://127.0.0.1:1320/v1/systemone \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "cf_local/typesafe/jev",
+    "state": "Help! My payouts have been failing for 3 days.",
+    "questions": {
+      "is_urgent": {
+        "type": "noul",
+        "instructions": "Does this convey urgency?",
+        "criteria": {"true": "Explicitly time-sensitive", "false": "No urgency expressed"}
+      }
+    }
+  }' | jq .
+```
 
 **Inventory vs enabled**
 

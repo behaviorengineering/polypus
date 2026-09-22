@@ -44,3 +44,69 @@ jobs:
 
       - name: go build
         run: go build ./...
+
+  smoke:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: quality
+    env:
+      CF_AI_API_KEY: ${{ secrets.CF_AI_API_KEY }}
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      POLYPUS_HOST: 127.0.0.1
+      POLYPUS_PORT: "1320"
+      POLYPUS_SWITCHYARD: "0"
+      POLYPUS_PHOENIX: "0"
+      POLYPUS_HYPERDX: "0"
+      POLYPUS_OTEL: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Require Cloudflare secrets
+        run: |
+          if [ -z "$CF_AI_API_KEY" ] || [ -z "$CF_ACCOUNT_ID" ]; then
+            echo "CF_AI_API_KEY and CF_ACCOUNT_ID secrets are required for main smoke" >&2
+            exit 1
+          fi
+
+      - name: Build gateway and smoke
+        run: |
+          mkdir -p bin
+          go build -buildvcs=false -o bin/polypus ./cmd/polypus
+          go build -buildvcs=false -o bin/polypus-smoke ./cmd/polypus-smoke
+
+      - name: Write CI smoke config
+        run: |
+          mkdir -p "$HOME/.config/polypus"
+          sed "s|\${CF_ACCOUNT_ID}|${CF_ACCOUNT_ID}|g" config.ci-smoke.yaml.example \
+            > "$HOME/.config/polypus/config.yaml"
+          echo "POLYPUS_CONFIG=$HOME/.config/polypus/config.yaml" >> "$GITHUB_ENV"
+
+      - name: Start gateway
+        run: |
+          ./bin/polypus serve --host 127.0.0.1 --port 1320 > /tmp/polypus-gateway.log 2>&1 &
+          echo $! > /tmp/polypus-gateway.pid
+          for i in $(seq 1 60); do
+            if curl -sf "http://127.0.0.1:1320/health" >/dev/null; then
+              echo "gateway ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "gateway failed to start" >&2
+          cat /tmp/polypus-gateway.log >&2 || true
+          exit 1
+
+      - name: Multi-channel smoke
+        run: ./bin/polypus-smoke -base-url http://127.0.0.1:1320 -channels all -require-cf
+
+      - name: Stop gateway
+        if: always()
+        run: |
+          if [ -f /tmp/polypus-gateway.pid ]; then
+            kill "$(cat /tmp/polypus-gateway.pid)" 2>/dev/null || true
+          fi
