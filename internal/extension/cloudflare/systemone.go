@@ -96,7 +96,7 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "empty response")
 	}
 	var envelope struct {
-		Success *bool           `json:"success"`
+		Success *bool `json:"success"`
 		Errors  []struct {
 			Message string `json:"message"`
 		} `json:"errors"`
