@@ -152,6 +152,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		speechHandler{g.shared}.serveTranscription(w, r)
 	case r.URL.Path == "/v1/audio/voices" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		g.proxy.ServeHTTP(w, r)
+	case r.URL.Path == "/v1/systemone" && r.Method == http.MethodPost:
+		systemOneHandler{g.shared}.serveSystemOne(w, r)
 	default:
 		http.NotFound(w, r)
 	}

@@ -7,5 +7,6 @@ import (
 )
 
 func main() {
+	// Thin wiring: CLI stays in internal/cli; public Serve/Smoke live in pkg/polypus.
 	os.Exit(cli.Run(os.Args[1:]))
 }

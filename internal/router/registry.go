@@ -76,6 +76,18 @@ func (r *Registry) ResolveSTT(model string) (schemas.ModelProvider, string, erro
 	return schemas.ModelProvider(id), downstream, nil
 }
 
+// DefaultSystemOneModel is used when the client omits model on POST /v1/systemone.
+const DefaultSystemOneModel = "typesafe/jev"
+
+// ResolveSystemOne picks backend and model for TypeSafe / Decider systemone evaluation.
+func (r *Registry) ResolveSystemOne(model string) (string, string, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = DefaultSystemOneModel
+	}
+	return r.resolveCapability(config.CapSystemOne, r.cfg.EffectiveSystemOneBackend(), model)
+}
+
 func (r *Registry) resolveCapability(cap config.Capability, defaultBackend, model string) (string, string, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {

@@ -1,4 +1,4 @@
-package chatsmoke
+package smoke
 
 import (
 	"context"

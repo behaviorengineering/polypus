@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/internal/gateway"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/behaviorengineering/polypus/pkg/polypus"
 )
 
 func runServe(args []string) int {
@@ -52,6 +52,7 @@ func runServe(args []string) int {
 	printCap("tts_backend", rcfg.TTS)
 	printCap("stt_backend", rcfg.STT)
 	printCap("proxy_backend", rcfg.Proxy)
+	printCap("systemone_backend", rcfg.SystemOne)
 	for _, id := range rcfg.BackendIDs() {
 		b := rcfg.Backends[id]
 		fmt.Fprintf(os.Stderr, "  backend %s: %s (%v)\n", id, b.BaseURL, b.Capabilities)
@@ -76,7 +77,7 @@ func runServe(args []string) int {
 			_ = shutdownOTEL(ctx)
 		}
 	}()
-	if err := gateway.ListenAndServe(opts); err != nil {
+	if err := polypus.Serve(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: %v\n", err)
 		return 1
 	}

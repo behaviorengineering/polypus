@@ -10,6 +10,8 @@
 
 Bootstrap: `cp config.yaml.example ~/.config/polypus/config.yaml`
 
+CI multi-channel smoke (main only) uses `config.ci-smoke.yaml.example`: `cf_local` chat + TTS + STT + systemone only (no MLX, Switchyard, vision, or embed). Expand `${CF_ACCOUNT_ID}` before serve.
+
 ## Ports
 
 | Service | Default | Role |
@@ -82,7 +84,7 @@ backends:
     base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
-    capabilities: [chat, vision, tts, stt, voices]
+    capabilities: [chat, vision, tts, stt, voices, systemone]
     models:
       sync: true
       allow: [...]
@@ -94,14 +96,14 @@ backends:
       allow: [...]
 ```
 
-Capability defaults use `*_backend` blocks (`enabled` + `default`): `chat_backend`, `vision_backend`, `embed_backend`, `tts_backend`, `stt_backend`, `proxy_backend`. Set `enabled: false` (or omit) to skip a capability. Remote backends (`remote: true`) load when listed in config and their `auth.bearer_env` is set. `proxy_backend` covers voices and may inherit `tts_backend.default` when enabled with an empty default.
+Capability defaults use `*_backend` blocks (`enabled` + `default`): `chat_backend`, `vision_backend`, `embed_backend`, `tts_backend`, `stt_backend`, `proxy_backend`, `systemone_backend`. Set `enabled: false` (or omit) to skip a capability. Remote backends (`remote: true`) load when listed in config and their `auth.bearer_env` is set. `proxy_backend` covers voices and may inherit `tts_backend.default` when enabled with an empty default. `systemone_backend` fronts `POST /v1/systemone` (TypeSafe/Decider wire; Cloudflare `typesafe/jev` via `/ai/run`).
 
 Client header `X-Polypus-Timeout` (duration or seconds) clamps to `timeouts.min`..`timeouts.max` (5s to 900s).
 
 ## Model ids
 
 - Gateway rewrites ids as `backend_id/downstream-model`.
-- Examples: `cf_local/@cf/google/gemma-4-26b-a4b-it`, `lm_studio/allenai/olmocr-2-7b`.
+- Examples: `cf_local/@cf/google/gemma-4-26b-a4b-it`, `lm_studio/allenai/olmocr-2-7b`, `cf_local/typesafe/jev`.
 - Named routers: `router/<name>` (e.g. `router/investigator`, `router/scribe`).
 - No prefix → capability default backend applies.
 

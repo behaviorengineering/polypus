@@ -13,12 +13,13 @@ import (
 type Capability string
 
 const (
-	CapChat   Capability = "chat"
-	CapVision Capability = "vision"
-	CapEmbed  Capability = "embed"
-	CapTTS    Capability = "tts"
-	CapSTT    Capability = "stt"
-	CapVoices Capability = "voices"
+	CapChat      Capability = "chat"
+	CapVision    Capability = "vision"
+	CapEmbed     Capability = "embed"
+	CapTTS       Capability = "tts"
+	CapSTT       Capability = "stt"
+	CapVoices    Capability = "voices"
+	CapSystemOne Capability = "systemone"
 )
 
 // BackendDef is one OpenAI-compatible inference worker.
@@ -42,7 +43,7 @@ func (b BackendDef) IsCloudflareExtension() bool {
 	return b.HasExtension(ExtensionCloudflare)
 }
 
-// CapabilityBackend is an optional capability default (chat, vision, embed, TTS, STT, proxy).
+// CapabilityBackend is an optional capability default (chat, vision, embed, TTS, STT, proxy, systemone).
 type CapabilityBackend struct {
 	Enabled bool
 	Default string
@@ -56,6 +57,7 @@ type RouterConfig struct {
 	TTS        CapabilityBackend     `yaml:"-"`
 	STT        CapabilityBackend     `yaml:"-"`
 	Proxy      CapabilityBackend     `yaml:"-"`
+	SystemOne  CapabilityBackend     `yaml:"-"`
 	Timeouts   Timeouts              `yaml:"-"`
 	Policy     RouterPolicy          `yaml:"policy"`
 	Backends   map[string]BackendDef `yaml:"backends"`
@@ -111,6 +113,14 @@ func (c RouterConfig) EffectiveProxyBackend() string {
 	return c.Proxy.Default
 }
 
+// EffectiveSystemOneBackend returns the systemone default when enabled; otherwise empty.
+func (c RouterConfig) EffectiveSystemOneBackend() string {
+	if !c.SystemOne.Enabled {
+		return ""
+	}
+	return c.SystemOne.Default
+}
+
 // HasCapability reports whether the backend supports a capability.
 func (b BackendDef) HasCapability(cap Capability) bool {
 	for _, c := range b.Capabilities {
@@ -127,18 +137,19 @@ type capabilityBackendFile struct {
 }
 
 type routerFile struct {
-	ChatBackend   capabilityBackendFile       `yaml:"chat_backend"`
-	VisionBackend capabilityBackendFile       `yaml:"vision_backend"`
-	EmbedBackend  capabilityBackendFile       `yaml:"embed_backend"`
-	TTSBackend    capabilityBackendFile       `yaml:"tts_backend"`
-	STTBackend    capabilityBackendFile       `yaml:"stt_backend"`
-	ProxyBackend  capabilityBackendFile       `yaml:"proxy_backend"`
-	Timeouts      timeoutsFile                `yaml:"timeouts"`
-	Policy        routerPolicyFile            `yaml:"policy"`
-	Processes     processesFile               `yaml:"processes"`
-	Backends      map[string]backendFileEntry `yaml:"backends"`
-	Switchyard    switchyardFile              `yaml:"switchyard"`
-	Routers       map[string]namedRouterFile  `yaml:"routers"`
+	ChatBackend      capabilityBackendFile       `yaml:"chat_backend"`
+	VisionBackend    capabilityBackendFile       `yaml:"vision_backend"`
+	EmbedBackend     capabilityBackendFile       `yaml:"embed_backend"`
+	TTSBackend       capabilityBackendFile       `yaml:"tts_backend"`
+	STTBackend       capabilityBackendFile       `yaml:"stt_backend"`
+	ProxyBackend     capabilityBackendFile       `yaml:"proxy_backend"`
+	SystemOneBackend capabilityBackendFile       `yaml:"systemone_backend"`
+	Timeouts         timeoutsFile                `yaml:"timeouts"`
+	Policy           routerPolicyFile            `yaml:"policy"`
+	Processes        processesFile               `yaml:"processes"`
+	Backends         map[string]backendFileEntry `yaml:"backends"`
+	Switchyard       switchyardFile              `yaml:"switchyard"`
+	Routers          map[string]namedRouterFile  `yaml:"routers"`
 }
 
 type backendFileEntry struct {
@@ -214,6 +225,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 		TTS:        parseCapabilityBackend(file.TTSBackend),
 		STT:        parseCapabilityBackend(file.STTBackend),
 		Proxy:      parseCapabilityBackend(file.ProxyBackend),
+		SystemOne:  parseCapabilityBackend(file.SystemOneBackend),
 		Timeouts:   timeouts,
 		Policy:     file.Policy.merge(),
 		Backends:   make(map[string]BackendDef, len(file.Backends)),
@@ -285,6 +297,10 @@ func applyRouterEnvOverrides(cfg *RouterConfig, opts ServeOptions) {
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_PROXY_BACKEND")); v != "" {
 		cfg.Proxy.Default = v
 		cfg.Proxy.Enabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_SYSTEMONE_BACKEND")); v != "" {
+		cfg.SystemOne.Default = v
+		cfg.SystemOne.Enabled = true
 	}
 	// CLI --backend overrides mlx_local URL when present.
 	if opts.BackendURL != "" {
@@ -363,6 +379,9 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 	if err := normalizeCapabilityBackend(cfg, &cfg.Proxy, "proxy_backend", true); err != nil {
 		return err
 	}
+	if err := normalizeCapabilityBackend(cfg, &cfg.SystemOne, "systemone_backend", false); err != nil {
+		return err
+	}
 	for id, b := range cfg.Backends {
 		if b.ID == "" {
 			b.ID = id
@@ -410,6 +429,11 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 	}
 	if cfg.Proxy.Enabled {
 		if err := requireBackend(cfg, cfg.Proxy.Default, CapVoices, "proxy_backend.default"); err != nil {
+			return err
+		}
+	}
+	if cfg.SystemOne.Enabled {
+		if err := requireBackend(cfg, cfg.SystemOne.Default, CapSystemOne, "systemone_backend.default"); err != nil {
 			return err
 		}
 	}

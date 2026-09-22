@@ -457,7 +457,8 @@ func isDefaultBackend(cfg config.RouterConfig, backendID string) bool {
 		backendID == cfg.EffectiveChatBackend() ||
 		backendID == cfg.EffectiveVisionBackend() ||
 		backendID == cfg.EffectiveEmbedBackend() ||
-		backendID == cfg.EffectiveProxyBackend()
+		backendID == cfg.EffectiveProxyBackend() ||
+		backendID == cfg.EffectiveSystemOneBackend()
 }
 
 func firstNonEmpty(vals ...string) string {

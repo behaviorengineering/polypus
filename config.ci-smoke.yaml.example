@@ -1,10 +1,13 @@
-# Polypus router: Cloudflare Workers AI via in-process extension.
-# Clients call Polypus gateway :1320 only. Needs CF_AI_API_KEY and CF_ACCOUNT_ID.
-# Copy to ~/.config/polypus/config.yaml or set POLYPUS_CONFIG.
+# Polypus CI / L1 smoke leaf: chat + TTS + STT + systemone on cf_local only.
+# Used by .github/workflows/ci.yml on push to main (and locally with POLYPUS_CONFIG).
+# Needs CF_AI_API_KEY and CF_ACCOUNT_ID. No MLX, Switchyard, vision, or embed.
 
 processes:
   mlx: false
 
+chat_backend:
+  enabled: true
+  default: cf_local
 tts_backend:
   enabled: true
   default: cf_local
@@ -14,22 +17,14 @@ stt_backend:
 proxy_backend:
   enabled: true
   default: cf_local
-chat_backend:
-  enabled: true
-  default: cf_local
-vision_backend:
-  enabled: true
-  default: cf_local
 systemone_backend:
   enabled: true
   default: cf_local
+
 timeouts:
   min: 5s
   max: 900s
-  chat: 120s
-  chat_thinking: 600s
-  vision: 300s
-  embed: 60s
+  chat: 60s
   speech: 180s
   backends:
     cf_local:
@@ -42,14 +37,11 @@ backends:
     base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
-    capabilities: [chat, vision, tts, stt, voices, systemone]
+    capabilities: [chat, tts, stt, voices, systemone]
     models:
       sync: true
       allow:
-        - "@cf/zai-org/glm-4.7-flash"
-        - "@cf/ibm-granite/granite-4.0-h-micro"
         - "@cf/google/gemma-4-26b-a4b-it"
-        - "@cf/openai/gpt-oss-20b"
         - "@cf/deepgram/aura-2-en"
         - "@cf/deepgram/nova-3"
         - "typesafe/jev"

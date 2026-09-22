@@ -1,4 +1,6 @@
-.PHONY: help build build-gateway build-chat-smoke install test vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-higgs smoke-stt smoke-stt-local smoke-all switchyard-build docker-build
+.PHONY: help build build-gateway build-smoke install test vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-higgs smoke-stt smoke-stt-local smoke-systemone smoke-all switchyard-build docker-build
+
+.DEFAULT_GOAL := help
 
 include ports.env
 export POLYPUS_HOST POLYPUS_PORT POLYPUS_MLX_HOST POLYPUS_MLX_PORT POLYPUS_SWITCHYARD_HOST POLYPUS_SWITCHYARD_PORT
@@ -15,8 +17,7 @@ PARENT_MONOREPO_ROOT :=
 ifneq ($(wildcard $(abspath $(CURDIR)/../..)/stack/.env.example),)
 PARENT_MONOREPO_ROOT := $(abspath $(CURDIR)/../..)
 endif
-CF_ADAPTER_BIN :=
-CHAT_SMOKE_BIN := $(dir $(BINARY))polypus-chat-smoke
+SMOKE_BIN := $(dir $(BINARY))polypus-smoke
 POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/google/gemma-4-26b-a4b-it
 POLYPUS_ROUTER_SMOKE_MODEL ?= router/investigator
 
@@ -31,34 +32,39 @@ GO_BUILDFLAGS := -buildvcs=false
 help:
 	@echo "polypus — local OpenAI speech gateway (TTS/STT backends behind loopback)"
 	@echo ""
-	@echo "  make build         Build $(BINARY) + bin/switchyard-server"
-	@echo "  make switchyard-build  Build bin/switchyard-server (Rust; also part of make build)"
-	@echo "  make mlx-sync      uv sync for backends/mlx"
-	@echo "  make serve         process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 + HyperDX :8080 (POLYPUS_PHOENIX=0 / POLYPUS_HYPERDX=0 to skip)"
-	@echo "  make serve-down    Stop this Polypus process-compose project only"
-	@echo "  make smoke         curl TTS smoke via gateway (cf_local default)"
-	@echo "  make smoke-local   TTS smoke via MLX (POLYPUS_SMOKE_LOCAL=1)"
-	@echo "  make smoke-chat    L1 chat transport smoke (polypus-chat-smoke)"
-	@echo "  make smoke-router  Named router smoke (router/investigator by default)"
-	@echo "  make smoke-higgs   Higgs v2 TTS smoke (narration alternative)"
-	@echo "  make smoke-stt     TTS then STT round-trip (cf_local default)"
-	@echo "  make smoke-stt-local  TTS+STT round-trip via MLX"
-	@echo "  make smoke-all     TTS + STT smoke (cloud)"
-	@echo "  make docker-build  Build $(IMAGE_REPO):$(IMAGE_TAG)"
-	@echo "  make test          go test ./..."
-	@echo "  make vet           go vet ./..."
-	@echo "  make lint          golangci-lint (go run @latest) on ./cmd/... ./internal/..."
-	@echo "  make ci            tidy + gofmt + vet + race tests + build"
+	@echo "  make build              Build $(BINARY) + $(SMOKE_BIN) + bin/switchyard-server"
+	@echo "  make build-gateway      Build the polypus gateway binary"
+	@echo "  make build-smoke        Build polypus-smoke (multi-channel L1 probes)"
+	@echo "  make switchyard-build   Build bin/switchyard-server (Rust; also part of make build)"
+	@echo "  make install            Install polypus into GOPATH/bin"
+	@echo "  make mlx-sync           uv sync for backends/mlx"
+	@echo "  make serve              process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 + HyperDX :8080 (POLYPUS_PHOENIX=0 / POLYPUS_HYPERDX=0 to skip)"
+	@echo "  make serve-down         Stop this Polypus process-compose project only"
+	@echo "  make smoke              TTS smoke via gateway (cf_local default)"
+	@echo "  make smoke-local        TTS smoke via MLX"
+	@echo "  make smoke-chat         L1 chat smoke via polypus-smoke (cheap gemma)"
+	@echo "  make smoke-router       Named router chat smoke (router/investigator by default)"
+	@echo "  make smoke-higgs        Higgs v2 TTS smoke (MLX)"
+	@echo "  make smoke-stt          TTS then STT round-trip (cf_local)"
+	@echo "  make smoke-stt-local    TTS+STT via MLX"
+	@echo "  make smoke-systemone    TypeSafe /v1/systemone (skips without CF_AI_API_KEY)"
+	@echo "  make smoke-all          chat + TTS + STT + systemone via polypus-smoke (gateway must be up)"
+	@echo "  make docker-build       Build $(IMAGE_REPO):$(IMAGE_TAG)"
+	@echo "  make test               go test ./..."
+	@echo "  make vet                go vet ./..."
+	@echo "  make lint               golangci-lint on ./cmd/... ./internal/... ./pkg/..."
+	@echo "  make tidy               go mod tidy"
+	@echo "  make ci                 tidy check + gofmt + vet + race tests + build"
 
-build: build-gateway build-chat-smoke switchyard-build
+build: build-gateway build-smoke switchyard-build
 
 build-gateway:
 	@mkdir -p $(dir $(BINARY))
 	go build $(GO_BUILDFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/polypus
 
-build-chat-smoke:
-	@mkdir -p $(dir $(CHAT_SMOKE_BIN))
-	go build $(GO_BUILDFLAGS) -o $(CHAT_SMOKE_BIN) ./cmd/polypus-chat-smoke
+build-smoke:
+	@mkdir -p $(dir $(SMOKE_BIN))
+	go build $(GO_BUILDFLAGS) -o $(SMOKE_BIN) ./cmd/polypus-smoke
 
 install:
 	go build $(GO_BUILDFLAGS) -ldflags "$(LDFLAGS)" -o $(shell go env GOPATH)/bin/polypus ./cmd/polypus
@@ -83,14 +89,12 @@ smoke-local:
 	chmod +x scripts/smoke.sh
 	POLYPUS_SMOKE_LOCAL=1 ./scripts/smoke.sh
 
-smoke-chat: build-chat-smoke
-	$(CHAT_SMOKE_BIN) -model $(POLYPUS_CHAT_SMOKE_MODEL)
+smoke-chat: build-smoke
+	$(SMOKE_BIN) -channels chat -chat-model $(POLYPUS_CHAT_SMOKE_MODEL)
 
-smoke-router: build-chat-smoke
-	$(CHAT_SMOKE_BIN) -model $(POLYPUS_ROUTER_SMOKE_MODEL)
+smoke-router: build-smoke
+	$(SMOKE_BIN) -channels chat -chat-model $(POLYPUS_ROUTER_SMOKE_MODEL)
 
-# cargo install --root DIR places the binary at DIR/bin/<name>; use --root .
-# so the result is ./bin/switchyard-server (what pc-switchyard.sh execs).
 switchyard-build:
 	@test -f providers/switchyard/Cargo.toml || ( \
 		echo "switchyard-build: missing providers/switchyard (run: git submodule update --init providers/switchyard)" >&2; \
@@ -120,7 +124,11 @@ smoke-stt-local:
 	chmod +x scripts/smoke-stt.sh
 	POLYPUS_SMOKE_LOCAL=1 ./scripts/smoke-stt.sh
 
-smoke-all: smoke smoke-stt
+smoke-systemone: build-smoke
+	$(SMOKE_BIN) -channels systemone
+
+smoke-all: build-smoke
+	$(SMOKE_BIN) -channels all
 
 docker-build:
 	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
@@ -132,7 +140,7 @@ vet:
 	go vet ./...
 
 lint:
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./cmd/... ./internal/...
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./cmd/... ./internal/... ./pkg/...
 
 tidy:
 	go mod tidy
