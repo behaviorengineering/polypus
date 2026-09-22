@@ -98,45 +98,60 @@ func stripModelField(body []byte) ([]byte, error) {
 }
 
 // unwrapRunResult returns the TypeSafe {model, answers, usage} payload.
-// Workers AI may wrap it as:
+// Workers AI may wrap it as one or both of:
 //   - {success, result, errors} (classic envelope)
 //   - {state, result, gatewayMetadata, model} (Unified gateway; answers under result)
+//
+// Live CF responses for typesafe/jev currently nest Unified inside classic
+// success.result, so we peel until answers are top-level.
 // Bare TypeSafe payloads pass through.
 func unwrapRunResult(raw []byte) ([]byte, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
 		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "empty response")
 	}
-	var envelope struct {
-		Success *bool `json:"success"`
-		Errors  []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-		Result json.RawMessage `json:"result"`
-		State  string          `json:"state"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "parse json")
-	}
-	if envelope.Success != nil {
-		if !*envelope.Success {
-			msg := "cloudflare workers ai error"
-			if len(envelope.Errors) > 0 && envelope.Errors[0].Message != "" {
-				msg = envelope.Errors[0].Message
+	cur := raw
+	for range 3 {
+		var envelope struct {
+			Success *bool `json:"success"`
+			Errors  []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+			Result json.RawMessage `json:"result"`
+			State  string          `json:"state"`
+		}
+		if err := json.Unmarshal(cur, &envelope); err != nil {
+			return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "parse json")
+		}
+		if looksLikeTypeSafeResult(cur) {
+			return cur, nil
+		}
+		if envelope.Success != nil {
+			if !*envelope.Success {
+				msg := "cloudflare workers ai error"
+				if len(envelope.Errors) > 0 && envelope.Errors[0].Message != "" {
+					msg = envelope.Errors[0].Message
+				}
+				return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapRunResult", msg)
 			}
-			return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapRunResult", msg)
+			if len(envelope.Result) == 0 {
+				return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "empty result")
+			}
+			cur = envelope.Result
+			continue
 		}
+		// Unified gateway (no success flag): peel result when it looks TypeSafe
+		// or itself wraps further.
 		if len(envelope.Result) > 0 {
-			return envelope.Result, nil
+			cur = envelope.Result
+			continue
 		}
-		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "empty result")
+		break
 	}
-	// Unified gateway: {state, result:{answers,...}, gatewayMetadata, model}
-	if len(envelope.Result) > 0 && looksLikeTypeSafeResult(envelope.Result) {
-		return envelope.Result, nil
+	if looksLikeTypeSafeResult(cur) {
+		return cur, nil
 	}
-	// Bare TypeSafe response (no Workers AI / Unified envelope).
-	return raw, nil
+	return cur, nil
 }
 
 func looksLikeTypeSafeResult(raw json.RawMessage) bool {
