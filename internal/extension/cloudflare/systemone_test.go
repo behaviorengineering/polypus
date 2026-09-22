@@ -113,6 +113,47 @@ func TestSystemOneBareResponse(t *testing.T) {
 	}
 }
 
+func TestSystemOneUnwrapsUnifiedGateway(t *testing.T) {
+	t.Parallel()
+	const wantAnswers = `{"is_urgent":{"noul":0.95,"type":"noul"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"gatewayMetadata": map[string]string{"keySource": "Unified"},
+			"model":           "typesafe/jev",
+			"result": map[string]any{
+				"answers": json.RawMessage(wantAnswers),
+				"model":   "jev-1.13.0",
+				"usage":   map[string]int{"input_tokens": 307, "output_tokens": 23},
+			},
+			"state": "Completed",
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Client{
+		apiBase:      srv.URL + "/client/v4/accounts/acct/ai",
+		apiKey:       "k",
+		speechClient: srv.Client(),
+	}
+	out, err := c.SystemOne(context.Background(), "typesafe/jev", []byte(`{"state":"s","questions":{"is_urgent":{"type":"noul","instructions":"?"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Model   string          `json:"model"`
+		Answers json.RawMessage `json:"answers"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "jev-1.13.0" {
+		t.Fatalf("model %q", got.Model)
+	}
+	if string(got.Answers) != wantAnswers {
+		t.Fatalf("answers %s", got.Answers)
+	}
+}
+
 func TestSystemOneSuccessFalse(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

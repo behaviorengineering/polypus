@@ -98,7 +98,10 @@ func stripModelField(body []byte) ([]byte, error) {
 }
 
 // unwrapRunResult returns the TypeSafe {model, answers, usage} payload.
-// Workers AI often wraps it in {success, result, errors}; bare payloads pass through.
+// Workers AI may wrap it as:
+//   - {success, result, errors} (classic envelope)
+//   - {state, result, gatewayMetadata, model} (Unified gateway; answers under result)
+// Bare TypeSafe payloads pass through.
 func unwrapRunResult(raw []byte) ([]byte, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -110,6 +113,7 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 			Message string `json:"message"`
 		} `json:"errors"`
 		Result json.RawMessage `json:"result"`
+		State  string          `json:"state"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "parse json")
@@ -127,8 +131,22 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 		}
 		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "empty result")
 	}
-	// Bare TypeSafe response (no Workers AI envelope).
+	// Unified gateway: {state, result:{answers,...}, gatewayMetadata, model}
+	if len(envelope.Result) > 0 && looksLikeTypeSafeResult(envelope.Result) {
+		return envelope.Result, nil
+	}
+	// Bare TypeSafe response (no Workers AI / Unified envelope).
 	return raw, nil
+}
+
+func looksLikeTypeSafeResult(raw json.RawMessage) bool {
+	var probe struct {
+		Answers json.RawMessage `json:"answers"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	return len(bytes.TrimSpace(probe.Answers)) > 0 && string(bytes.TrimSpace(probe.Answers)) != "null"
 }
 
 func runEndpointURL(apiBase string) string {
