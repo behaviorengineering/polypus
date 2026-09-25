@@ -11,8 +11,8 @@ var version = "dev"
 // Run dispatches polypus subcommands. Returns a process exit code.
 func Run(args []string) int {
 	if len(args) == 0 {
-		printUsage()
-		return 2
+		fmt.Print(agentOperatingGuide())
+		return 0
 	}
 	switch args[0] {
 	case "version", "-version", "--version":
