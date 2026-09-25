@@ -55,6 +55,10 @@ export PHOENIX_OTLP_PORT="${PHOENIX_OTLP_PORT:-4317}"
 export HYPERDX_PORT="${HYPERDX_PORT:-8080}"
 export HYPERDX_OTLP_GRPC_PORT="${HYPERDX_OTLP_GRPC_PORT:-4319}"
 export HYPERDX_OTLP_HTTP_PORT="${HYPERDX_OTLP_HTTP_PORT:-4318}"
+# ClickStack OTel table TTL (custom exporter yaml cannot override the built-in clickhouse exporter).
+export HYPERDX_OTEL_EXPORTER_TABLES_TTL="${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-1h}"
+# false by default; set true once to rewrite existing otel_* table TTL metadata.
+export HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL="${HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL:-false}"
 
 # Machine-wide config: ~/.config/polypus/config.yaml (XDG_CONFIG_HOME when set).
 if [[ -z "$POLYPUS_CONFIG" ]]; then
