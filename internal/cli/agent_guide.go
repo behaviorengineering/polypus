@@ -7,7 +7,7 @@ func agentOperatingGuide() string {
 
 ROLE & BOUNDARIES
   Routes speech and chat traffic to configured MLX or remote backends.
-  Host Consilium stack-doctor and jobs depend on polypus /health when enabled.
+  Consumer stacks may probe /health before speech or model jobs when enabled.
 
 AGENT OPERATING GUIDE
   Read AGENTS.md and ai-copilots/skills/polypus-operator/SKILL.md before changing config.
@@ -23,7 +23,7 @@ COMMANDS BY RISK & LIFECYCLE
     switchyard-render    Render routes.toml from config
 
 AUTOMATION RULES FOR AGENTS
-  - Confirm /health before running stack-doctor model-harness.
+  - Confirm /health before running downstream model or speech diagnostics.
   - Unknown commands exit non-zero; bare invoke exits 0 with this guide.
   - Full flag reference: polypus help
 `, version)
