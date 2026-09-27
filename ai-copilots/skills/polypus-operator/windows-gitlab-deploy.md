@@ -4,16 +4,24 @@ Operator path for **Docker Compose** on a home runner (not Mac `make serve` / ML
 
 ## Where
 
-- **Deploy repo:** [gitlab.com/xynova/polypus-local](https://gitlab.com/xynova/polypus-local) (private). Clone that repo on the runner; do not use nested `deploy/` under the Polypus GitHub tree.
-- **Product images:** `ghcr.io/behaviorengineering/polypus` and `polypus-switchyard` on GitHub `v*` tags.
-- **Compose file:** `docker-compose.deploy.yml` in polypus-local (synced from product releases).
-- **Config template:** `config.deploy.yaml.example` → gitignored `config/config.yaml`. Omit `secrets:` in that file; inject `CF_*` via compose env only (no keyring inside the Linux gateway container). Host `polypus serve` uses `secrets:` in `~/.config/polypus/config.yaml` instead.
+- **Deploy repo:** [gitlab.com/xynova/polypus-local](https://gitlab.com/xynova/polypus-local) (private). The GitLab runner checks out this repo each job; you do not maintain a separate manual clone for updates.
+- **Product images:** `ghcr.io/behaviorengineering/polypus` and `polypus-switchyard` on GitHub `v*` tags (semver in GHCR, not `:latest` on homelab).
+- **Image pins:** committed `images.env` in polypus-local (gateway, switchyard, Phoenix, HyperDX). Renovate bumps observability images; deploy bumps Polypus/Switchyard from GitHub releases.
+- **Host config:** `%USERPROFILE%\.config\polypus\config.yaml` (Windows) or `~/.config/polypus/config.yaml` (macOS), seeded once from `config.deploy.yaml.example`. Omit `secrets:`; inject `CF_*` via compose env from the OS keychain. Mac `polypus serve` still uses `secrets:` in the same user config path.
+
+## One-time on the host
+
+1. Docker Desktop.
+2. GitLab Runner (`windows-home` / `macos-home`) as **login user** (not `LocalSystem`).
+3. Git for Windows (deploy uses `bash` helper scripts).
+4. Keyring service `polypus`: `CF_AI_API_KEY`, `CF_ACCOUNT_ID`.
+5. Enable Renovate on polypus-local; allow GitLab job token push for bump commits.
 
 ## Trigger
 
-Canonical: **GitHub Packages** webhook on `behaviorengineering/polypus` when GHCR publishes an image (`package` / `registry_package`, UI label **Packages**) → GitLab pipeline trigger on `xynova/polypus-local` (`ref=main`) → homelab runners `docker compose`.
+**GitHub Packages** webhook on `behaviorengineering/polypus` when GHCR publishes → GitLab pipeline trigger on `xynova/polypus-local` (`ref=main`) → `deploy:windows` / `deploy:macos` (`pull` + `up` pinned tags).
 
-There is no GitHub Actions deploy job. Do not also subscribe **Pushes** on the same trigger unless you want a second compose run on merge to `main`. Full steps: polypus-local `ai-copilots/skills/polypus-local-operator/SKILL.md`.
+There is no GitHub Actions deploy job. Do not also subscribe **Pushes** on the same webhook unless you want a second compose run on merge to `main`. Full steps: polypus-local `ai-copilots/skills/polypus-local-operator/SKILL.md` and `docs/PROVE-CD.md`.
 
 ## Secrets (operatorconfig)
 
@@ -25,10 +33,6 @@ Cloudflare credentials are **not** in GitHub or GitLab CI variables.
 | Accounts | `CF_AI_API_KEY`, `CF_ACCOUNT_ID` |
 
 Deploy scripts call **operatorconfig** `export-env` (`env` → keyring → optional local SOPS file). MUST NOT run `sops`, `security`, or Credential Manager from polypus-local scripts.
-
-Optional: encrypted `~/.config/polypus/secrets.enc.yaml` via operatorconfig; never commit ciphertext to polypus-local git.
-
-Runner MUST run as the user who created keyring items (login keychain unlocked; not `LocalSystem`).
 
 Wire operatorconfig skills:
 
@@ -44,8 +48,6 @@ go list -m -f '{{.Dir}}' github.com/behaviorengineering/operatorconfig
 | `deploy:windows` | `windows-home` | `scripts/deploy.ps1` |
 | `deploy:macos` | `macos-home` | `scripts/deploy.sh` |
 
-Scripts assert OS before compose.
-
 ## Health
 
 ```bash
@@ -54,5 +56,3 @@ curl -sf http://127.0.0.1:1320/health/backends
 ```
 
 Switchyard must be healthy when `routers:` are configured. `routes.toml` must use `http://gateway:1320/v1`, not `127.0.0.1`.
-
-Full checklist: polypus-local repo README and `ai-copilots/skills/polypus-local-operator/SKILL.md`.
