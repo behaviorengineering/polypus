@@ -68,8 +68,7 @@ flowchart TB
 ## Quick start (Apple Silicon)
 
 ```bash
-mkdir -p ~/.config/polypus
-cp config.yaml.example ~/.config/polypus/config.yaml   # once; edit allow-lists there
+make init           # writes ~/.config/polypus/config.yaml from example (or: polypus init)
 make mlx-sync
 make build        # gateway bin/polypus + bin/switchyard-server
 make serve        # process-compose TUI: gateway :1320 + backends + Phoenix :6006 + HyperDX :8080
@@ -88,7 +87,7 @@ Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/po
 
 **Switchyard (composed routers):** git submodule at `providers/switchyard` (tag `v0.2.0`). Requires **Rust stable** (see `providers/switchyard/rust-toolchain.toml`, currently 1.96.1). `make build` runs `switchyard-build` and installs `bin/switchyard-server` (hard-fail if the submodule or cargo is missing). Generated routes TOML: `~/.cache/polypus/switchyard/routes.toml`. Set `POLYPUS_SWITCHYARD=0` to skip the Switchyard process when using `make serve`. Declare routers under `routers:` in config; clients send `model: router/<name>`. Routing types and when to use each: [docs/switchyard/](docs/switchyard/).
 
-`CF_AI_API_KEY` and `CF_ACCOUNT_ID` in `stack/.env` (or the process environment) enable the `cf_local` remote backend when it is listed in config. MLX process start is driven by `processes.mlx` in config (`polypus processes --print mlx`); `POLYPUS_ENABLE_MLX` overrides when set. When `processes.mlx` is omitted, serve defaults MLX on unless you set `POLYPUS_ENABLE_MLX=0`. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317` for OpenInference. HyperDX (ClickStack local) is on by default (`POLYPUS_HYPERDX=0` to skip): UI http://127.0.0.1:8080 , OTLP gRPC `:4319` and HTTP `:4318` for app traces (separate from Phoenix so both can run). HyperDX OTel table retention defaults to **1h** via `HYPERDX_OTEL_EXPORTER_TABLES_TTL` (ClickStack’s supported knob; custom exporter YAML cannot override the built-in `clickhouse` exporter). Set `HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL=true` once after changing TTL so existing `otel_*` tables pick up the new policy. ClickHouse system logs (`trace_log`, `query_log`, and related) use a separate **7-day** TTL from `hyperdx.clickhouse.config.xml`. Named HyperDX volumes survive `make serve-down` (no `-v`). First HyperDX start pulls a large image and needs enough RAM for ClickHouse.
+For Cloudflare on the host: declare `secrets:` (`CF_AI_API_KEY`, `CF_ACCOUNT_ID`) in `~/.config/polypus/config.yaml`, then `polypus secret set` or put the same names in `stack/.env` (env wins). Omit `secrets:` for MLX-only. Docker Compose deploy injects `CF_*` via compose env only (see `config.deploy.yaml.example`). MLX process start is driven by `processes.mlx` in config (`polypus processes --print mlx`); `POLYPUS_ENABLE_MLX` overrides when set. When `processes.mlx` is omitted, serve defaults MLX on unless you set `POLYPUS_ENABLE_MLX=0`. Phoenix (Arize) is on by default (`POLYPUS_PHOENIX=0` to skip): UI http://127.0.0.1:6006 , OTLP gRPC `:4317` for OpenInference. HyperDX (ClickStack local) is on by default (`POLYPUS_HYPERDX=0` to skip): UI http://127.0.0.1:8080 , OTLP gRPC `:4319` and HTTP `:4318` for app traces (separate from Phoenix so both can run). HyperDX OTel table retention defaults to **1h** via `HYPERDX_OTEL_EXPORTER_TABLES_TTL` (ClickStack's supported knob; custom exporter YAML cannot override the built-in `clickhouse` exporter). Set `HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL=true` once after changing TTL so existing `otel_*` tables pick up the new policy. ClickHouse system logs (`trace_log`, `query_log`, and related) use a separate **7-day** TTL from `hyperdx.clickhouse.config.xml`. Named HyperDX volumes survive `make serve-down` (no `-v`). First HyperDX start pulls a large image and needs enough RAM for ClickHouse.
 
 Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_OTLP_ENDPOINT` and dumps with `POLYPUS_FAILURE_DUMP_DIR`. Skip probe noise with `POLYPUS_OTEL_SKIP_PATHS` (default `/health,/health/backends`). Provider setup and local failure dumps use [`olly`](https://github.com/behaviorengineering/olly).
 
@@ -231,6 +230,8 @@ docker compose up phoenix              # Phoenix alone: UI :6006, OTLP :4317
 docker compose up hyperdx              # HyperDX alone: UI :8080, OTLP :4319/:4318
 make docker-build                      # optional gateway image (Dockerfile)
 ```
+
+**Windows / homelab deploy:** GitLab [xynova/polypus-local](https://gitlab.com/xynova/polypus-local). **GitHub Packages** (GHCR publish) webhooks into that pipeline; runners run compose. Not a GitHub Actions deploy. See [windows-gitlab-deploy.md](ai-copilots/skills/polypus-operator/windows-gitlab-deploy.md). GHCR image builds on `v*` tags: `.github/workflows/docker-release.yml`.
 
 Set `POLYPUS_PHOENIX=0` and/or `POLYPUS_HYPERDX=0` to skip either container under `make serve`. `pc-up.sh` probes Docker with a 3s timeout (`POLYPUS_DOCKER_PROBE_TIMEOUT`); if the daemon is down it asks whether to continue without those containers (`POLYPUS_DOCKER_CONTINUE=1` skips the prompt).
 

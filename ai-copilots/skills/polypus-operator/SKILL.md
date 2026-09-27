@@ -14,8 +14,9 @@ description: >-
 ## Start every task
 
 1. Confirm workspace: Polypus repo root (or this tree nested under `providers/polypus/` in a parent monorepo).
-2. Load shard when needed: [config-reference.md](config-reference.md), [troubleshooting.md](troubleshooting.md), [harness.md](harness.md), [thinking-policy.md](thinking-policy.md).
-3. Run health before deep edits: `curl -sf http://127.0.0.1:1320/health | jq .` (upstream probe: `/health/backends`)
+2. For homelab Compose deploy: clone **gitlab.com/xynova/polypus-local** and load its `ai-copilots/`; wire **operatorconfig** via `go list -m -f '{{.Dir}}' github.com/behaviorengineering/operatorconfig` and that module's `ai-copilots/BOOTSTRAP.md` (do not copy operatorconfig skill bodies here).
+3. Load shard when needed: [config-reference.md](config-reference.md), [troubleshooting.md](troubleshooting.md), [harness.md](harness.md), [thinking-policy.md](thinking-policy.md), [windows-gitlab-deploy.md](windows-gitlab-deploy.md) (pointer to polypus-local + keyring).
+4. Run health before deep edits: `curl -sf http://127.0.0.1:1320/health | jq .` (upstream probe: `/health/backends`)
 
 ## Supervision (MUST)
 
@@ -51,7 +52,7 @@ Compare to `config.yaml` `backends.*.models.allow`. Enabled list = first call; f
 
 ### 3. Smoke all Cloudflare channels
 
-With the gateway up and CF keys set:
+With the gateway up and Cloudflare `secrets:` filled (env or `polypus secret set`):
 
 ```bash
 make smoke-all
@@ -94,7 +95,7 @@ Clients speak TypeSafe wire format at `POST /v1/systemone` (point `TYPESAFE_BASE
 
 ### 4. Smoke audio
 
-Default path is **cf_local** (gateway needs `CF_AI_API_KEY` / `CF_ACCOUNT_ID`). For MLX:
+Default path is **cf_local** (gateway needs `secrets:` for `CF_AI_API_KEY` / `CF_ACCOUNT_ID`, then env or `polypus secret set`). For MLX:
 
 ```bash
 make smoke
@@ -120,7 +121,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 ### 8. cf_local down
 
 - Probe: `curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq '.data | length'`
-- Needs: `CF_AI_API_KEY`, `CF_ACCOUNT_ID` in the process environment.
+- Needs: `cf_local` in `config.yaml`, `secrets:` listing `CF_AI_API_KEY` and `CF_ACCOUNT_ID`, and those values in the process environment **or** OS keyring (`polypus secret set`). Env and `stack/.env` still win. Compose / GitLab inject env only (no keyring in the container).
 
 ### 9. lm_studio down
 
@@ -129,8 +130,14 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 
 ## Config edits
 
-- Copy `config.yaml.example` → `~/.config/polypus/config.yaml` when bootstrapping backends.
-- After allow-list change: restart gateway in process-compose TUI (or serve-down + serve).
+- Bootstrap: `make init` or `polypus init` (writes `~/.config/polypus/config.yaml` if missing). **MUST NOT** treat a manual `cp config.yaml.example` as the default setup.
+- Cloudflare (local machine): uncomment `secrets:` (`CF_AI_API_KEY`, `CF_ACCOUNT_ID`) and the `cf_local` backend in that file, then:
+  ```bash
+  polypus secret set CF_AI_API_KEY
+  polypus secret set CF_ACCOUNT_ID
+  ```
+  `secret set` refuses names that are not listed under `secrets:` in the live config. Omit `secrets:` for MLX-only so the keyring is never queried. Docker Compose / Windows GitLab: put `CF_*` in the container env (SOPS); do not use the host keyring inside Linux containers.
+- After allow-list or secrets change: restart gateway in process-compose TUI (or `make serve-down && make serve`).
 - **MUST NOT** add non-loopback backend URLs when `reject_non_loopback_backends` applies.
 
 ## Observability
