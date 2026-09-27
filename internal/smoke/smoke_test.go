@@ -82,6 +82,52 @@ func TestSystemOneSkipWithoutCF(t *testing.T) {
 	}
 }
 
+func TestSystemOneSkipInsufficientBalanceLocal(t *testing.T) {
+	t.Setenv("CF_AI_API_KEY", "test-key")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/systemone" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`cloudflare.SystemOne: Insufficient balance; add money to your gateway or use BYOK`))
+	}))
+	t.Cleanup(srv.Close)
+
+	results, err := smoke.Run(context.Background(), smoke.Options{
+		BaseURL:   srv.URL,
+		Channels:  []string{smoke.ChannelSystemOne},
+		RequireCF: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Status != "skip" {
+		t.Fatalf("%+v", results)
+	}
+	if !strings.Contains(results[0].Detail, "Insufficient balance") {
+		t.Fatalf("detail %q", results[0].Detail)
+	}
+}
+
+func TestSystemOneFailInsufficientBalanceWhenRequireCF(t *testing.T) {
+	t.Setenv("CF_AI_API_KEY", "test-key")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`cloudflare.SystemOne: Insufficient balance; add money to your gateway or use BYOK`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := smoke.Run(context.Background(), smoke.Options{
+		BaseURL:   srv.URL,
+		Channels:  []string{smoke.ChannelSystemOne},
+		RequireCF: true,
+	})
+	if err == nil {
+		t.Fatal("expected fail when RequireCF")
+	}
+}
+
 func bytesRepeat(n int, b byte) []byte {
 	out := make([]byte, n)
 	for i := range out {

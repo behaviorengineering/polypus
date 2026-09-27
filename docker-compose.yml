@@ -2,6 +2,9 @@
 # Host gateway: make serve (process-compose).
 # Phoenix: POLYPUS_PHOENIX=1 (default). HyperDX: POLYPUS_HYPERDX=1 (default).
 # OTLP: Phoenix keeps host :4317 (OpenInference). HyperDX uses :4319 (gRPC) and :4318 (HTTP).
+# HyperDX OTel table TTL: HYPERDX_OTEL_EXPORTER_TABLES_TTL (default 1h). ClickStack ignores
+# custom exporter overrides for the built-in clickhouse exporter; use the env var instead.
+# Set HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL=true once to rewrite existing table TTLs.
 services:
   phoenix:
     image: ${PHOENIX_IMAGE:-arizephoenix/phoenix:latest}
@@ -20,13 +23,14 @@ services:
     container_name: polypus-hyperdx
     restart: "no"
     environment:
-      CUSTOM_OTELCOL_CONFIG_FILE: /etc/otelcol-contrib/custom.config.yaml
+      HYPERDX_OTEL_EXPORTER_TABLES_TTL: ${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-1h}
+      HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL: ${HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL:-false}
     ports:
       - "${HYPERDX_PORT:-8080}:8080"
       - "${HYPERDX_OTLP_GRPC_PORT:-4319}:4317"
       - "${HYPERDX_OTLP_HTTP_PORT:-4318}:4318"
     volumes:
-      - ./hyperdx.custom.config.yaml:/etc/otelcol-contrib/custom.config.yaml:ro
+      - ./hyperdx.clickhouse.config.xml:/etc/clickhouse-server/config.d/99-polypus-system-log-retention.xml:ro
       - hyperdx_db:/data/db
       - hyperdx_ch_data:/var/lib/clickhouse
       - hyperdx_ch_logs:/var/log/clickhouse-server

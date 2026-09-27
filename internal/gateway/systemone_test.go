@@ -168,15 +168,25 @@ backends:
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
-	if !strings.HasSuffix(gotPath, "/run/typesafe/jev") {
+	if !strings.HasSuffix(gotPath, "/run") || strings.Contains(gotPath, "/run/") {
 		t.Fatalf("CF path %q", gotPath)
 	}
 	var forwarded map[string]json.RawMessage
 	if err := json.Unmarshal(gotBody, &forwarded); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := forwarded["model"]; ok {
-		t.Fatal("model should not be sent to CF /run body")
+	if string(forwarded["model"]) != `"typesafe/jev"` {
+		t.Fatalf("CF model %s", forwarded["model"])
+	}
+	var input map[string]json.RawMessage
+	if err := json.Unmarshal(forwarded["input"], &input); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := input["model"]; ok {
+		t.Fatal("model should not be nested under input")
+	}
+	if _, ok := input["state"]; !ok {
+		t.Fatal("state missing from input")
 	}
 	var resp map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
