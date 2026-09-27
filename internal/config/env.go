@@ -4,14 +4,17 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
 const ExtensionCloudflare = "cloudflare"
 
 // ExpandEnv replaces ${VAR} placeholders in s from the process environment.
+// Substituted values are trimmed so pasted line endings do not reach URLs or headers.
 func ExpandEnv(s string) string {
 	return os.Expand(s, func(key string) string {
-		return os.Getenv(key)
+		return strings.TrimSpace(os.Getenv(key))
 	})
 }
 
@@ -26,7 +29,7 @@ func (a BackendAuth) ResolveBearerToken() (string, error) {
 	if env == "" {
 		return "", fmt.Errorf("auth.bearer_env required for remote backend")
 	}
-	token := strings.TrimSpace(os.Getenv(env))
+	token := operatorconfig.SanitizeSecret(os.Getenv(env))
 	if token == "" {
 		return "", fmt.Errorf("environment variable %q required for remote backend", env)
 	}

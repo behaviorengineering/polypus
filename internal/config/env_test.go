@@ -14,6 +14,15 @@ func TestExpandEnv(t *testing.T) {
 	}
 }
 
+func TestExpandEnvTrimsSubstitution(t *testing.T) {
+	t.Setenv("CF_ACCOUNT_ID", "acct-test\n")
+	got := ExpandEnv("https://example.com/accounts/${CF_ACCOUNT_ID}/ai/v1")
+	want := "https://example.com/accounts/acct-test/ai/v1"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestBackendAuthResolveBearerToken(t *testing.T) {
 	t.Setenv("CF_AI_API_KEY", "secret-token")
 	token, err := BackendAuth{BearerEnv: "CF_AI_API_KEY"}.ResolveBearerToken()

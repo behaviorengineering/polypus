@@ -113,8 +113,8 @@ github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPn
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/behaviorengineering/olly v0.2.0 h1:x8eQgaDc57osizV63XzQAPZtUIVUqJdJlKgOKMQc9eE=
 github.com/behaviorengineering/olly v0.2.0/go.mod h1:cIptv3Cao2WE2/KvF4Ekkml4QrqYI38Iua+hvB7SIp4=
-github.com/behaviorengineering/operatorconfig v0.1.0 h1:yXkaEi9327vmK5obBQKpRAK3ZQ79Ji25/Koz84JUo8M=
-github.com/behaviorengineering/operatorconfig v0.1.0/go.mod h1:YK48fp+pItReAvi+CubwdtVMFdVM9DivhIuo0fVb1/Y=
+github.com/behaviorengineering/operatorconfig v0.1.1 h1:VYCyg9/sMiIjmcjcQzaU2xDQ1NBzixwb2JkaJOlUmb8=
+github.com/behaviorengineering/operatorconfig v0.1.1/go.mod h1:YK48fp+pItReAvi+CubwdtVMFdVM9DivhIuo0fVb1/Y=
 github.com/blang/semver v3.5.1+incompatible h1:cQNTCjp13qL8KC3Nbxr/y2Bqb63oX6wdnnjpJbkM4JQ=
 github.com/blang/semver v3.5.1+incompatible/go.mod h1:kRBLl5iJ+tD4TcOOxsy/0fnwebNt5EWlYSAyrTnjyyk=
 github.com/buger/jsonparser v1.2.0 h1:4EFcvK1kD4jyj6YqNK6skK6w+y7FHHBR+XBCtxwu/6g=

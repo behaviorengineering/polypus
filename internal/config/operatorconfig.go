@@ -59,7 +59,7 @@ func SetPolypusSecret(envName, value string, kr operatorconfig.Keyring) error {
 	if kr == nil {
 		kr = operatorconfig.DefaultKeyring()
 	}
-	return kr.Set("polypus", envName, value)
+	return kr.Set("polypus", envName, operatorconfig.SanitizeSecret(value))
 }
 
 // RequireDeclaredSecret reports whether envName is listed under secrets: in the live config.

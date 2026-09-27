@@ -43,7 +43,7 @@ func printUsage() {
   polypus switchyard-render [flags]  # render Switchyard routes.toml from config
   polypus processes [--print mlx]    # process-compose toggles from config processes.*
   polypus init [--force]             # write ~/.config/polypus/config.yaml from example
-  polypus secret set <ENV> [--stdin] # store CF_* in OS keyring (hidden prompt on TTY)
+  polypus secret set <ENV> [--stdin] # store CF_* in OS keyring (prompt or --stdin; flag before/after ENV)
   polypus version                    # print release version
 
 flags:

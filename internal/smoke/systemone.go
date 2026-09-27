@@ -4,21 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 )
 
 func runSystemOne(ctx context.Context, opts Options) ([]Result, error) {
-	if !opts.RequireCF && strings.TrimSpace(os.Getenv("CF_AI_API_KEY")) == "" {
-		row := Result{
-			Channel: ChannelSystemOne,
-			Probe:   "evaluate",
-			Model:   opts.SystemOneModel,
-			Status:  "skip",
-			Detail:  "CF_AI_API_KEY unset",
-		}
-		return []Result{row}, nil
-	}
 	row := timed(ChannelSystemOne, "evaluate", opts.SystemOneModel, func() (string, error) {
 		return systemOnePing(ctx, opts)
 	})
