@@ -7,8 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (v0.2.26 or 0.2.26)"
+        description: "Image version (v0.2.26 or 0.2.26)"
         required: true
+        type: string
+      git_ref:
+        description: "Git ref to build (default main; use when the release tag predates docker fixes)"
+        required: false
+        default: main
         type: string
 
 permissions:
@@ -25,7 +30,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             RAW="${{ github.event.inputs.tag }}"
             VER="${RAW#v}"
-            echo "ref=refs/tags/v${VER}" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ github.event.inputs.git_ref }}" >> "$GITHUB_OUTPUT"
             echo "version=${VER}" >> "$GITHUB_OUTPUT"
           else
             echo "ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
