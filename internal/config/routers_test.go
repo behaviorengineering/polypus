@@ -298,6 +298,22 @@ func TestGatewayBaseURLUsesLoopbackForWildcardBind(t *testing.T) {
 	}
 }
 
+func TestGatewayBaseURLHonorsPolypusBaseURLEnv(t *testing.T) {
+	t.Setenv("POLYPUS_BASE_URL", "http://gateway:1320")
+	opts := ServeOptions{Host: "0.0.0.0", Port: 1320}
+	if got := opts.GatewayBaseURL(); got != "http://gateway:1320" {
+		t.Fatalf("gateway base url: %q", got)
+	}
+}
+
+func TestGatewayBaseURLStripsTrailingSlashFromEnv(t *testing.T) {
+	t.Setenv("POLYPUS_BASE_URL", "http://gateway:1320/")
+	opts := ServeOptions{Host: "0.0.0.0", Port: 1320}
+	if got := opts.GatewayBaseURL(); got != "http://gateway:1320" {
+		t.Fatalf("gateway base url: %q", got)
+	}
+}
+
 func TestSwitchyardEnabled(t *testing.T) {
 	t.Setenv("POLYPUS_SWITCHYARD", "")
 	if !SwitchyardEnabled() {

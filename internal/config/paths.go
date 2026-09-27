@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
 // DefaultConfigDir returns the machine-wide Polypus config directory.
@@ -82,24 +84,13 @@ func DefaultProcessComposeSockPath() (string, error) {
 // Order: POLYPUS_CONFIG, ~/.config/polypus/config.yaml, $POLYPUS_ROOT/config.yaml, ./config.yaml.
 // Returns "" when none exist (caller may fall back to env-only defaults).
 func ResolveConfigPath() string {
-	if path := strings.TrimSpace(os.Getenv("POLYPUS_CONFIG")); path != "" {
-		return path
-	}
-	if homePath, err := DefaultConfigPath(); err == nil {
-		if _, err := os.Stat(homePath); err == nil {
-			return homePath
-		}
-	}
-	if root := strings.TrimSpace(os.Getenv("POLYPUS_ROOT")); root != "" {
-		candidate := filepath.Join(root, "config.yaml")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	if _, err := os.Stat("config.yaml"); err == nil {
-		return "config.yaml"
-	}
-	return ""
+	path, _ := ResolveConfigPathWithError()
+	return path
+}
+
+// ResolveConfigPathWithError is ResolveConfigPath but surfaces invalid override paths.
+func ResolveConfigPathWithError() (string, error) {
+	return operatorconfig.ResolveConfigPath(operatorConfigOptions())
 }
 
 func xdgDir(envName, homeSubdir string) (string, error) {

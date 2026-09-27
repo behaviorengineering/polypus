@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 	"gopkg.in/yaml.v3"
 )
 
@@ -137,6 +138,7 @@ type capabilityBackendFile struct {
 }
 
 type routerFile struct {
+	Secrets          []operatorconfig.Secret     `yaml:"secrets"`
 	ChatBackend      capabilityBackendFile       `yaml:"chat_backend"`
 	VisionBackend    capabilityBackendFile       `yaml:"vision_backend"`
 	EmbedBackend     capabilityBackendFile       `yaml:"embed_backend"`
@@ -193,7 +195,10 @@ func LoadRouterConfig(opts ServeOptions) (RouterConfig, error) {
 }
 
 func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
-	path := ResolveConfigPath()
+	path, err := ResolveConfigPathWithError()
+	if err != nil {
+		return RouterConfig{}, false, err
+	}
 	if path == "" {
 		return RouterConfig{}, false, nil
 	}
@@ -208,6 +213,9 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&file); err != nil {
+		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
+	}
+	if err := ResolvePolypusSecrets(file.Secrets, opts.Keyring); err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
 	timeouts, err := parseTimeoutsFile(file.Timeouts)

@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/polypus /usr/local/bin/polypus
@@ -32,7 +32,6 @@ WORKDIR /workdir
 
 ENV POLYPUS_HOST=0.0.0.0
 ENV POLYPUS_PORT=1320
-ENV POLYPUS_BACKEND_URL=http://host.docker.internal:1322
 EXPOSE 1320
 
 ENTRYPOINT ["docker-entrypoint.sh"]

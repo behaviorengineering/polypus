@@ -1,4 +1,7 @@
-.PHONY: help build build-gateway build-smoke install test vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-higgs smoke-stt smoke-stt-local smoke-systemone smoke-all switchyard-build docker-build
+.PHONY: help build build-gateway build-smoke install init sync-config-example check-config-example test vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-higgs smoke-stt smoke-stt-local smoke-systemone smoke-all switchyard-build docker-build
+
+CONFIG_EXAMPLE_SRC := config.yaml.example
+CONFIG_EXAMPLE_EMBED := internal/config/config.yaml.example
 
 .DEFAULT_GOAL := help
 
@@ -37,6 +40,9 @@ help:
 	@echo "  make build-smoke        Build polypus-smoke (multi-channel L1 probes)"
 	@echo "  make switchyard-build   Build bin/switchyard-server (Rust; also part of make build)"
 	@echo "  make install            Install polypus into GOPATH/bin"
+	@echo "  make init               Write ~/.config/polypus/config.yaml from example (polypus init)"
+	@echo "  make sync-config-example  Copy config.yaml.example → internal/config/ (for go:embed)"
+	@echo "  make check-config-example Fail if embed copy diverges from repo-root example"
 	@echo "  make mlx-sync           uv sync for backends/mlx"
 	@echo "  make serve              process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 + HyperDX :8080 (POLYPUS_PHOENIX=0 / POLYPUS_HYPERDX=0 to skip)"
 	@echo "  make serve-down         Stop this Polypus process-compose project only"
@@ -58,7 +64,14 @@ help:
 
 build: build-gateway build-smoke switchyard-build
 
-build-gateway:
+sync-config-example:
+	@cp $(CONFIG_EXAMPLE_SRC) $(CONFIG_EXAMPLE_EMBED)
+
+check-config-example:
+	@test -f $(CONFIG_EXAMPLE_EMBED) || (echo "missing $(CONFIG_EXAMPLE_EMBED); run: make sync-config-example" && exit 1)
+	@cmp -s $(CONFIG_EXAMPLE_SRC) $(CONFIG_EXAMPLE_EMBED) || (echo "config example drift: edit $(CONFIG_EXAMPLE_SRC) then make sync-config-example" && exit 1)
+
+build-gateway: sync-config-example
 	@mkdir -p $(dir $(BINARY))
 	go build $(GO_BUILDFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/polypus
 
@@ -68,6 +81,9 @@ build-smoke:
 
 install:
 	go build $(GO_BUILDFLAGS) -ldflags "$(LDFLAGS)" -o $(shell go env GOPATH)/bin/polypus ./cmd/polypus
+
+init: build-gateway
+	$(BINARY) init
 
 mlx-sync:
 	chmod +x backends/mlx/scripts/sync.sh
@@ -150,6 +166,7 @@ ci:
 	go mod tidy
 	@diff -u go.mod.bak go.mod && diff -u go.sum.bak go.sum
 	@rm -f go.mod.bak go.sum.bak
+	@$(MAKE) check-config-example
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
 	go vet ./...
 	go test -race -count=1 ./...

@@ -11,6 +11,9 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    env:
+      # v0.1.0 is new; sum.golang.org may lag until the module is indexed.
+      GONOSUMDB: github.com/behaviorengineering/operatorconfig
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: quality
     env:
+      GONOSUMDB: github.com/behaviorengineering/operatorconfig
       CF_AI_API_KEY: ${{ secrets.CF_AI_API_KEY }}
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
       POLYPUS_HOST: 127.0.0.1

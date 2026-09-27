@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
 const (
@@ -19,6 +21,7 @@ type ServeOptions struct {
 	Host       string
 	Port       int
 	BackendURL string
+	Keyring    operatorconfig.Keyring // optional; defaults to OS keyring when resolving config secrets
 }
 
 // LoadServeOptions reads POLYPUS_* and POLYPUS_BACKEND_URL / POLYPUS_MLX_URL from the environment.
@@ -64,8 +67,12 @@ func (o ServeOptions) ListenAddr() string {
 }
 
 // GatewayBaseURL returns the HTTP base URL Switchyard and render use to call back into Polypus.
-// Wildcard bind addresses map to loopback so outbound clients can connect.
+// When POLYPUS_BASE_URL is set (e.g. Docker Compose service DNS), it wins over bind address.
+// Otherwise wildcard bind addresses map to loopback so outbound clients can connect.
 func (o ServeOptions) GatewayBaseURL() string {
+	if v := strings.TrimRight(strings.TrimSpace(os.Getenv("POLYPUS_BASE_URL")), "/"); v != "" {
+		return v
+	}
 	host := strings.TrimSpace(o.Host)
 	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
 		host = DefaultHost

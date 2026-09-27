@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+
+FROM rust:1.96-bookworm AS builder
+
+WORKDIR /src/switchyard
+COPY providers/switchyard/ ./
+RUN cargo install --locked --force --path crates/switchyard-server --root /out
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /out/bin/switchyard-server /usr/local/bin/switchyard-server
+COPY scripts/docker-switchyard-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENV SWITCHYARD_CONFIG=/var/lib/polypus/switchyard/routes.toml
+ENV SWITCHYARD_HOST=0.0.0.0
+ENV SWITCHYARD_PORT=4000
+
+EXPOSE 4000
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/entrypoint.sh"]
