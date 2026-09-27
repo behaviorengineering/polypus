@@ -1,0 +1,67 @@
+# Windows / Docker Compose deploy (cf_local + Switchyard). Copy to config/config.yaml on the host.
+# Credentials: inject CF_AI_API_KEY and CF_ACCOUNT_ID via compose environment (SOPS/export-env on the
+# runner). Do NOT add a secrets: block here; the gateway container has no host OS keyring.
+# On a Mac/Windows host running polypus serve directly, use ~/.config/polypus/config.yaml with
+# secrets: and polypus secret set instead.
+# Add routers: from your live operator config when using composed models.
+
+processes:
+  mlx: false
+
+tts_backend:
+  enabled: true
+  default: cf_local
+stt_backend:
+  enabled: true
+  default: cf_local
+proxy_backend:
+  enabled: true
+  default: cf_local
+chat_backend:
+  enabled: true
+  default: cf_local
+vision_backend:
+  enabled: true
+  default: cf_local
+systemone_backend:
+  enabled: true
+  default: cf_local
+
+timeouts:
+  min: 5s
+  max: 900s
+  chat: 120s
+  chat_thinking: 600s
+  vision: 300s
+  embed: 60s
+  speech: 180s
+  backends:
+    cf_local:
+      chat: 60s
+
+switchyard:
+  base_url: http://switchyard:4000
+  config_path: /var/lib/polypus/switchyard/routes.toml
+
+backends:
+  cf_local:
+    remote: true
+    extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
+    auth:
+      bearer_env: CF_AI_API_KEY
+    capabilities: [chat, vision, tts, stt, voices, systemone]
+    models:
+      sync: true
+      allow:
+        - "@cf/zai-org/glm-4.7-flash"
+        - "@cf/ibm-granite/granite-4.0-h-micro"
+        - "@cf/google/gemma-4-26b-a4b-it"
+        - "@cf/openai/gpt-oss-20b"
+        - "@cf/deepgram/aura-2-en"
+        - "@cf/deepgram/nova-3"
+        - "typesafe/jev"
+
+# routers:
+#   investigator:
+#     ...

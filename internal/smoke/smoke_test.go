@@ -16,20 +16,20 @@ func TestSmokeAllChannels(t *testing.T) {
 	t.Setenv("CF_AI_API_KEY", "test-key")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/health":
+		switch r.URL.Path {
+		case "/health":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
-		case r.URL.Path == "/v1/chat/completions":
+		case "/v1/chat/completions":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
 			})
-		case r.URL.Path == "/v1/audio/speech":
+		case "/v1/audio/speech":
 			w.Header().Set("Content-Type", "audio/mpeg")
 			_, _ = w.Write(bytesRepeat(128, 'a'))
-		case r.URL.Path == "/v1/audio/transcriptions":
+		case "/v1/audio/transcriptions":
 			_ = json.NewEncoder(w).Encode(map[string]string{"text": "here is what the file shows"})
-		case r.URL.Path == "/v1/systemone":
+		case "/v1/systemone":
 			body, _ := io.ReadAll(r.Body)
 			if !strings.Contains(string(body), "is_urgent") {
 				http.Error(w, "bad body", http.StatusBadRequest)

@@ -8,7 +8,7 @@
 | 2 | `~/.config/polypus/config.yaml` (`$XDG_CONFIG_HOME/polypus/config.yaml` when set) |
 | 3 | `$POLYPUS_ROOT/config.yaml` or cwd `config.yaml` (dev fallback) |
 
-Bootstrap: `cp config.yaml.example ~/.config/polypus/config.yaml`
+Bootstrap: `polypus init` or `make init` (writes `~/.config/polypus/config.yaml` at mode `0600` when missing). Declare `secrets:` in config (env var names only); Polypus loads those from the OS keyring when unset. `polypus secret set` stores a value only if that name is already in `secrets:`. Env and `.env` still win at runtime. Omit `secrets:` for local-only stacks to avoid keyring access. Docker Compose deploy (`config.deploy.yaml.example`) omits `secrets:`; inject `CF_*` via compose env (runner `export-env` / SOPS), not the container keyring.
 
 CI multi-channel smoke (main only) uses `config.ci-smoke.yaml.example`: `cf_local` chat + TTS + STT + systemone only (no MLX, Switchyard, vision, or embed). Expand `${CF_ACCOUNT_ID}` before serve.
 
@@ -30,7 +30,7 @@ Cloudflare (`cf_local`) has no separate port; it runs in-process when configured
 ```env
 POLYPUS_HOST=127.0.0.1
 POLYPUS_PORT=1320
-POLYPUS_BASE_URL=http://127.0.0.1:1320
+POLYPUS_BASE_URL=http://127.0.0.1:1320   # client URL; also Switchyard leaf callback when set (Compose: http://gateway:1320)   # client URL; also Switchyard leaf callback when set (Compose: http://gateway:1320)
 POLYPUS_MLX_HOST=127.0.0.1
 POLYPUS_MLX_PORT=1322
 POLYPUS_PHOENIX=1
@@ -47,6 +47,9 @@ Speech smoke defaults to cf_local (`make smoke` / `make smoke-stt`). MLX: `POLYP
 ## config.yaml structure
 
 ```yaml
+secrets:
+  - CF_AI_API_KEY
+  - CF_ACCOUNT_ID
 chat_backend:
   enabled: true
   default: cf_local
@@ -96,7 +99,7 @@ backends:
       allow: [...]
 ```
 
-Capability defaults use `*_backend` blocks (`enabled` + `default`): `chat_backend`, `vision_backend`, `embed_backend`, `tts_backend`, `stt_backend`, `proxy_backend`, `systemone_backend`. Set `enabled: false` (or omit) to skip a capability. Remote backends (`remote: true`) load when listed in config and their `auth.bearer_env` is set. `proxy_backend` covers voices and may inherit `tts_backend.default` when enabled with an empty default. `systemone_backend` fronts `POST /v1/systemone` (TypeSafe/Decider wire; Cloudflare `typesafe/jev` via `/ai/run`).
+Capability defaults use `*_backend` blocks (`enabled` + `default`): `chat_backend`, `vision_backend`, `embed_backend`, `tts_backend`, `stt_backend`, `proxy_backend`, `systemone_backend`. Set `enabled: false` (or omit) to skip a capability. Remote backends (`remote: true`) load when listed in config and their `auth.bearer_env` is set in the environment (possibly filled from the OS keyring for names in `secrets:`). `proxy_backend` covers voices and may inherit `tts_backend.default` when enabled with an empty default. `systemone_backend` fronts `POST /v1/systemone` (TypeSafe/Decider wire; Cloudflare `typesafe/jev` via `/ai/run`).
 
 Client header `X-Polypus-Timeout` (duration or seconds) clamps to `timeouts.min`..`timeouts.max` (5s to 900s).
 

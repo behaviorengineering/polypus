@@ -24,6 +24,10 @@ func Run(args []string) int {
 		return runSwitchyardRender(args[1:])
 	case "processes":
 		return runProcesses(args[1:])
+	case "init":
+		return runInit(args[1:])
+	case "secret":
+		return runSecret(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
@@ -38,6 +42,8 @@ func printUsage() {
   polypus serve [flags]              # OpenAI speech API gateway (loopback)
   polypus switchyard-render [flags]  # render Switchyard routes.toml from config
   polypus processes [--print mlx]    # process-compose toggles from config processes.*
+  polypus init [--force]             # write ~/.config/polypus/config.yaml from example
+  polypus secret set <ENV> [value]   # store CF_* (etc.) in OS keyring
   polypus version                    # print release version
 
 flags:

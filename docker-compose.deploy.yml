@@ -1,0 +1,85 @@
+# Polypus Windows / Linux deploy stack (gateway + Switchyard + observability).
+# Usage: docker compose -f docker-compose.deploy.yml --env-file .env up -d
+# Host config: ./config/config.yaml (see config.deploy.yaml.example; omit secrets: there, inject CF_* via env below).
+
+services:
+  gateway:
+    image: ${POLYPUS_IMAGE:-ghcr.io/behaviorengineering/polypus:latest}
+    container_name: polypus-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1320:1320"
+    environment:
+      POLYPUS_HOST: "0.0.0.0"
+      POLYPUS_PORT: "1320"
+      POLYPUS_BASE_URL: http://gateway:1320
+      POLYPUS_SWITCHYARD_BASE_URL: http://switchyard:4000
+      POLYPUS_SWITCHYARD_CONFIG: /var/lib/polypus/switchyard/routes.toml
+      POLYPUS_SWITCHYARD: "1"
+      POLYPUS_CONFIG: /etc/polypus/config.yaml
+      CF_AI_API_KEY: ${CF_AI_API_KEY}
+      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID}
+      POLYPUS_OTLP_ENDPOINT: ${POLYPUS_OTLP_ENDPOINT:-http://phoenix:4317}
+    volumes:
+      - ./config/config.yaml:/etc/polypus/config.yaml:ro
+      - switchyard_routes:/var/lib/polypus/switchyard
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:1320/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    depends_on:
+      phoenix:
+        condition: service_started
+      hyperdx:
+        condition: service_started
+
+  switchyard:
+    image: ${SWITCHYARD_IMAGE:-ghcr.io/behaviorengineering/polypus-switchyard:latest}
+    container_name: polypus-switchyard
+    restart: unless-stopped
+    environment:
+      SWITCHYARD_CONFIG: /var/lib/polypus/switchyard/routes.toml
+      SWITCHYARD_HOST: "0.0.0.0"
+      SWITCHYARD_PORT: "4000"
+    volumes:
+      - switchyard_routes:/var/lib/polypus/switchyard
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  phoenix:
+    image: ${PHOENIX_IMAGE:-arizephoenix/phoenix:latest}
+    container_name: polypus-phoenix
+    restart: unless-stopped
+    ports:
+      - "${PHOENIX_PORT:-6006}:6006"
+      - "${PHOENIX_OTLP_PORT:-4317}:4317"
+    environment:
+      PHOENIX_WORKING_DIR: /data
+    volumes:
+      - phoenix_data:/data
+
+  hyperdx:
+    image: ${HYPERDX_IMAGE:-clickhouse/clickstack-local:latest}
+    container_name: polypus-hyperdx
+    restart: unless-stopped
+    environment:
+      CUSTOM_OTELCOL_CONFIG_FILE: /etc/otelcol-contrib/custom.config.yaml
+    ports:
+      - "${HYPERDX_PORT:-8080}:8080"
+      - "${HYPERDX_OTLP_GRPC_PORT:-4319}:4317"
+      - "${HYPERDX_OTLP_HTTP_PORT:-4318}:4318"
+    volumes:
+      - ./hyperdx.custom.config.yaml:/etc/otelcol-contrib/custom.config.yaml:ro
+      - hyperdx_db:/data/db
+      - hyperdx_ch_data:/var/lib/clickhouse
+      - hyperdx_ch_logs:/var/log/clickhouse-server
+
+volumes:
+  switchyard_routes:
+  phoenix_data:
+  hyperdx_db:
+  hyperdx_ch_data:
+  hyperdx_ch_logs:
