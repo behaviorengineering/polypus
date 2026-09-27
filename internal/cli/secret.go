@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"golang.org/x/term"
 )
 
 func runSecret(args []string) int {
@@ -30,11 +31,12 @@ func runSecret(args []string) int {
 
 func printSecretUsage() {
 	fmt.Fprintf(os.Stderr, `usage:
-  polypus secret set <ENV> [value]   # store in OS keyring if ENV is in config secrets:
+  polypus secret set <ENV>              # prompt (input hidden on a TTY)
+  polypus secret set <ENV> <value>      # value visible in shell history; prefer prompt
 
 examples:
   polypus secret set CF_AI_API_KEY
-  polypus secret set CF_ACCOUNT_ID your-account-id
+  polypus secret set CF_ACCOUNT_ID
 
 `)
 }
@@ -55,7 +57,7 @@ func runSecretSet(args []string) int {
 	if len(rest) >= 2 {
 		value = strings.Join(rest[1:], " ")
 	} else {
-		line, err := readLineStdin(os.Stdin)
+		line, err := readSecretStdin(envName, os.Stdin)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "polypus secret set: %v\n", err)
 			return 1
@@ -75,7 +77,19 @@ func runSecretSet(args []string) int {
 	return 0
 }
 
-func readLineStdin(r io.Reader) (string, error) {
+func readSecretStdin(envName string, r io.Reader) (string, error) {
+	f, ok := r.(interface {
+		Fd() uintptr
+	})
+	if ok && term.IsTerminal(int(f.Fd())) {
+		fmt.Fprintf(os.Stderr, "polypus secret set: enter value for %s (input hidden): ", envName)
+		b, err := term.ReadPassword(int(f.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
 	br := bufio.NewReader(r)
 	line, err := br.ReadString('\n')
 	if err != nil && err != io.EOF {
