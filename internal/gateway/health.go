@@ -11,7 +11,6 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
-	"github.com/behaviorengineering/polypus/internal/upstream"
 )
 
 const backendProbeTimeout = 5 * time.Second
@@ -81,9 +80,8 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	for _, id := range cfg.BackendIDs() {
 		b := cfg.Backends[id]
 		entry := backendProbeResult{ID: id, URL: b.BaseURL}
-		if err := h.upstreams.Execute(id, func() error {
-			return probeBackend(ctx, b, h.cloudflareClient)
-		}); err != nil {
+		// Probes must not trip the same circuit breaker as chat/TTS/STT dials.
+		if err := probeBackend(ctx, b, h.cloudflareClient); err != nil {
 			entry.Error = err.Error()
 			allOK = false
 		} else {
@@ -95,9 +93,7 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	if config.SwitchyardEnabled() {
 		switchyardURL := cfg.EffectiveSwitchyardBaseURL()
 		entry := backendProbeResult{ID: "switchyard", URL: switchyardURL}
-		if err := h.upstreams.Execute(upstream.NameSwitchyard, func() error {
-			return probeSwitchyard(ctx, switchyardURL)
-		}); err != nil {
+		if err := probeSwitchyard(ctx, switchyardURL); err != nil {
 			entry.Error = err.Error()
 			allOK = false
 		} else {

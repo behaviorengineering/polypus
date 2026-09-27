@@ -36,7 +36,7 @@ type Options struct {
 	SystemOneModel string
 	TTSVoice       string
 	TTSText        string
-	RequireCF      bool // when true, missing CF_AI_API_KEY fails (CI)
+	RequireCF      bool // when true, TypeSafe billing skips become failures (CI)
 	Temperature    float64
 	MaxTokens      int
 }
@@ -94,13 +94,11 @@ func (o *Options) Normalize() {
 	}
 }
 
-// Run executes configured channels. Returns non-nil error if any channel fails
-// (or if RequireCF and CF_AI_API_KEY is unset). Skip is only for optional local soft-skip when RequireCF is false.
+// Run executes configured channels. Returns non-nil error if any channel fails.
+// Skip is for TypeSafe billing locally when RequireCF is false. Credentials live
+// on the gateway (config secrets + keyring or env), not in the smoke CLI process.
 func Run(ctx context.Context, opts Options) ([]Result, error) {
 	opts.Normalize()
-	if opts.RequireCF && strings.TrimSpace(os.Getenv("CF_AI_API_KEY")) == "" {
-		return nil, fmt.Errorf("smoke: CF_AI_API_KEY required")
-	}
 
 	var out []Result
 	var failed bool

@@ -79,7 +79,7 @@ make smoke-local  # TTS via MLX (needs mlx_local up)
 make smoke-stt-local  # TTS+STT via MLX
 make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
 make smoke-router # router/investigator (needs routers: + Switchyard for composed types)
-make smoke-systemone  # TypeSafe /v1/systemone via cf_local/typesafe/jev (skips without CF_AI_API_KEY)
+make smoke-systemone  # TypeSafe /v1/systemone via cf_local/typesafe/jev (gateway credentials)
 make smoke-all    # chat + TTS + STT + systemone via bin/polypus-smoke (gateway must be up)
 ```
 

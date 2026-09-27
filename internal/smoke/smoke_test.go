@@ -13,7 +13,7 @@ import (
 )
 
 func TestSmokeAllChannels(t *testing.T) {
-	t.Setenv("CF_AI_API_KEY", "test-key")
+	t.Setenv("CF_AI_API_KEY", "")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -63,10 +63,19 @@ func TestSmokeAllChannels(t *testing.T) {
 	}
 }
 
-func TestSystemOneSkipWithoutCF(t *testing.T) {
+func TestSystemOneDialsWithoutShellCFKey(t *testing.T) {
 	t.Setenv("CF_AI_API_KEY", "")
+	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "should not dial", http.StatusInternalServerError)
+		if r.URL.Path != "/v1/systemone" {
+			http.NotFound(w, r)
+			return
+		}
+		hits++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model":   "jev-test",
+			"answers": map[string]any{"is_urgent": map[string]any{"type": "noul", "noul": 0.9}},
+		})
 	}))
 	t.Cleanup(srv.Close)
 
@@ -77,13 +86,16 @@ func TestSystemOneSkipWithoutCF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Status != "skip" {
+	if hits != 1 {
+		t.Fatalf("gateway hits=%d results=%+v", hits, results)
+	}
+	if len(results) != 1 || results[0].Status != "pass" {
 		t.Fatalf("%+v", results)
 	}
 }
 
 func TestSystemOneSkipInsufficientBalanceLocal(t *testing.T) {
-	t.Setenv("CF_AI_API_KEY", "test-key")
+	t.Setenv("CF_AI_API_KEY", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/systemone" {
 			http.NotFound(w, r)
@@ -111,7 +123,7 @@ func TestSystemOneSkipInsufficientBalanceLocal(t *testing.T) {
 }
 
 func TestSystemOneFailInsufficientBalanceWhenRequireCF(t *testing.T) {
-	t.Setenv("CF_AI_API_KEY", "test-key")
+	t.Setenv("CF_AI_API_KEY", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte(`cloudflare.SystemOne: Insufficient balance; add money to your gateway or use BYOK`))

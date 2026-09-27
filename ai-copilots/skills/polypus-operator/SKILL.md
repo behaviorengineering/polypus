@@ -85,7 +85,7 @@ Default model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`
 
 ### 3c. Smoke systemone (TypeSafe / Jev)
 
-Requires `systemone_backend` enabled, `typesafe/jev` on the allow list, and `CF_AI_API_KEY` (skips when unset locally; CI uses `-require-cf`):
+Requires `systemone_backend` enabled and `typesafe/jev` on the allow list. The CLI dials the gateway; Cloudflare credentials come from config `secrets:` plus keyring or process env on **serve**, not from the smoke shell:
 
 ```bash
 make smoke-systemone

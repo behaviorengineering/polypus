@@ -21,7 +21,7 @@ func RunCLI(args []string) int {
 	ttsModel := fs.String("tts-model", "", "TTS model id")
 	sttModel := fs.String("stt-model", "", "STT model id")
 	systemOneModel := fs.String("systemone-model", "", "systemone model id")
-	requireCF := fs.Bool("require-cf", false, "fail when CF_AI_API_KEY is unset (CI)")
+	requireCF := fs.Bool("require-cf", false, "fail TypeSafe billing skips instead of skip (CI)")
 	list := fs.Bool("list", false, "print default models and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
