@@ -40,6 +40,12 @@ func ListenAndServe(opts config.ServeOptions) error {
 		return err
 	}
 
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), backendProbeTimeout)
+	defer probeCancel()
+	if err := probeCloudflareCredentials(probeCtx, g.router.Registry().Config(), g.cfGet); err != nil {
+		return fmt.Errorf("gateway: %w", err)
+	}
+
 	server := &http.Server{
 		Addr:              opts.ListenAddr(),
 		Handler:           observability.WrapHandler(handler),

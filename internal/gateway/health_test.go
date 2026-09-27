@@ -2,12 +2,14 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 )
 
 func startMockSwitchyard(t *testing.T) *httptest.Server {
@@ -180,6 +182,54 @@ func TestBackendHealthHonorsRequestCancel(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"status":"degraded"`) {
 		t.Fatalf("body: %q", rec.Body.String())
+	}
+}
+
+func TestProbeCloudflareCredentialsSkipsLocal(t *testing.T) {
+	cfg := config.RouterConfig{
+		Backends: map[string]config.BackendDef{
+			"mlx_local": {
+				ID:           "mlx_local",
+				BaseURL:      "http://127.0.0.1:1322",
+				Capabilities: []config.Capability{config.CapTTS},
+			},
+		},
+	}
+	calls := 0
+	getCF := func(def config.BackendDef) (*cloudflare.Client, error) {
+		calls++
+		return nil, nil
+	}
+	if err := probeCloudflareCredentials(context.Background(), cfg, getCF); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("cfGet calls=%d", calls)
+	}
+}
+
+func TestProbeCloudflareCredentialsFailsOnGetError(t *testing.T) {
+	cfg := config.RouterConfig{
+		Backends: map[string]config.BackendDef{
+			"cf_local": {
+				ID:           "cf_local",
+				Remote:       true,
+				Extension:    config.ExtensionCloudflare,
+				BaseURL:      "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1",
+				Auth:         config.BackendAuth{BearerEnv: "CF_AI_API_KEY"},
+				Capabilities: []config.Capability{config.CapChat},
+			},
+		},
+	}
+	getCF := func(def config.BackendDef) (*cloudflare.Client, error) {
+		return nil, fmt.Errorf("bad creds")
+	}
+	err := probeCloudflareCredentials(context.Background(), cfg, getCF)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "cf_local") {
+		t.Fatalf("error %v", err)
 	}
 }
 

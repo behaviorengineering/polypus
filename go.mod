@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/behaviorengineering/olly v0.2.0
-	github.com/behaviorengineering/operatorconfig v0.1.0
+	github.com/behaviorengineering/operatorconfig v0.1.1
 	github.com/maximhq/bifrost/core v1.8.4
 	github.com/sony/gobreaker v1.0.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0

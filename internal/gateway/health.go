@@ -121,6 +121,20 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// probeCloudflareCredentials pings each remote Cloudflare extension backend before serve accepts traffic.
+func probeCloudflareCredentials(ctx context.Context, cfg config.RouterConfig, getCF CloudflareClientGet) error {
+	for _, id := range cfg.BackendIDs() {
+		b := cfg.Backends[id]
+		if !b.Remote || !b.IsCloudflareExtension() {
+			continue
+		}
+		if err := probeBackend(ctx, b, getCF); err != nil {
+			return fmt.Errorf("startup probe backend %s: %w (check polypus secret set / env)", id, err)
+		}
+	}
+	return nil
+}
+
 func probeBackend(ctx context.Context, b config.BackendDef, getCF CloudflareClientGet) error {
 	if b.Remote {
 		if b.IsCloudflareExtension() {
