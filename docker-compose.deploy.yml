@@ -1,10 +1,10 @@
-# Polypus Windows / Linux deploy stack (gateway + Switchyard + observability).
-# Usage: docker compose -f docker-compose.deploy.yml --env-file .env up -d
-# Host config: ./config/config.yaml (see config.deploy.yaml.example; omit secrets: there, inject CF_* via env below).
+# Polypus homelab stack. Image pins: images.env (no :latest). Secrets: .env.deploy from export-env.
+# Canonical homelab copy lives in gitlab.com/xynova/polypus-local.
+# Usage: docker compose -f docker-compose.deploy.yml --env-file images.env --env-file .env.deploy up -d
 
 services:
   gateway:
-    image: ${POLYPUS_IMAGE:-ghcr.io/behaviorengineering/polypus:latest}
+    image: ${POLYPUS_IMAGE}
     container_name: polypus-gateway
     restart: unless-stopped
     ports:
@@ -21,7 +21,7 @@ services:
       CF_ACCOUNT_ID: ${CF_ACCOUNT_ID}
       POLYPUS_OTLP_ENDPOINT: ${POLYPUS_OTLP_ENDPOINT:-http://phoenix:4317}
     volumes:
-      - ./config/config.yaml:/etc/polypus/config.yaml:ro
+      - ${POLYPUS_HOST_CONFIG}:/etc/polypus/config.yaml:ro
       - switchyard_routes:/var/lib/polypus/switchyard
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:1320/health"]
@@ -36,7 +36,7 @@ services:
         condition: service_started
 
   switchyard:
-    image: ${SWITCHYARD_IMAGE:-ghcr.io/behaviorengineering/polypus-switchyard:latest}
+    image: ${SWITCHYARD_IMAGE}
     container_name: polypus-switchyard
     restart: unless-stopped
     environment:
@@ -50,7 +50,7 @@ services:
         condition: service_healthy
 
   phoenix:
-    image: ${PHOENIX_IMAGE:-arizephoenix/phoenix:latest}
+    image: ${PHOENIX_IMAGE}
     container_name: polypus-phoenix
     restart: unless-stopped
     ports:
@@ -62,7 +62,7 @@ services:
       - phoenix_data:/data
 
   hyperdx:
-    image: ${HYPERDX_IMAGE:-clickhouse/clickstack-local:latest}
+    image: ${HYPERDX_IMAGE}
     container_name: polypus-hyperdx
     restart: unless-stopped
     environment:
