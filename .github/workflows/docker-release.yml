@@ -1,6 +1,17 @@
 name: Docker release
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Image version (v0.2.26 or 0.2.26)"
+        required: true
+        type: string
+      git_ref:
+        description: "Git ref to build (tag name or branch)"
+        required: false
+        type: string
+        default: main
   push:
     tags:
       - "v*"
@@ -27,7 +38,12 @@ jobs:
       - name: Resolve release ref
         id: release
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_call" ]]; then
+            RAW="${{ inputs.version }}"
+            VER="${RAW#v}"
+            echo "ref=${{ inputs.git_ref }}" >> "$GITHUB_OUTPUT"
+            echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             RAW="${{ github.event.inputs.tag }}"
             VER="${RAW#v}"
             echo "ref=${{ github.event.inputs.git_ref }}" >> "$GITHUB_OUTPUT"
