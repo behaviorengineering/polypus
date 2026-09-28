@@ -95,7 +95,7 @@ Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_
 
 Public package: import `github.com/behaviorengineering/polypus/pkg/polypus` for `Serve` / `Smoke`. Quality runners live in `internal/smoke`; `cmd/polypus-smoke` is a thin CLI.
 
-Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat defaults to gemma; systemone to `typesafe/jev`.
+Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat defaults to `@cf/zai-org/glm-4.7-flash`; systemone to `typesafe/jev`.
 
 Prereqs for cloud channels (`stack/.env` locally; GitHub Actions secrets on **push to main**):
 
@@ -110,7 +110,7 @@ make serve
 make smoke-all      # chat + TTS + STT + systemone (polypus-smoke)
 make smoke          # cf_local TTS only
 make smoke-stt      # cf_local TTS then STT
-make smoke-chat     # gemma chat
+make smoke-chat     # glm-4.7-flash chat
 make smoke-local    # MLX TTS (when mlx_local is up)
 make smoke-stt-local
 make smoke-router   # default router/investigator

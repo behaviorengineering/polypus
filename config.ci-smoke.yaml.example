@@ -41,7 +41,7 @@ backends:
     models:
       sync: true
       allow:
-        - "@cf/google/gemma-4-26b-a4b-it"
+        - "@cf/zai-org/glm-4.7-flash"
         - "@cf/deepgram/aura-2-en"
         - "@cf/deepgram/nova-3"
         - "typesafe/jev"

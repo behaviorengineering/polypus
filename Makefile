@@ -21,7 +21,7 @@ ifneq ($(wildcard $(abspath $(CURDIR)/../..)/stack/.env.example),)
 PARENT_MONOREPO_ROOT := $(abspath $(CURDIR)/../..)
 endif
 SMOKE_BIN := $(dir $(BINARY))polypus-smoke
-POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/google/gemma-4-26b-a4b-it
+POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/zai-org/glm-4.7-flash
 POLYPUS_ROUTER_SMOKE_MODEL ?= router/investigator
 
 IMAGE_REPO ?= xynova/polypus
@@ -48,7 +48,7 @@ help:
 	@echo "  make serve-down         Stop this Polypus process-compose project only"
 	@echo "  make smoke              TTS smoke via gateway (cf_local default)"
 	@echo "  make smoke-local        TTS smoke via MLX"
-	@echo "  make smoke-chat         L1 chat smoke via polypus-smoke (cheap gemma)"
+	@echo "  make smoke-chat         L1 chat smoke via polypus-smoke (glm-4.7-flash)"
 	@echo "  make smoke-router       Named router chat smoke (router/investigator by default)"
 	@echo "  make smoke-higgs        Higgs v2 TTS smoke (MLX)"
 	@echo "  make smoke-stt          TTS then STT round-trip (cf_local)"
