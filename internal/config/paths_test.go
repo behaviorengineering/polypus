@@ -110,6 +110,28 @@ func TestResolveModelsInventoryCachePathPrefersEnv(t *testing.T) {
 	}
 }
 
+func TestDefaultBatchDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+	got, err := DefaultBatchDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "polypus", "batch")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestResolveBatchDirPrefersEnv(t *testing.T) {
+	explicit := filepath.Join(t.TempDir(), "batch-store")
+	t.Setenv("POLYPUS_BATCH_DIR", explicit)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if got := ResolveBatchDir(); got != explicit {
+		t.Fatalf("got %q want %q", got, explicit)
+	}
+}
+
 func TestDefaultProcessComposeSockPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)

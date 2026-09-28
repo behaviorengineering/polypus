@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 )
 
 const backendProbeTimeout = 5 * time.Second

@@ -21,6 +21,7 @@ const (
 	CapSTT       Capability = "stt"
 	CapVoices    Capability = "voices"
 	CapSystemOne Capability = "systemone"
+	CapBatch     Capability = "batch"
 )
 
 // BackendDef is one OpenAI-compatible inference worker.
@@ -59,6 +60,7 @@ type RouterConfig struct {
 	STT        CapabilityBackend     `yaml:"-"`
 	Proxy      CapabilityBackend     `yaml:"-"`
 	SystemOne  CapabilityBackend     `yaml:"-"`
+	Batch      CapabilityBackend     `yaml:"-"`
 	Timeouts   Timeouts              `yaml:"-"`
 	Policy     RouterPolicy          `yaml:"policy"`
 	Backends   map[string]BackendDef `yaml:"backends"`
@@ -122,6 +124,14 @@ func (c RouterConfig) EffectiveSystemOneBackend() string {
 	return c.SystemOne.Default
 }
 
+// EffectiveBatchBackend returns the batch default when batch is enabled; otherwise empty.
+func (c RouterConfig) EffectiveBatchBackend() string {
+	if !c.Batch.Enabled {
+		return ""
+	}
+	return c.Batch.Default
+}
+
 // HasCapability reports whether the backend supports a capability.
 func (b BackendDef) HasCapability(cap Capability) bool {
 	for _, c := range b.Capabilities {
@@ -146,6 +156,7 @@ type routerFile struct {
 	STTBackend       capabilityBackendFile       `yaml:"stt_backend"`
 	ProxyBackend     capabilityBackendFile       `yaml:"proxy_backend"`
 	SystemOneBackend capabilityBackendFile       `yaml:"systemone_backend"`
+	BatchBackend     capabilityBackendFile       `yaml:"batch_backend"`
 	Timeouts         timeoutsFile                `yaml:"timeouts"`
 	Policy           routerPolicyFile            `yaml:"policy"`
 	Processes        processesFile               `yaml:"processes"`
@@ -234,6 +245,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 		STT:        parseCapabilityBackend(file.STTBackend),
 		Proxy:      parseCapabilityBackend(file.ProxyBackend),
 		SystemOne:  parseCapabilityBackend(file.SystemOneBackend),
+		Batch:      parseCapabilityBackend(file.BatchBackend),
 		Timeouts:   timeouts,
 		Policy:     file.Policy.merge(),
 		Backends:   make(map[string]BackendDef, len(file.Backends)),
@@ -309,6 +321,10 @@ func applyRouterEnvOverrides(cfg *RouterConfig, opts ServeOptions) {
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_SYSTEMONE_BACKEND")); v != "" {
 		cfg.SystemOne.Default = v
 		cfg.SystemOne.Enabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_BATCH_BACKEND")); v != "" {
+		cfg.Batch.Default = v
+		cfg.Batch.Enabled = true
 	}
 	// CLI --backend overrides mlx_local URL when present.
 	if opts.BackendURL != "" {
@@ -390,6 +406,9 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 	if err := normalizeCapabilityBackend(cfg, &cfg.SystemOne, "systemone_backend", false); err != nil {
 		return err
 	}
+	if err := normalizeCapabilityBackend(cfg, &cfg.Batch, "batch_backend", false); err != nil {
+		return err
+	}
 	for id, b := range cfg.Backends {
 		if b.ID == "" {
 			b.ID = id
@@ -442,6 +461,11 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 	}
 	if cfg.SystemOne.Enabled {
 		if err := requireBackend(cfg, cfg.SystemOne.Default, CapSystemOne, "systemone_backend.default"); err != nil {
+			return err
+		}
+	}
+	if cfg.Batch.Enabled {
+		if err := requireBackend(cfg, cfg.Batch.Default, CapBatch, "batch_backend.default"); err != nil {
 			return err
 		}
 	}

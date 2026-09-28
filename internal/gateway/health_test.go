@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 )
 
 func startMockSwitchyard(t *testing.T) *httptest.Server {

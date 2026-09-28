@@ -18,11 +18,13 @@ import (
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
-const modelsTimeout = 30 * time.Second
-const pingTimeout = 5 * time.Second
-const modelsCacheTTL = 10 * time.Minute
-const modelsPerPage = 100
-const modelsMaxBody = 8 << 20
+const (
+	modelsTimeout  = 30 * time.Second
+	pingTimeout    = 5 * time.Second
+	modelsCacheTTL = 10 * time.Minute
+	modelsPerPage  = 100
+	modelsMaxBody  = 8 << 20
+)
 
 var accountIDRE = regexp.MustCompile(`/accounts/([^/]+)/`)
 

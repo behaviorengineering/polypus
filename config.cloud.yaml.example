@@ -23,6 +23,9 @@ vision_backend:
 systemone_backend:
   enabled: true
   default: cf_local
+batch_backend:
+  enabled: true
+  default: cf_local
 timeouts:
   min: 5s
   max: 900s
@@ -42,7 +45,7 @@ backends:
     base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
-    capabilities: [chat, vision, tts, stt, voices, systemone]
+    capabilities: [chat, vision, tts, stt, voices, systemone, batch]
     models:
       sync: true
       allow:

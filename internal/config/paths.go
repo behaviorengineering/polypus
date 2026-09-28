@@ -71,6 +71,28 @@ func DefaultStateDir() (string, error) {
 	return filepath.Join(home, ".local", "state", "polypus"), nil
 }
 
+// DefaultBatchDir returns ~/.local/state/polypus/batch (or $XDG_STATE_HOME/polypus/batch).
+func DefaultBatchDir() (string, error) {
+	dir, err := DefaultStateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "batch"), nil
+}
+
+// ResolveBatchDir picks the on-disk batch and files store root.
+// Order: POLYPUS_BATCH_DIR, then DefaultBatchDir.
+func ResolveBatchDir() string {
+	if path := strings.TrimSpace(os.Getenv("POLYPUS_BATCH_DIR")); path != "" {
+		return path
+	}
+	path, err := DefaultBatchDir()
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
 // DefaultProcessComposeSockPath returns the default process-compose Unix socket path.
 func DefaultProcessComposeSockPath() (string, error) {
 	dir, err := DefaultStateDir()

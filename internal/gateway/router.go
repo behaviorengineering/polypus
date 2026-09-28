@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
-	"github.com/behaviorengineering/polypus/internal/router"
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
 
 // RegistryProvider exposes the routing table.
