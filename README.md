@@ -231,13 +231,13 @@ docker compose up hyperdx              # HyperDX alone: UI :8080, OTLP :4319/:43
 make docker-build                      # optional gateway image (Dockerfile)
 ```
 
-**Windows / homelab deploy:** GitLab [xynova/polypus-local](https://gitlab.com/xynova/polypus-local). Runner-first CD: install runner + keychain secrets once; pipelines checkout the deploy repo, use tagged `images.env` (no `:latest`), bump Polypus on GHCR publish, Renovate for Phoenix/HyperDX. **GitHub Packages** webhooks into that pipeline. See [windows-gitlab-deploy.md](ai-copilots/skills/polypus-operator/windows-gitlab-deploy.md). GHCR image builds on `v*` tags: `.github/workflows/docker-release.yml`. To publish images for an existing semver (workflow or Dockerfile landed after the git tag), run **Actions → Docker release → Run workflow**: set **tag** to `v0.2.26` and leave **git_ref** at `main` (builds current tree, tags GHCR as `0.2.26`).
+**Windows / homelab deploy:** GitLab [xynova/polypus-local](https://gitlab.com/xynova/polypus-local). Runner-first CD: install runner + keychain secrets once; pipelines checkout the deploy repo, use tagged `images.env` (no `:latest`), bump Polypus on GHCR publish, Renovate for Phoenix/HyperDX. **GitHub Packages** webhooks into that pipeline. See [windows-gitlab-deploy.md](ai-copilots/skills/polypus-operator/windows-gitlab-deploy.md). GHCR images publish with **Auto patch release** (same workflow as GoReleaser binaries). Manual backfill: **Actions → Docker release → Run workflow** with **tag** `vX.Y.Z` and **git_ref** `main` or the tag.
 
 Set `POLYPUS_PHOENIX=0` and/or `POLYPUS_HYPERDX=0` to skip either container under `make serve`. `pc-up.sh` probes Docker with a 3s timeout (`POLYPUS_DOCKER_PROBE_TIMEOUT`); if the daemon is down it asks whether to continue without those containers (`POLYPUS_DOCKER_CONTINUE=1` skips the prompt).
 
 ## Releases
 
-**Auto patch (default):** Every push to `main` that includes releasable changes creates `vX.Y.(Z+1)` and publishes binaries via [GoReleaser](https://goreleaser.com) (`.github/workflows/auto-patch-release.yml`). Skipped when commits since the last tag are only `docs:`, `chore:`, or `ci:`, or the push subject contains `[skip release]`.
+**Auto patch (default):** Every push to `main` that includes releasable product changes creates `vX.Y.(Z+1)` and publishes GoReleaser binaries plus GHCR gateway/switchyard images (`.github/workflows/auto-patch-release.yml`). Skipped for docs/chore/ci-only commits, cursor-packs harness-only diffs (`.cursor/`, `lefthook.yml`), or `[skip release]`.
 
 **Manual bump:** Run the **Auto patch release** workflow with `bump: minor|major|patch`, or push an annotated `v*` tag on `main` (`.github/workflows/release.yml`).
 
