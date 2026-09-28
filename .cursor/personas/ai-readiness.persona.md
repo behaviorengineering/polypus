@@ -1,0 +1,1 @@
+../packs/shared/personas/ai-readiness.persona.md
