@@ -7,7 +7,7 @@ import (
 	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/behaviorengineering/polypus/internal/upstream"
+	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 )
 
 // proxyOrBifrostChat sends leaf chat via Bifrost when the backend is registered;

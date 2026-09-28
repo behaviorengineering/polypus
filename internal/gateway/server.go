@@ -10,13 +10,15 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
+	"github.com/behaviorengineering/polypus/internal/batch"
+	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
+	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
-	"github.com/behaviorengineering/polypus/internal/router"
-	"github.com/behaviorengineering/polypus/internal/upstream"
 )
 
 // shared holds dependencies used by capability handlers.
@@ -30,6 +32,8 @@ type shared struct {
 	client      *http.Client
 	upstreams   *upstream.Board
 	cfGet       CloudflareClientGet
+	batchStore  *batch.DiskStore
+	batchNow    func() time.Time
 }
 
 // Gateway is the Polypus HTTP mux (controller) over capability handlers.
@@ -37,10 +41,12 @@ type Gateway struct {
 	*shared
 }
 
-type chatHandler struct{ *shared }
-type modelsHandler struct{ *shared }
-type healthHandler struct{ *shared }
-type speechHandler struct{ *shared }
+type (
+	chatHandler   struct{ *shared }
+	modelsHandler struct{ *shared }
+	healthHandler struct{ *shared }
+	speechHandler struct{ *shared }
+)
 
 func (s *shared) cloudflareClient(b config.BackendDef) (*cloudflare.Client, error) {
 	if s != nil && s.cfGet != nil {
@@ -101,6 +107,19 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 	if timeouts.Max == 0 {
 		timeouts = config.DefaultTimeouts()
 	}
+	var batchStore *batch.DiskStore
+	if batchRoot := config.ResolveBatchDir(); batchRoot != "" {
+		bs, batchStoreErr := batch.NewDiskStore(batchRoot, func() time.Time { return time.Now().UTC() })
+		if batchStoreErr != nil {
+			if owned {
+				if c, ok := rc.(routerCloser); ok {
+					c.Close()
+				}
+			}
+			return nil, fmt.Errorf("gateway: batch store: %w", batchStoreErr)
+		}
+		batchStore = bs
+	}
 	s := &shared{
 		opts:        opts,
 		router:      rc,
@@ -111,8 +130,17 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 		client:      newChatProxyClient(timeouts.Max),
 		upstreams:   upstream.NewBoard(),
 		cfGet:       cfGet,
+		batchStore:  batchStore,
+		batchNow:    func() time.Time { return time.Now().UTC() },
 	}
 	return &Gateway{shared: s}, nil
+}
+
+func (s *shared) batchNowTime() time.Time {
+	if s != nil && s.batchNow != nil {
+		return s.batchNow()
+	}
+	return time.Now().UTC()
 }
 
 func newFallbackProxy(backendURL string) (http.Handler, error) {
@@ -154,6 +182,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.proxy.ServeHTTP(w, r)
 	case r.URL.Path == "/v1/systemone" && r.Method == http.MethodPost:
 		systemOneHandler{g.shared}.serveSystemOne(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/files"):
+		filesHandler{g.shared}.serveFiles(w, r)
+	case r.URL.Path == "/v1/batches":
+		batchesHandler{g.shared}.serveBatches(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/batches/"):
+		batchesHandler{g.shared}.serveBatchByID(w, r)
 	default:
 		http.NotFound(w, r)
 	}

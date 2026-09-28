@@ -11,8 +11,8 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/behaviorengineering/polypus/internal/router"
-	"github.com/behaviorengineering/polypus/internal/upstream"
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
+	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 )
 
 // fakeRouter satisfies Router without bifrost.Init (UsesBifrost always false).

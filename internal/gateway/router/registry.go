@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/internal/extension/cloudflare"
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
@@ -86,6 +86,11 @@ func (r *Registry) ResolveSystemOne(model string) (string, string, error) {
 		model = DefaultSystemOneModel
 	}
 	return r.resolveCapability(config.CapSystemOne, r.cfg.EffectiveSystemOneBackend(), model)
+}
+
+// ResolveBatch picks backend and downstream model for OpenAI Batch (Cloudflare extension).
+func (r *Registry) ResolveBatch(model string) (string, string, error) {
+	return r.resolveCapability(config.CapBatch, r.cfg.EffectiveBatchBackend(), strings.TrimSpace(model))
 }
 
 func (r *Registry) resolveCapability(cap config.Capability, defaultBackend, model string) (string, string, error) {

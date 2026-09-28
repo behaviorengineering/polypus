@@ -12,12 +12,14 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
-	"github.com/behaviorengineering/polypus/internal/upstream"
 )
 
-const chatMaxBody = 32 << 20
-const errBackendNotFound = "polypus: backend not found"
+const (
+	chatMaxBody        = 32 << 20
+	errBackendNotFound = "polypus: backend not found"
+)
 
 func newChatProxyClient(max time.Duration) *http.Client {
 	if max <= 0 {

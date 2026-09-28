@@ -65,6 +65,8 @@ flowchart TB
 
 **Bifrost:** Bifrost fronts every OpenAI-compatible outbound dial Polypus can use: leaf backends, Cloudflare chat/embed, composed Switchyard hops (`provider` id `switchyard`), and Cloudflare speech/transcription (plugin → `/run`). Model Search is not a Bifrost surface.
 
+**OpenAI Batch (Cloudflare):** `POST /v1/files` and `/v1/batches` expose an OpenAI Batch facade over Workers AI Asynchronous Batch (`/ai/run/{model}?queueRequest=true`). State and JSONL live under `~/.local/state/polypus/batch` (override with `POLYPUS_BATCH_DIR`). Requires `batch_backend` and `batch` capability on a Cloudflare extension backend. Chat and embeddings JSONL only in this slice.
+
 ## Quick start (Apple Silicon)
 
 ```bash
@@ -127,10 +129,12 @@ polypus/
   cmd/polypus/                    # Thin gateway binary
   cmd/polypus-smoke/              # Thin multi-channel smoke CLI
   internal/gateway/               # HTTP surface (/health, /v1/models, chat/embed/audio, /v1/systemone)
+  internal/gateway/router/        # Bifrost SDK + registry + policy
+  internal/gateway/upstream/      # Per-target circuit breakers for gateway dials
+  internal/clients/cloudflare/    # Model Search + /ai/run speech + systemone + batch + Bifrost speech plugin
   internal/smoke/                 # Quality probes (chat/tts/stt/systemone)
-  internal/router/                # Bifrost SDK + registry + policy
   internal/switchyard/            # routers: YAML → routes.toml, Switchyard client
-  internal/extension/cloudflare/  # Model Search + /ai/run speech + systemone + Bifrost speech plugin
+  internal/batch/                 # OpenAI Files/Batches disk store + JSONL parse
   providers/switchyard/           # git submodule (switchyard-server)
   docs/switchyard/                # routing type guides
   config.yaml.example             # template → ~/.config/polypus/config.yaml
@@ -154,6 +158,14 @@ polypus/
 | `POST` | `/v1/audio/transcriptions` | STT |
 | `GET` | `/v1/audio/voices` | Voice list |
 | `POST` | `/v1/systemone` | TypeSafe / Decider structured evaluation (noul / choice / score) |
+| `POST` | `/v1/files` | Upload batch input JSONL (`purpose=batch`) |
+| `GET` | `/v1/files/{id}` | File metadata |
+| `GET` | `/v1/files/{id}/content` | Download file bytes (input or batch output) |
+| `DELETE` | `/v1/files/{id}` | Delete stored file |
+| `POST` | `/v1/batches` | Create batch from `input_file_id` (Cloudflare async batch) |
+| `GET` | `/v1/batches` | List batches |
+| `GET` | `/v1/batches/{id}` | Retrieve batch (polls Cloudflare while in progress) |
+| `POST` | `/v1/batches/{id}/cancel` | Cancel local polling (best effort) |
 
 Point TypeSafe SDKs at the gateway with `TYPESAFE_BASE_URL=http://127.0.0.1:1320` and model `cf_local/typesafe/jev` (or bare `typesafe/jev` when `systemone_backend.default` is `cf_local`).
 

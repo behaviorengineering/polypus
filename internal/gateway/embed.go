@@ -11,7 +11,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/behaviorengineering/polypus/internal/upstream"
+	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 )
 
 const embedMaxBody = 8 << 20

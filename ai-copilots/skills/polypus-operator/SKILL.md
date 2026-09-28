@@ -166,7 +166,7 @@ Downstream apps MUST use `POLYPUS_BASE_URL` only (`http://127.0.0.1:1320`). Back
 
 | Concern | Owner | What it does |
 |---------|-------|----------------|
-| Circuit breaker | Polypus (`internal/upstream.Board`) | After consecutive dial failures, stops hitting a sick upstream and returns **503** (open / half-open limit). Fixed open window; not exponential backoff. |
+| Circuit breaker | Polypus (`internal/gateway/upstream.Board`) | After consecutive dial failures, stops hitting a sick upstream and returns **503** (open / half-open limit). Fixed open window; not exponential backoff. |
 | Retries / exponential backoff | HTTP clients | Budgeted retry only on clearly “try later” answers (**503**, **429**, honor `Retry-After` when present). |
 
 **CONSTRAINT:** Polypus MUST own per-upstream circuit breaking for gateway dials. MUST NOT add a gateway-wide sleep-and-retry (exponential backoff) loop around chat or streamed hops.

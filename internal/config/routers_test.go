@@ -292,6 +292,7 @@ routers:
 }
 
 func TestGatewayBaseURLUsesLoopbackForWildcardBind(t *testing.T) {
+	t.Setenv("POLYPUS_BASE_URL", "")
 	opts := ServeOptions{Host: "0.0.0.0", Port: 1320}
 	if got := opts.GatewayBaseURL(); got != "http://127.0.0.1:1320" {
 		t.Fatalf("gateway base url: %q", got)
