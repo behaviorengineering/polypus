@@ -49,7 +49,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.96.0
+          toolchain: 1.96.1
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -99,7 +99,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         if: steps.decide.outputs.skip != 'true'
         with:
-          toolchain: 1.96.0
+          toolchain: 1.96.1
 
       - uses: Swatinem/rust-cache@v2
         if: steps.decide.outputs.skip != 'true'
