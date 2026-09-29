@@ -20,7 +20,7 @@ const (
 
 // Default cheap Cloudflare models for CI and smoke-all.
 const (
-	DefaultChatModel      = "cf_local/@cf/zai-org/glm-4.7-flash"
+	DefaultChatModel      = "cf_local/@cf/ibm-granite/granite-4.0-h-micro"
 	DefaultTTSModel       = "cf_local/@cf/deepgram/aura-2-en"
 	DefaultSTTModel       = "cf_local/@cf/deepgram/nova-3"
 	DefaultSystemOneModel = "cf_local/typesafe/jev"

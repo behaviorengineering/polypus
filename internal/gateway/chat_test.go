@@ -73,6 +73,39 @@ func TestDisableChatThinkingInRequestGLM(t *testing.T) {
 	}
 }
 
+func TestDisableChatThinkingInRequestDeepSeek(t *testing.T) {
+	in := []byte(`{"model":"cf_local/@cf/deepseek-ai/deepseek-v4-flash-0731","messages":[{"role":"user","content":"hi"}]}`)
+	out, changed := disableChatThinkingInRequest(in)
+	if !changed {
+		t.Fatal("expected change")
+	}
+	if !strings.Contains(string(out), `"reasoning_effort":"none"`) {
+		t.Fatalf("body=%s", out)
+	}
+}
+
+func TestDisableChatThinkingDeepSeekHonorsExplicitHigh(t *testing.T) {
+	in := []byte(`{"model":"@cf/deepseek-ai/deepseek-v4-flash-0731","reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}`)
+	out, changed := disableChatThinkingInRequest(in)
+	if changed {
+		t.Fatalf("should not rewrite when reasoning_effort is high: %s", out)
+	}
+	if !chatBodyWantsThinking(in) {
+		t.Fatal("expected thinking on for high effort")
+	}
+}
+
+func TestDisableChatThinkingDeepSeekExplicitNoneUnchanged(t *testing.T) {
+	in := []byte(`{"model":"@cf/deepseek-ai/deepseek-v4-flash-0731","reasoning_effort":"none","messages":[{"role":"user","content":"hi"}]}`)
+	out, changed := disableChatThinkingInRequest(in)
+	if changed {
+		t.Fatalf("should not rewrite when reasoning_effort is already none: %s", out)
+	}
+	if chatBodyWantsThinking(in) {
+		t.Fatal("expected thinking off for none")
+	}
+}
+
 func TestDisableChatThinkingHonorsExplicitOn(t *testing.T) {
 	in := []byte(`{"model":"@cf/google/gemma-4-26b-a4b-it","enable_thinking":true,"messages":[{"role":"user","content":"hi"}]}`)
 	out, changed := disableChatThinkingInRequest(in)

@@ -59,7 +59,7 @@ make smoke-all
 # or: go test -tags=integration -count=1 ./internal/smoke/integration
 ```
 
-Runs chat (glm-4.7-flash), TTS (aura), STT (nova), and systemone (`typesafe/jev`). On **push to main**, CI runs the same package with `POLYPUS_SMOKE_LIVE=1` and secrets `CF_AI_API_KEY` / `CF_ACCOUNT_ID` against real Workers AI.
+Runs chat (granite-4.0-h-micro), TTS (aura), STT (nova), and systemone (`typesafe/jev`). On **push to main**, CI runs the same package with `POLYPUS_SMOKE_LIVE=1` and secrets `CF_AI_API_KEY` / `CF_ACCOUNT_ID` against real Workers AI.
 
 ### 3a. Smoke chat only (L1 transport)
 
@@ -67,7 +67,7 @@ Runs chat (glm-4.7-flash), TTS (aura), STT (nova), and systemone (`typesafe/jev`
 make smoke-chat
 ```
 
-Default model: `cf_local/@cf/zai-org/glm-4.7-flash` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
+Default model: `cf_local/@cf/ibm-granite/granite-4.0-h-micro` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
 
 ### 3b. Smoke named router (when `routers:` configured)
 

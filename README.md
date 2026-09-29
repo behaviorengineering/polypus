@@ -98,7 +98,7 @@ Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_
 
 Public package: import `github.com/behaviorengineering/polypus/pkg/polypus` for `Serve` / `Smoke`. L1 probes live in `internal/smoke`. Default operator path: `make smoke-*` or `go test -tags=integration ./internal/smoke/integration` (builds `cmd/polypus`, starts a temp gateway with a mock Cloudflare backend). `cmd/polypus-smoke` dials an already-running gateway (`make serve`).
 
-Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat defaults to `@cf/zai-org/glm-4.7-flash`; systemone to `typesafe/jev`. Batch smoke (`make smoke-batch`) defaults to `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`); it is opt-in because async Workers AI batches are slow and need `batch_backend` plus a batch-capable model.
+Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat defaults to `@cf/ibm-granite/granite-4.0-h-micro`; systemone to `typesafe/jev`. Batch smoke (`make smoke-batch`) defaults to `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`); it is opt-in because async Workers AI batches are slow and need `batch_backend` plus a batch-capable model.
 
 Prereqs for cloud channels (`stack/.env` locally; GitHub Actions secrets on **push to main**):
 

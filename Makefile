@@ -23,7 +23,7 @@ ifneq ($(wildcard $(abspath $(CURDIR)/../..)/stack/.env.example),)
 PARENT_MONOREPO_ROOT := $(abspath $(CURDIR)/../..)
 endif
 SMOKE_BIN := $(dir $(BINARY))polypus-smoke
-POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/zai-org/glm-4.7-flash
+POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/ibm-granite/granite-4.0-h-micro
 POLYPUS_ROUTER_SMOKE_MODEL ?= router/investigator
 POLYPUS_BATCH_SMOKE_MODEL ?= cf_local/@cf/google/gemma-4-26b-a4b-it
 
@@ -51,7 +51,7 @@ help:
 	@echo "  make serve-down         Stop this Polypus process-compose project only"
 	@echo "  make smoke              TTS L1 smoke (builds gateway + mock CF; no make serve)"
 	@echo "  make smoke-local        TTS smoke via MLX (requires mlx_local up)"
-	@echo "  make smoke-chat         L1 chat integration smoke (glm-4.7-flash)"
+	@echo "  make smoke-chat         L1 chat integration smoke (granite-4.0-h-micro)"
 	@echo "  make smoke-router       Named router chat via polypus-smoke (needs make serve + Switchyard)"
 	@echo "  make smoke-batch        L1 batch facade integration smoke (gemma-4 default)"
 	@echo "  make smoke-higgs        Higgs v2 TTS smoke (MLX)"
