@@ -1,6 +1,6 @@
 # Polypus CI / L1 smoke leaf: chat + TTS + STT + systemone on cf_local only.
-# Used by .github/workflows/ci.yml on push to main (and locally with POLYPUS_CONFIG).
-# Needs CF_AI_API_KEY and CF_ACCOUNT_ID. No MLX, Switchyard, vision, or embed.
+# Used by .github/workflows/ci.yml on PR and push to main (POLYPUS_SWITCHYARD=1).
+# Needs CF_AI_API_KEY and CF_ACCOUNT_ID on main for live multi-channel smoke. No MLX, vision, or embed.
 
 processes:
   mlx: false
@@ -45,3 +45,13 @@ backends:
         - "@cf/deepgram/aura-2-en"
         - "@cf/deepgram/nova-3"
         - "typesafe/jev"
+
+routers:
+  ci_router:
+    capability: chat
+    route:
+      type: stage_router
+      picker: efficient_first
+      confidence_threshold: 0.5
+      capable: cf_local/@cf/zai-org/glm-4.7-flash
+      efficient: cf_local/@cf/zai-org/glm-4.7-flash
