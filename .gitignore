@@ -3,6 +3,7 @@ backends/mlx/.venv/
 
 # Build output
 bin/
+docker-bin/
 build/
 dist/
 .crates.toml

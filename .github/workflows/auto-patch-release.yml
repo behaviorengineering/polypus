@@ -1,6 +1,6 @@
 # Auto patch release (agent-oriented)
 #
-# On every push to main, create vX.Y.(Z+1) and publish binaries via GoReleaser
+# After CI succeeds on main, create vX.Y.(Z+1) and publish binaries via GoReleaser
 # plus GHCR images, unless decide script skips (docs/chore/ci, harness-only, [skip release]).
 #
 # Manual bump (minor/major/patch): workflow_dispatch.
@@ -9,7 +9,9 @@
 name: Auto patch release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -28,7 +30,42 @@ permissions:
   packages: write
 
 jobs:
+  gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: providers/switchyard
+
+      - name: Gate switchyard build (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: providers/switchyard
+        run: cargo build --release -p switchyard-server
+
+      - name: Gate Go tests (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: go test -count=1 ./internal/gateway/...
+
   release:
+    needs: gate
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.decide.outputs.skip }}
@@ -38,13 +75,14 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Decide whether to tag
         id: decide
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          EVENT_NAME: ${{ github.event_name == 'workflow_run' && 'push' || github.event_name }}
           MANUAL_BUMP: ${{ github.event.inputs.bump }}
-          HEAD_MSG: ${{ github.event.head_commit.message }}
+          HEAD_MSG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_commit.message || '' }}
         run: bash .cursor/packs/shared/scripts/auto-patch-decide.sh
 
       - name: Skip notice
@@ -57,6 +95,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.decide.outputs.skip != 'true'
+        with:
+          toolchain: 1.96.0
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.decide.outputs.skip != 'true'
+        with:
+          workspaces: providers/switchyard
 
       - name: Create and push tag
         if: steps.decide.outputs.skip != 'true'
@@ -78,11 +126,26 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build and upload switchyard linux/amd64 archive
+        if: steps.decide.outputs.skip != 'true'
+        env:
+          NEW_TAG: ${{ steps.decide.outputs.new_tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VER="${NEW_TAG#v}"
+          cargo build --release -p switchyard-server --manifest-path providers/switchyard/Cargo.toml
+          mkdir -p dist
+          cp providers/switchyard/target/release/switchyard-server "dist/switchyard-server"
+          ARCHIVE="dist/polypus-switchyard_${VER}_linux_amd64.tar.gz"
+          tar -czf "$ARCHIVE" -C dist switchyard-server
+          sha256sum "$ARCHIVE" | tee "dist/polypus-switchyard_${VER}_linux_amd64.sha256"
+          gh release upload "${NEW_TAG}" "$ARCHIVE" "dist/polypus-switchyard_${VER}_linux_amd64.sha256" --clobber
+
   docker:
     needs: release
     if: needs.release.outputs.skip != 'true'
     uses: ./.github/workflows/docker-release.yml
     with:
       version: ${{ needs.release.outputs.new_tag }}
-      git_ref: ${{ needs.release.outputs.new_tag }}
     secrets: inherit
