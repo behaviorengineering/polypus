@@ -14,7 +14,7 @@ Polypus ships **L1 transport smoke** in this repo. Deeper L2/L3 XML and job-fixt
 make smoke-all
 go test -tags=integration -count=1 ./internal/smoke/integration
 make smoke-chat
-POLYPUS_CHAT_SMOKE_MODEL='cf_local/@cf/google/gemma-4-26b-a4b-it' make smoke-chat
+POLYPUS_CHAT_SMOKE_MODEL='cf_local/@cf/zai-org/glm-4.7-flash' make smoke-chat
 make smoke-router
 POLYPUS_ROUTER_SMOKE_MODEL='router/investigator' make smoke-router
 make smoke-batch
@@ -28,7 +28,7 @@ make smoke-systemone
 
 Integration: `internal/smoke/integration` (`-tags=integration`). Optional CLI against a running gateway: `bin/polypus-smoke` (`make build-smoke`). Public API: `pkg/polypus.Smoke`.
 
-Default chat model: `cf_local/@cf/zai-org/glm-4.7-flash` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
+Default chat model: `cf_local/@cf/ibm-granite/granite-4.0-h-micro` (override with `POLYPUS_CHAT_SMOKE_MODEL`; use GLM or Gemma for reasoning probes).
 
 Default router model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`). Run when `routers:` is configured — especially composed (`stage_router`) routes that need Switchyard.
 

@@ -52,6 +52,7 @@ backends:
     models:
       sync: false
       allow:
+        - "@cf/ibm-granite/granite-4.0-h-micro"
         - "@cf/zai-org/glm-4.7-flash"
         - "@cf/google/gemma-4-26b-a4b-it"
         - "@cf/deepgram/aura-2-en"
@@ -109,6 +110,7 @@ backends:
     models:
       sync: false
       allow:
+        - "@cf/ibm-granite/granite-4.0-h-micro"
         - "@cf/zai-org/glm-4.7-flash"
         - "@cf/google/gemma-4-26b-a4b-it"
         - "@cf/deepgram/aura-2-en"

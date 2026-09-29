@@ -8,9 +8,15 @@ Use when chat returns empty `message.content`, DSPy XML parse fails, or Gemma/GL
 - CF schema often defaults thinking **on** for Gemma 4.
 - When thinking is on, the model may put the answer in `reasoning_content` and leave `content` empty.
 
+## Cloudflare DeepSeek (V4 Flash)
+
+- Workers AI uses top-level `reasoning_effort` (`none`, `low`, `high`, `max`). CF defaults to **high** when omitted.
+- Polypus injects `"reasoning_effort": "none"` on chat requests when the model id contains `deepseek` and the client did not set `reasoning_effort`.
+- Opt in by sending `reasoning_effort` with any value other than `none` / empty (for example `low` or `high`).
+
 ## Polypus gateway behavior
 
-- Disables thinking **unless** the client explicitly enables it.
+- Disables thinking **unless** the client explicitly enables it (Gemma/GLM via `enable_thinking`; DeepSeek via `reasoning_effort`).
 - On successful responses, merges `reasoning_content` into `content` when `content` is empty.
 - Thinking requests use the `chat_thinking` timeout bucket (default 600s in config).
 
