@@ -28,6 +28,7 @@ const (
 	DefaultTTSModel       = smoke.DefaultTTSModel
 	DefaultSTTModel       = smoke.DefaultSTTModel
 	DefaultSystemOneModel = smoke.DefaultSystemOneModel
+	DefaultBatchModel     = smoke.DefaultBatchModel
 )
 
 // LoadServeOptions resolves host/port/backend from the environment.
@@ -50,7 +51,8 @@ func NewHandler(opts ServeOptions, options ...gateway.HandlerOption) (http.Handl
 	return gateway.NewHandler(opts, options...)
 }
 
-// Smoke runs chat, TTS, STT, and/or systemone probes against a gateway.
+// Smoke runs chat, TTS, STT, systemone, and/or batch probes against a gateway.
+// Batch is opt-in via Options.Channels (not included in AllSmokeChannels).
 func Smoke(ctx context.Context, opts SmokeOptions) ([]SmokeResult, error) {
 	return smoke.Run(ctx, opts)
 }

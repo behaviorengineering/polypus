@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/smoke"
 )
@@ -137,6 +138,78 @@ func TestSystemOneFailInsufficientBalanceWhenRequireCF(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected fail when RequireCF")
+	}
+}
+
+func TestBatchLifecycleSmoke(t *testing.T) {
+	polls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/health":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/files":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "file-smoke-1", "object": "file", "purpose": "batch",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/batches":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "batch-smoke-1", "object": "batch", "status": "in_progress",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/batches/batch-smoke-1":
+			polls++
+			if polls < 2 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id": "batch-smoke-1", "status": "in_progress",
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "batch-smoke-1", "status": "completed", "output_file_id": "file-out-1",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/files/file-out-1/content":
+			_, _ = w.Write([]byte(`{"id":"resp","custom_id":"smoke-batch-1","response":{"status_code":200,"body":{}}}` + "\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	results, err := smoke.Run(ctx, smoke.Options{
+		BaseURL:  srv.URL,
+		Channels: []string{smoke.ChannelBatch},
+	})
+	if err != nil {
+		t.Fatalf("run: %v results=%v", err, results)
+	}
+	if polls < 2 {
+		t.Fatalf("expected poll retries, polls=%d", polls)
+	}
+	for _, r := range results {
+		if r.Status == "fail" {
+			t.Fatalf("failed row: %+v", r)
+		}
+	}
+}
+
+func TestBatchRequiresDeadline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := smoke.Run(context.Background(), smoke.Options{
+		BaseURL:  srv.URL,
+		Channels: []string{smoke.ChannelBatch},
+	})
+	if err == nil {
+		t.Fatal("expected fail without deadline")
 	}
 }
 

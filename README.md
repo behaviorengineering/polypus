@@ -81,6 +81,7 @@ make smoke-local  # TTS via MLX (needs mlx_local up)
 make smoke-stt-local  # TTS+STT via MLX
 make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
 make smoke-router # router/investigator (needs routers: + Switchyard for composed types)
+make smoke-batch  # OpenAI files+batches facade (Workers AI async; opt-in, not in smoke-all)
 make smoke-systemone  # TypeSafe /v1/systemone via cf_local/typesafe/jev (gateway credentials)
 make smoke-all    # chat + TTS + STT + systemone via bin/polypus-smoke (gateway must be up)
 ```
@@ -97,7 +98,7 @@ Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_
 
 Public package: import `github.com/behaviorengineering/polypus/pkg/polypus` for `Serve` / `Smoke`. Quality runners live in `internal/smoke`; `cmd/polypus-smoke` is a thin CLI.
 
-Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat defaults to `@cf/zai-org/glm-4.7-flash`; systemone to `typesafe/jev`.
+Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat defaults to `@cf/zai-org/glm-4.7-flash`; systemone to `typesafe/jev`. Batch smoke (`make smoke-batch`) defaults to `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`); it is opt-in because async Workers AI batches are slow and need `batch_backend` plus a batch-capable model.
 
 Prereqs for cloud channels (`stack/.env` locally; GitHub Actions secrets on **push to main**):
 
@@ -116,6 +117,7 @@ make smoke-chat     # glm-4.7-flash chat
 make smoke-local    # MLX TTS (when mlx_local is up)
 make smoke-stt-local
 make smoke-router   # default router/investigator
+make smoke-batch    # files upload + batch create/poll + output JSONL
 make smoke-systemone
 ```
 

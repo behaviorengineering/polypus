@@ -83,7 +83,17 @@ Default model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`
 
 `/health/backends` probing Switchyard is **not** a substitute for this smoke; it only checks `:4000/health`.
 
-### 3c. Smoke systemone (TypeSafe / Jev)
+### 3c. Smoke OpenAI batch facade
+
+Requires `batch_backend` enabled, `batch` capability on a Cloudflare extension backend, and a Workers AI batch-capable model on the allow list. Not part of `make smoke-all` (async poll can take minutes).
+
+```bash
+make smoke-batch
+```
+
+Default model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`). Probes upload JSONL (`POST /v1/files`), create a batch (`POST /v1/batches`), poll until terminal, then check output file content for the smoke `custom_id`.
+
+### 3d. Smoke systemone (TypeSafe / Jev)
 
 Requires `systemone_backend` enabled and `typesafe/jev` on the allow list. The CLI dials the gateway; Cloudflare credentials come from config `secrets:` plus keyring or process env on **serve**, not from the smoke shell:
 

@@ -15,6 +15,7 @@ const (
 	ChannelTTS       = "tts"
 	ChannelSTT       = "stt"
 	ChannelSystemOne = "systemone"
+	ChannelBatch     = "batch"
 )
 
 // Default cheap Cloudflare models for CI and smoke-all.
@@ -23,7 +24,9 @@ const (
 	DefaultTTSModel       = "cf_local/@cf/deepgram/aura-2-en"
 	DefaultSTTModel       = "cf_local/@cf/deepgram/nova-3"
 	DefaultSystemOneModel = "cf_local/typesafe/jev"
-	DefaultTTSVoice       = "luna"
+	// DefaultBatchModel must be in Cloudflare Workers AI async batch allow-list.
+	DefaultBatchModel = "cf_local/@cf/google/gemma-4-26b-a4b-it"
+	DefaultTTSVoice   = "luna"
 )
 
 // Options configures a multi-channel smoke run.
@@ -34,6 +37,7 @@ type Options struct {
 	TTSModel       string
 	STTModel       string
 	SystemOneModel string
+	BatchModel     string
 	TTSVoice       string
 	TTSText        string
 	RequireCF      bool // when true, TypeSafe billing skips become failures (CI)
@@ -80,6 +84,9 @@ func (o *Options) Normalize() {
 	if strings.TrimSpace(o.SystemOneModel) == "" {
 		o.SystemOneModel = envOr("POLYPUS_SYSTEMONE_MODEL", DefaultSystemOneModel)
 	}
+	if strings.TrimSpace(o.BatchModel) == "" {
+		o.BatchModel = envOr("POLYPUS_BATCH_SMOKE_MODEL", DefaultBatchModel)
+	}
 	if strings.TrimSpace(o.TTSVoice) == "" {
 		o.TTSVoice = envOr("POLYPUS_DEFAULT_VOICE", DefaultTTSVoice)
 	}
@@ -115,6 +122,8 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 			results, err = runSTT(ctx, opts)
 		case ChannelSystemOne:
 			results, err = runSystemOne(ctx, opts)
+		case ChannelBatch:
+			results, err = runBatch(ctx, opts)
 		default:
 			results = []Result{{Channel: ch, Probe: "unknown", Status: "fail", Detail: "unknown channel"}}
 			err = fmt.Errorf("unknown channel %q", ch)
