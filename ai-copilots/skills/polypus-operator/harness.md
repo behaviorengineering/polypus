@@ -15,6 +15,8 @@ make smoke-chat
 POLYPUS_CHAT_SMOKE_MODEL='cf_local/@cf/google/gemma-4-26b-a4b-it' make smoke-chat
 make smoke-router
 POLYPUS_ROUTER_SMOKE_MODEL='router/investigator' make smoke-router
+make smoke-batch
+POLYPUS_BATCH_SMOKE_MODEL='cf_local/@cf/google/gemma-4-26b-a4b-it' make smoke-batch
 make smoke
 make smoke-stt
 make smoke-local
@@ -27,6 +29,8 @@ Binary: `bin/polypus-smoke` (built with `make build` / `make build-smoke`). Publ
 Default chat model: `cf_local/@cf/zai-org/glm-4.7-flash` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
 
 Default router model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`). Run when `routers:` is configured — especially composed (`stage_router`) routes that need Switchyard.
+
+Default batch model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`). Opt-in only (`make smoke-batch`); not in `smoke-all` / CI multi-channel.
 
 Default audio models: cf_local Deepgram (`aura-2-en` / `nova-3`). Local MLX: `make smoke-local` / `make smoke-stt-local` (`POLYPUS_SMOKE_LOCAL=1`). Systemone: `cf_local/typesafe/jev`.
 
@@ -44,6 +48,7 @@ Default audio models: cf_local Deepgram (`aura-2-en` / `nova-3`). Local MLX: `ma
 |-------------|------------|
 | Gateway down / connection errors | Health + `make smoke-chat` |
 | Named router / `router/…` fails | Health + `/health/backends` (switchyard) + `make smoke-router` |
+| Batch files / batches facade fails | `batch_backend` + allow-list + `make smoke-batch` |
 | Empty content / parse errors | L1 + host L2 if available |
 | Specific downstream job fails | Host L3 for that job's model |
 | New model on allow-list | L1 on that model, then L2 if used for XML |

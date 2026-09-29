@@ -16,11 +16,12 @@ func RunCLI(args []string) int {
 	fs := flag.NewFlagSet("polypus-smoke", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	baseURL := fs.String("base-url", envOr("POLYPUS_BASE_URL", "http://127.0.0.1:1320"), "Polypus gateway base URL")
-	channels := fs.String("channels", "all", "comma-separated channels or 'all' (chat,tts,stt,systemone)")
+	channels := fs.String("channels", "all", "comma-separated channels or 'all' (chat,tts,stt,systemone; batch is opt-in)")
 	chatModel := fs.String("chat-model", "", "chat model id")
 	ttsModel := fs.String("tts-model", "", "TTS model id")
 	sttModel := fs.String("stt-model", "", "STT model id")
 	systemOneModel := fs.String("systemone-model", "", "systemone model id")
+	batchModel := fs.String("batch-model", "", "batch chat model id (Workers AI batch allow-list)")
 	requireCF := fs.Bool("require-cf", false, "fail TypeSafe billing skips instead of skip (CI)")
 	list := fs.Bool("list", false, "print default models and exit")
 	if err := fs.Parse(args); err != nil {
@@ -31,6 +32,7 @@ func RunCLI(args []string) int {
 		fmt.Printf("tts=%s\n", DefaultTTSModel)
 		fmt.Printf("stt=%s\n", DefaultSTTModel)
 		fmt.Printf("systemone=%s\n", DefaultSystemOneModel)
+		fmt.Printf("batch=%s\n", DefaultBatchModel)
 		return 0
 	}
 
@@ -40,6 +42,7 @@ func RunCLI(args []string) int {
 		TTSModel:       *ttsModel,
 		STTModel:       *sttModel,
 		SystemOneModel: *systemOneModel,
+		BatchModel:     *batchModel,
 		RequireCF:      *requireCF,
 	}
 	ch := strings.TrimSpace(*channels)

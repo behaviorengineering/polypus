@@ -59,6 +59,10 @@ func ParseBatchJSONL(raw []byte, endpoint string) (ParsedInput, error) {
 			return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "custom_id required").
 				With("line", strconv.Itoa(i+1))
 		}
+		if strings.ToUpper(strings.TrimSpace(req.Method)) != "POST" {
+			return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "method must be POST").
+				With("line", strconv.Itoa(i+1))
+		}
 		if strings.TrimSpace(req.URL) != endpoint {
 			return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "line url must match batch endpoint").
 				With("line", strconv.Itoa(i+1))

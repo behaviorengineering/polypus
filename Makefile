@@ -1,4 +1,4 @@
-.PHONY: help build build-gateway build-smoke install init sync-config-example check-config-example test vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-higgs smoke-stt smoke-stt-local smoke-systemone smoke-all switchyard-build docker-build
+.PHONY: help build build-gateway build-smoke install init sync-config-example check-config-example test vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-batch smoke-higgs smoke-stt smoke-stt-local smoke-systemone smoke-all switchyard-build docker-build
 
 CONFIG_EXAMPLE_SRC := config.yaml.example
 CONFIG_EXAMPLE_EMBED := internal/config/config.yaml.example
@@ -23,6 +23,7 @@ endif
 SMOKE_BIN := $(dir $(BINARY))polypus-smoke
 POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/zai-org/glm-4.7-flash
 POLYPUS_ROUTER_SMOKE_MODEL ?= router/investigator
+POLYPUS_BATCH_SMOKE_MODEL ?= cf_local/@cf/google/gemma-4-26b-a4b-it
 
 IMAGE_REPO ?= xynova/polypus
 IMAGE_TAG ?= latest
@@ -50,6 +51,7 @@ help:
 	@echo "  make smoke-local        TTS smoke via MLX"
 	@echo "  make smoke-chat         L1 chat smoke via polypus-smoke (glm-4.7-flash)"
 	@echo "  make smoke-router       Named router chat smoke (router/investigator by default)"
+	@echo "  make smoke-batch        L1 OpenAI batch facade smoke (files+batches; gemma-4 by default)"
 	@echo "  make smoke-higgs        Higgs v2 TTS smoke (MLX)"
 	@echo "  make smoke-stt          TTS then STT round-trip (cf_local)"
 	@echo "  make smoke-stt-local    TTS+STT via MLX"
@@ -110,6 +112,9 @@ smoke-chat: build-smoke
 
 smoke-router: build-smoke
 	$(SMOKE_BIN) -channels chat -chat-model $(POLYPUS_ROUTER_SMOKE_MODEL)
+
+smoke-batch: build-smoke
+	$(SMOKE_BIN) -channels batch -batch-model $(POLYPUS_BATCH_SMOKE_MODEL)
 
 switchyard-build:
 	@test -f providers/switchyard/Cargo.toml || ( \

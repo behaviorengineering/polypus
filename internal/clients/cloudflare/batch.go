@@ -26,6 +26,7 @@ const (
 	BatchPollQueued    BatchPollState = 1
 	BatchPollRunning   BatchPollState = 2
 	BatchPollCompleted BatchPollState = 3
+	BatchPollFailed    BatchPollState = 4
 )
 
 // BatchResponseItem is one line result from Cloudflare batch poll.
@@ -290,6 +291,7 @@ func parsePollResult(raw []byte) (BatchPollResult, error) {
 				ExternalReference: r.ExternalReference,
 				Success:           r.Success,
 				Result:            r.Result,
+				ErrorMessage:      cfBatchRowErrorMessage(r.Error),
 			})
 		}
 		return out, nil
@@ -299,12 +301,32 @@ func parsePollResult(raw []byte) (BatchPollResult, error) {
 		return BatchPollResult{State: BatchPollQueued}, nil
 	case "running", "in_progress":
 		return BatchPollResult{State: BatchPollRunning}, nil
+	case "failed", "error", "cancelled":
+		return BatchPollResult{State: BatchPollFailed}, nil
 	default:
 		if status != "" {
-			return BatchPollResult{State: BatchPollRunning}, nil
+			return BatchPollResult{}, derrors.New(derrors.CodeUnavailable, "cloudflare.parsePollResult", "unexpected batch status").
+				With("status", status)
 		}
 		return BatchPollResult{}, derrors.New(derrors.CodeUnavailable, "cloudflare.parsePollResult", "unexpected poll response")
 	}
+}
+
+func cfBatchRowErrorMessage(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var obj struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil && strings.TrimSpace(obj.Message) != "" {
+		return strings.TrimSpace(obj.Message)
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil && strings.TrimSpace(s) != "" {
+		return strings.TrimSpace(s)
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func unwrapBatchEnvelope(raw []byte) ([]byte, error) {
