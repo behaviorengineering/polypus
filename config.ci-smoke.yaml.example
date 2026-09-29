@@ -47,8 +47,11 @@ backends:
         - "typesafe/jev"
 
 routers:
-  ci_chat:
+  ci_router:
     capability: chat
     route:
-      type: passthrough
-      target: cf_local/@cf/zai-org/glm-4.7-flash
+      type: stage_router
+      picker: efficient_first
+      confidence_threshold: 0.5
+      capable: cf_local/@cf/zai-org/glm-4.7-flash
+      efficient: cf_local/@cf/zai-org/glm-4.7-flash
