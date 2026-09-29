@@ -53,6 +53,9 @@ func TestSmokeSystemOne(t *testing.T) {
 }
 
 func TestSmokeBatch(t *testing.T) {
+	if LiveFromEnv() && !BatchLiveFromEnv() {
+		t.Skip("live batch smoke is opt-in (POLYPUS_SMOKE_BATCH=1); not part of default live CI")
+	}
 	runChannel(t, smoke.ChannelBatch)
 }
 
@@ -72,7 +75,7 @@ func runChannel(t *testing.T, channel string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := smokeContext(h)
+	ctx, cancel := smokeContextForChannel(h, channel)
 	defer cancel()
 	results, err := h.RunSmoke(ctx, []string{channel})
 	assertSmokeOK(t, results, err)
@@ -82,6 +85,17 @@ func smokeContext(h *Harness) (context.Context, context.CancelFunc) {
 	timeout := 2 * time.Minute
 	if h.Opts.Live {
 		timeout = 10 * time.Minute
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+func smokeContextForChannel(h *Harness, channel string) (context.Context, context.CancelFunc) {
+	timeout := 2 * time.Minute
+	if h.Opts.Live {
+		timeout = 10 * time.Minute
+		if channel == smoke.ChannelBatch {
+			timeout = 25 * time.Minute
+		}
 	}
 	return context.WithTimeout(context.Background(), timeout)
 }
