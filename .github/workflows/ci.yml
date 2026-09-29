@@ -70,14 +70,6 @@ jobs:
       GONOSUMDB: github.com/behaviorengineering/operatorconfig
       CF_AI_API_KEY: ${{ secrets.CF_AI_API_KEY }}
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      POLYPUS_HOST: 127.0.0.1
-      POLYPUS_PORT: "1320"
-      POLYPUS_SWITCHYARD: "1"
-      POLYPUS_SWITCHYARD_HOST: 127.0.0.1
-      POLYPUS_SWITCHYARD_PORT: "4000"
-      POLYPUS_PHOENIX: "0"
-      POLYPUS_HYPERDX: "0"
-      POLYPUS_OTEL: "0"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -88,97 +80,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.96.1
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: providers/switchyard
-
-      - name: Build gateway, smoke, and switchyard
-        run: |
-          mkdir -p bin
-          go build -buildvcs=false -o bin/polypus ./cmd/polypus
-          go build -buildvcs=false -o bin/polypus-smoke ./cmd/polypus-smoke
-          cargo build --release -p switchyard-server --manifest-path providers/switchyard/Cargo.toml
-          cp providers/switchyard/target/release/switchyard-server bin/switchyard-server
-
-      - name: Write CI smoke config
-        run: |
-          mkdir -p "$HOME/.config/polypus"
-          if [ -n "${CF_ACCOUNT_ID:-}" ]; then
-            sed "s|\${CF_ACCOUNT_ID}|${CF_ACCOUNT_ID}|g" config.ci-smoke.yaml.example \
-              > "$HOME/.config/polypus/config.yaml"
-          else
-            cp config.ci-smoke.yaml.example "$HOME/.config/polypus/config.yaml"
-          fi
-          echo "POLYPUS_CONFIG=$HOME/.config/polypus/config.yaml" >> "$GITHUB_ENV"
-
-      - name: Render Switchyard routes
-        run: ./bin/polypus switchyard-render
-
-      - name: Start switchyard
-        run: |
-          CONFIG_PATH="$(./bin/polypus switchyard-render --print-path)"
-          ./bin/switchyard-server --config "$CONFIG_PATH" --dry-run
-          ./bin/switchyard-server --config "$CONFIG_PATH" --host "$POLYPUS_SWITCHYARD_HOST" --port "$POLYPUS_SWITCHYARD_PORT" \
-            > /tmp/switchyard.log 2>&1 &
-          echo $! > /tmp/switchyard.pid
-          for i in $(seq 1 60); do
-            if curl -sf "http://${POLYPUS_SWITCHYARD_HOST}:${POLYPUS_SWITCHYARD_PORT}/health" >/dev/null; then
-              echo "switchyard ready"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "switchyard failed to start" >&2
-          cat /tmp/switchyard.log >&2 || true
-          exit 1
-
-      - name: Start gateway
-        env:
-          POLYPUS_SWITCHYARD_BASE_URL: http://127.0.0.1:4000
-        run: |
-          ./bin/polypus serve --host 127.0.0.1 --port 1320 > /tmp/polypus-gateway.log 2>&1 &
-          echo $! > /tmp/polypus-gateway.pid
-          for i in $(seq 1 60); do
-            if curl -sf "http://127.0.0.1:1320/health" >/dev/null; then
-              echo "gateway ready"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "gateway failed to start" >&2
-          cat /tmp/polypus-gateway.log >&2 || true
-          exit 1
-
-      - name: Switchyard stack health
-        run: |
-          curl -sf "http://127.0.0.1:4000/health"
-          body="$(curl -sf "http://127.0.0.1:1320/health/backends")"
-          echo "$body"
-          echo "$body" | grep -q '"id":"switchyard"'
-          echo "$body" | grep -q '"ok":true'
+      - name: Hermetic integration smoke (PR)
+        if: github.event_name == 'pull_request'
+        run: go test -tags=integration -count=1 -timeout 15m ./internal/smoke/integration/...
 
       - name: Require Cloudflare secrets (main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           if [ -z "$CF_AI_API_KEY" ] || [ -z "$CF_ACCOUNT_ID" ]; then
-            echo "CF_AI_API_KEY and CF_ACCOUNT_ID secrets are required for main smoke" >&2
+            echo "CF_AI_API_KEY and CF_ACCOUNT_ID secrets are required for main live smoke" >&2
             exit 1
           fi
 
-      - name: Multi-channel smoke (main)
+      - name: Live integration smoke (main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: ./bin/polypus-smoke -base-url http://127.0.0.1:1320 -channels all -require-cf
-
-      - name: Stop processes
-        if: always()
-        run: |
-          if [ -f /tmp/polypus-gateway.pid ]; then
-            kill "$(cat /tmp/polypus-gateway.pid)" 2>/dev/null || true
-          fi
-          if [ -f /tmp/switchyard.pid ]; then
-            kill "$(cat /tmp/switchyard.pid)" 2>/dev/null || true
-          fi
+        env:
+          POLYPUS_SMOKE_LIVE: "1"
+        run: go test -tags=integration -count=1 -timeout 25m ./internal/smoke/integration/...

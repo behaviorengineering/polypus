@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Deprecated for cf_local: use make smoke (go test -tags=integration).
+# Kept for MLX/local backend overrides (make smoke-local, make smoke-higgs).
 # POST a short phrase to the Polypus gateway; write audio to /tmp or POLYPUS_SMOKE_OUT.
 set -euo pipefail
 
