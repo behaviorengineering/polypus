@@ -56,6 +56,12 @@ func LiveFromEnv() bool {
 	return strings.TrimSpace(os.Getenv("POLYPUS_SMOKE_LIVE")) == "1"
 }
 
+// BatchLiveFromEnv reports whether live integration should run the batch channel
+// (POLYPUS_SMOKE_BATCH=1). Default live CI and smoke-all omit batch (slow Workers AI).
+func BatchLiveFromEnv() bool {
+	return strings.TrimSpace(os.Getenv("POLYPUS_SMOKE_BATCH")) == "1"
+}
+
 // Shared returns the package-level harness started from TestMain.
 func Shared() (*Harness, error) {
 	return sharedHarness, sharedErr
