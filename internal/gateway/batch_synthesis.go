@@ -3,7 +3,6 @@ package gateway
 import (
 	"encoding/json"
 	"strings"
-	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
@@ -26,9 +25,8 @@ type batchLineError struct {
 	Message string `json:"message"`
 }
 
-func buildBatchOutputLines(endpoint, publicModel string, items []cloudflare.BatchResponseItem) (successJSONL, errorJSONL []byte) {
+func buildBatchOutputLines(endpoint, publicModel string, createdUnix int64, items []cloudflare.BatchResponseItem) (successJSONL, errorJSONL []byte) {
 	var okLines, errLines []string
-	now := time.Now().UTC().Unix()
 	for _, item := range items {
 		customID := strings.TrimSpace(item.ExternalReference)
 		lineID := "batch_req_" + customID
@@ -44,11 +42,12 @@ func buildBatchOutputLines(endpoint, publicModel string, items []cloudflare.Batc
 			if errObj.Error.Message == "" {
 				errObj.Error.Message = "workers ai batch line failed"
 			}
-			raw, _ := json.Marshal(errObj)
-			errLines = append(errLines, string(raw))
+			if b, err := json.Marshal(errObj); err == nil {
+				errLines = append(errLines, string(b))
+			}
 			continue
 		}
-		body, err := synthesizeOpenAIBody(endpoint, publicModel, now, item.Result)
+		body, err := synthesizeOpenAIBody(endpoint, publicModel, createdUnix, item.Result)
 		if err != nil {
 			errObj := batchOutputLine{
 				ID:       lineID,
@@ -58,8 +57,9 @@ func buildBatchOutputLines(endpoint, publicModel string, items []cloudflare.Batc
 					Message: err.Error(),
 				},
 			}
-			raw, _ := json.Marshal(errObj)
-			errLines = append(errLines, string(raw))
+			if b, err := json.Marshal(errObj); err == nil {
+				errLines = append(errLines, string(b))
+			}
 			continue
 		}
 		okObj := batchOutputLine{
@@ -70,8 +70,9 @@ func buildBatchOutputLines(endpoint, publicModel string, items []cloudflare.Batc
 				Body:       body,
 			},
 		}
-		raw, _ := json.Marshal(okObj)
-		okLines = append(okLines, string(raw))
+		if b, err := json.Marshal(okObj); err == nil {
+			okLines = append(okLines, string(b))
+		}
 	}
 	if len(okLines) > 0 {
 		successJSONL = []byte(strings.Join(okLines, "\n") + "\n")

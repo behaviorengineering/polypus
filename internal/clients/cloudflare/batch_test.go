@@ -72,3 +72,25 @@ func TestSubmitAndPollBatch(t *testing.T) {
 		t.Fatalf("expected 2 calls, got %d", calls)
 	}
 }
+
+func TestParsePollResultMapsLineError(t *testing.T) {
+	raw := []byte(`{"result":{"responses":[{"external_reference":"x","success":false,"error":{"message":"boom"}}]}}`)
+	poll, err := parsePollResult(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll.State != BatchPollCompleted || len(poll.Responses) != 1 {
+		t.Fatalf("poll: %+v", poll)
+	}
+	if poll.Responses[0].ErrorMessage != "boom" {
+		t.Fatalf("message: %q", poll.Responses[0].ErrorMessage)
+	}
+}
+
+func TestParsePollResultRejectsUnknownStatus(t *testing.T) {
+	raw := []byte(`{"result":{"status":"weird_state"}}`)
+	_, err := parsePollResult(raw)
+	if err == nil {
+		t.Fatal("expected error for unknown status")
+	}
+}

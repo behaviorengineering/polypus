@@ -39,6 +39,8 @@ const (
 	CodeInternal Code = "internal"
 	// CodeConflict is a version or state clash.
 	CodeConflict Code = "conflict"
+	// CodeUnimplemented is a valid request the server does not support yet (for example upstream has no cancel).
+	CodeUnimplemented Code = "unimplemented"
 )
 
 // StatusClientClosedRequest is nginx 499 (client closed the request).
@@ -56,6 +58,7 @@ var (
 	ErrNotReady           = &Error{code: CodeNotReady, message: "not ready"}
 	ErrInternal           = &Error{code: CodeInternal, message: "internal"}
 	ErrConflict           = &Error{code: CodeConflict, message: "conflict"}
+	ErrUnimplemented      = &Error{code: CodeUnimplemented, message: "not implemented"}
 )
 
 // Error is one hop in a wrap chain.
@@ -241,6 +244,8 @@ func HTTPStatus(err error) int {
 		return StatusClientClosedRequest
 	case CodeNotReady:
 		return http.StatusServiceUnavailable
+	case CodeUnimplemented:
+		return http.StatusNotImplemented
 	case CodeInternal:
 		return http.StatusInternalServerError
 	default:

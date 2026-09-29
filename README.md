@@ -65,7 +65,7 @@ flowchart TB
 
 **Bifrost:** Bifrost fronts every OpenAI-compatible outbound dial Polypus can use: leaf backends, Cloudflare chat/embed, composed Switchyard hops (`provider` id `switchyard`), and Cloudflare speech/transcription (plugin → `/run`). Model Search is not a Bifrost surface.
 
-**OpenAI Batch (Cloudflare):** `POST /v1/files` and `/v1/batches` expose an OpenAI Batch facade over Workers AI Asynchronous Batch (`/ai/run/{model}?queueRequest=true`). State and JSONL live under `~/.local/state/polypus/batch` (override with `POLYPUS_BATCH_DIR`). Requires `batch_backend` and `batch` capability on a Cloudflare extension backend. Chat and embeddings JSONL only in this slice.
+**OpenAI Batch (Cloudflare):** `POST /v1/files` and `/v1/batches` expose an OpenAI Batch facade over Workers AI Asynchronous Batch (`/ai/run/{model}?queueRequest=true`). State and JSONL live under `~/.local/state/polypus/batch` (override with `POLYPUS_BATCH_DIR`). Requires `batch_backend` and `batch` capability on a Cloudflare extension backend. Chat and embeddings JSONL only in this slice. `POST /v1/batches/{id}/cancel` returns HTTP 501 (not implemented): Workers AI has no cancel API, so Polypus does not fake a cancelled status.
 
 ## Quick start (Apple Silicon)
 

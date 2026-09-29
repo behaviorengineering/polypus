@@ -50,6 +50,18 @@ func (s *DiskStore) SaveFile(rec *FileRecord, content []byte) error {
 	if s == nil || rec == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.SaveFile", "not configured")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.prepareFileRecordLocked(rec, content); err != nil {
+		return err
+	}
+	return s.saveFileUnlocked(rec, content)
+}
+
+func (s *DiskStore) prepareFileRecordLocked(rec *FileRecord, content []byte) error {
+	if rec == nil {
+		return derrors.New(derrors.CodeInvalid, "batch.prepareFileRecordLocked", "record required")
+	}
 	if rec.ID == "" {
 		rec.ID = newID("file")
 	}
@@ -63,15 +75,15 @@ func (s *DiskStore) SaveFile(rec *FileRecord, content []byte) error {
 		rec.Status = "processed"
 	}
 	rec.Bytes = int64(len(content))
+	return nil
+}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	metaPath := filepath.Join(s.root, fileMetaDir, rec.ID+".json")
+func (s *DiskStore) saveFileUnlocked(rec *FileRecord, content []byte) error {
 	contentPath := filepath.Join(s.root, fileContentDir, rec.ID)
 	if err := writeFileAtomic(contentPath, content); err != nil {
 		return err
 	}
+	metaPath := filepath.Join(s.root, fileMetaDir, rec.ID+".json")
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "batch.SaveFile", "marshal meta")
@@ -140,11 +152,44 @@ func (s *DiskStore) DeleteFile(id string) error {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.DeleteFile", "not configured")
 	}
 	id = strings.TrimSpace(id)
+	if id == "" {
+		return derrors.New(derrors.CodeInvalid, "batch.DeleteFile", "id required")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if inUse, err := s.fileReferencedByBatchLocked(id); err != nil {
+		return err
+	} else if inUse {
+		return derrors.New(derrors.CodeConflict, "batch.DeleteFile", "file referenced by a batch")
+	}
 	_ = os.Remove(filepath.Join(s.root, fileMetaDir, id+".json"))
 	_ = os.Remove(filepath.Join(s.root, fileContentDir, id))
 	return nil
+}
+
+func (s *DiskStore) fileReferencedByBatchLocked(fileID string) (bool, error) {
+	dir := filepath.Join(s.root, batchMetaDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, derrors.Wrap(err, derrors.CodeInternal, "batch.fileReferencedByBatchLocked", "readdir")
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		bid := e.Name()[:len(e.Name())-len(".json")]
+		meta, err := s.readBatchMetaUnlocked(bid)
+		if err != nil {
+			continue
+		}
+		if meta.InputFileID == fileID || meta.OutputFileID == fileID || meta.ErrorFileID == fileID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // SaveBatch writes batch metadata.

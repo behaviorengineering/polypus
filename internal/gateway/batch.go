@@ -134,6 +134,11 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	now := h.batchNowTime().Unix()
+	expiresAt, err := batch.ExpiresAtUnix(now, req.CompletionWindow)
+	if err != nil {
+		writeHandlerError(w, err)
+		return
+	}
 	meta := &batch.BatchMeta{
 		Endpoint:         req.Endpoint,
 		InputFileID:      inputID,
@@ -146,7 +151,7 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 			Total: len(parsed.Lines),
 		},
 		CreatedAt: now,
-		ExpiresAt: now + 24*3600,
+		ExpiresAt: expiresAt,
 	}
 	if err := h.batchStore.SaveBatch(meta); err != nil {
 		writeHandlerError(w, err)
@@ -174,7 +179,10 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 	if submitErr != nil {
 		meta.Status = batch.BatchStatusFailed
 		meta.FailedAt = h.batchNowTime().Unix()
-		_ = h.batchStore.UpdateBatch(*meta)
+		if err := h.batchStore.UpdateBatch(*meta); err != nil {
+			writeHandlerError(w, err)
+			return
+		}
 		writeHandlerError(w, submitErr)
 		return
 	}
@@ -194,7 +202,16 @@ func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Reques
 		writeHandlerError(w, err)
 		return
 	}
-	if meta.Status == batch.BatchStatusCancelled || meta.Status == batch.BatchStatusCompleted || meta.Status == batch.BatchStatusFailed {
+	if meta.Status == batch.BatchStatusCancelled || meta.Status == batch.BatchStatusCompleted || meta.Status == batch.BatchStatusFailed || meta.Status == batch.BatchStatusExpired {
+		writeJSON(w, http.StatusOK, meta)
+		return
+	}
+	meta, expired, err := h.applyBatchExpiry(meta)
+	if err != nil {
+		writeHandlerError(w, err)
+		return
+	}
+	if expired {
 		writeJSON(w, http.StatusOK, meta)
 		return
 	}
@@ -204,6 +221,22 @@ func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, meta)
+}
+
+func (h batchesHandler) applyBatchExpiry(meta batch.BatchMeta) (batch.BatchMeta, bool, error) {
+	if meta.ExpiresAt <= 0 || h.batchNowTime().Unix() <= meta.ExpiresAt {
+		return meta, false, nil
+	}
+	switch meta.Status {
+	case batch.BatchStatusValidating, batch.BatchStatusInProgress:
+		meta.Status = batch.BatchStatusExpired
+		if err := h.batchStore.UpdateBatch(meta); err != nil {
+			return meta, false, err
+		}
+		return meta, true, nil
+	default:
+		return meta, false, nil
+	}
 }
 
 func (h batchesHandler) refreshBatchFromCloudflare(r *http.Request, meta batch.BatchMeta) (batch.BatchMeta, error) {
@@ -236,7 +269,17 @@ func (h batchesHandler) refreshBatchFromCloudflare(r *http.Request, meta batch.B
 	switch poll.State {
 	case cloudflare.BatchPollQueued, cloudflare.BatchPollRunning:
 		meta.Status = batch.BatchStatusInProgress
-		_ = h.batchStore.UpdateBatch(meta)
+		if err := h.batchStore.UpdateBatch(meta); err != nil {
+			return meta, err
+		}
+		return meta, nil
+	case cloudflare.BatchPollFailed:
+		now := h.batchNowTime().Unix()
+		meta.Status = batch.BatchStatusFailed
+		meta.FailedAt = now
+		if err := h.batchStore.UpdateBatch(meta); err != nil {
+			return meta, err
+		}
 		return meta, nil
 	case cloudflare.BatchPollCompleted:
 		return h.finalizeBatch(meta, poll)
@@ -246,7 +289,8 @@ func (h batchesHandler) refreshBatchFromCloudflare(r *http.Request, meta batch.B
 }
 
 func (h batchesHandler) finalizeBatch(meta batch.BatchMeta, poll cloudflare.BatchPollResult) (batch.BatchMeta, error) {
-	okJSONL, errJSONL := buildBatchOutputLines(meta.Endpoint, meta.PublicModel, poll.Responses)
+	createdUnix := h.batchNowTime().Unix()
+	okJSONL, errJSONL := buildBatchOutputLines(meta.Endpoint, meta.PublicModel, createdUnix, poll.Responses)
 	completed := 0
 	failed := 0
 	for _, item := range poll.Responses {
@@ -256,34 +300,34 @@ func (h batchesHandler) finalizeBatch(meta batch.BatchMeta, poll cloudflare.Batc
 			failed++
 		}
 	}
-	meta.RequestCounts.Completed = completed
-	meta.RequestCounts.Failed = failed
-	now := h.batchNowTime().Unix()
-	if len(okJSONL) > 0 {
-		outRec := &batch.FileRecord{Filename: meta.ID + "_output.jsonl", Purpose: batch.FilePurposeBatch}
-		if err := h.batchStore.SaveFile(outRec, okJSONL); err != nil {
-			return meta, err
-		}
-		meta.OutputFileID = outRec.ID
-	}
-	if len(errJSONL) > 0 {
-		errRec := &batch.FileRecord{Filename: meta.ID + "_error.jsonl", Purpose: batch.FilePurposeBatch}
-		if err := h.batchStore.SaveFile(errRec, errJSONL); err != nil {
-			return meta, err
-		}
-		meta.ErrorFileID = errRec.ID
+	patch := batch.FinalizePatch{
+		OkJSONL:  okJSONL,
+		ErrJSONL: errJSONL,
+		RequestCounts: batch.RequestCounts{
+			Total:     meta.RequestCounts.Total,
+			Completed: completed,
+			Failed:    failed,
+		},
 	}
 	if failed > 0 && completed == 0 {
-		meta.Status = batch.BatchStatusFailed
-		meta.FailedAt = now
+		patch.Status = batch.BatchStatusFailed
+		patch.FailedAt = createdUnix
 	} else {
-		meta.Status = batch.BatchStatusCompleted
-		meta.CompletedAt = now
+		patch.Status = batch.BatchStatusCompleted
+		patch.CompletedAt = createdUnix
 	}
-	if err := h.batchStore.UpdateBatch(meta); err != nil {
+	updated, applied, err := h.batchStore.TryFinalizeBatch(meta.ID, patch)
+	if err != nil {
 		return meta, err
 	}
-	return meta, nil
+	if !applied {
+		current, err := h.batchStore.GetBatch(meta.ID)
+		if err != nil {
+			return meta, err
+		}
+		return current, nil
+	}
+	return updated, nil
 }
 
 func (h batchesHandler) serveBatchList(w http.ResponseWriter, r *http.Request) {
@@ -296,20 +340,10 @@ func (h batchesHandler) serveBatchList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request, id string) {
-	meta, err := h.batchStore.GetBatch(id)
+	_, err := h.batchStore.GetBatch(id)
 	if err != nil {
 		writeHandlerError(w, err)
 		return
 	}
-	if meta.Status == batch.BatchStatusCompleted || meta.Status == batch.BatchStatusFailed {
-		writeJSON(w, http.StatusOK, meta)
-		return
-	}
-	meta.Status = batch.BatchStatusCancelled
-	meta.CancelledAt = h.batchNowTime().Unix()
-	if err := h.batchStore.UpdateBatch(meta); err != nil {
-		writeHandlerError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, meta)
+	writeHandlerError(w, derrors.New(derrors.CodeUnimplemented, "gateway.serveBatchCancel", "batch cancel is not currently supported for cloudflare workers ai"))
 }
