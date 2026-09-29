@@ -4,13 +4,15 @@ Polypus ships **L1 transport smoke** in this repo. Deeper L2/L3 XML and job-fixt
 
 ## Prerequisites
 
-- Polypus up (`make serve` from this repo)
-- Live LLM backends reachable (cf_local, lm_studio, or mlx_local per `config.yaml`)
+- Default L1 smokes: **no** running gateway (`make smoke-*` builds and starts one with a mock Cloudflare backend).
+- `make smoke-router` and `polypus-smoke` against your own stack still need `make serve` (and Switchyard when routers are composed).
+- MLX: `make smoke-local` / `make smoke-stt-local` need `mlx_local` up.
 
 ## L1 smoke (this repo)
 
 ```bash
 make smoke-all
+go test -tags=integration -count=1 ./internal/smoke/integration
 make smoke-chat
 POLYPUS_CHAT_SMOKE_MODEL='cf_local/@cf/google/gemma-4-26b-a4b-it' make smoke-chat
 make smoke-router
@@ -24,7 +26,7 @@ make smoke-stt-local
 make smoke-systemone
 ```
 
-Binary: `bin/polypus-smoke` (built with `make build` / `make build-smoke`). Public API: `pkg/polypus.Smoke`.
+Integration: `internal/smoke/integration` (`-tags=integration`). Optional CLI against a running gateway: `bin/polypus-smoke` (`make build-smoke`). Public API: `pkg/polypus.Smoke`.
 
 Default chat model: `cf_local/@cf/zai-org/glm-4.7-flash` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
 

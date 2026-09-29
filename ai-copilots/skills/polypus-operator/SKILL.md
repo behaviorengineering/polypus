@@ -52,13 +52,14 @@ Compare to `config.yaml` `backends.*.models.allow`. Enabled list = first call; f
 
 ### 3. Smoke all Cloudflare channels
 
-With the gateway up and Cloudflare `secrets:` filled (env or `polypus secret set`):
+Hermetic L1 smoke builds `cmd/polypus`, starts a temp gateway with a mock Cloudflare backend, and runs probes (no `make serve`):
 
 ```bash
 make smoke-all
+# or: go test -tags=integration -count=1 ./internal/smoke/integration
 ```
 
-Runs chat (glm-4.7-flash), TTS (aura), STT (nova), and systemone (`typesafe/jev`) via `bin/polypus-smoke`. Any failure fails the command. On **push to main**, CI expands [`config.ci-smoke.yaml.example`](../../../config.ci-smoke.yaml.example) with secrets `CF_AI_API_KEY` and `CF_ACCOUNT_ID` and runs the same probes (`-require-cf`).
+Runs chat (glm-4.7-flash), TTS (aura), STT (nova), and systemone (`typesafe/jev`). On **push to main**, CI runs the same package with `POLYPUS_SMOKE_LIVE=1` and secrets `CF_AI_API_KEY` / `CF_ACCOUNT_ID` against real Workers AI.
 
 ### 3a. Smoke chat only (L1 transport)
 
@@ -91,7 +92,7 @@ Requires `batch_backend` enabled, `batch` capability on a Cloudflare extension b
 make smoke-batch
 ```
 
-Default model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`). Probes upload JSONL (`POST /v1/files`), create a batch (`POST /v1/batches`), poll until terminal, then check output file content for the smoke `custom_id`.
+Default model: `cf_local/@cf/google/gemma-4-26b-a4b-it`. Integration test `TestSmokeBatch` probes upload JSONL (`POST /v1/files`), create a batch (`POST /v1/batches`), poll until terminal, then check output file content for the smoke `custom_id`.
 
 ### 3d. Smoke systemone (TypeSafe / Jev)
 

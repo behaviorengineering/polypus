@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Deprecated for cf_local: use make smoke-stt (go test -tags=integration).
+# Kept for MLX (make smoke-stt-local).
 # Round-trip smoke: TTS via gateway, then STT on the same audio file.
 set -euo pipefail
 
