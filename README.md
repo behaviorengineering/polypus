@@ -244,7 +244,7 @@ Set `POLYPUS_PHOENIX=0` and/or `POLYPUS_HYPERDX=0` to skip either container unde
 
 ## Releases
 
-**Auto patch (default):** Every push to `main` that includes releasable product changes creates `vX.Y.(Z+1)` and publishes GoReleaser binaries plus GHCR gateway/switchyard images (`.github/workflows/auto-patch-release.yml`). Skipped for docs/chore/ci-only commits, cursor-packs harness-only diffs (`.cursor/`, `lefthook.yml`), or `[skip release]`.
+**Auto patch (default):** Every push to `main` that includes releasable product changes creates `vX.Y.(Z+1)` and publishes GoReleaser binaries plus GHCR gateway/switchyard images (`.github/workflows/auto-patch-release.yml`). A tag is **published** only when that workflow is green through the **verify** job (GHCR manifests for the version). Skipped for docs/chore/ci-only commits, cursor-packs harness-only diffs (`.cursor/`, `lefthook.yml`), or `[skip release]`. On failure, CI opens a `ci-failure` Issue with the run URL; fix or re-run before bumping consumer pins (`images.env`, submodule). See cursor-packs `manage-go-releases` publish-complete gate.
 
 **Manual bump:** Run the **Auto patch release** workflow with `bump: minor|major|patch`, or push an annotated `v*` tag on `main` (`.github/workflows/release.yml`).
 

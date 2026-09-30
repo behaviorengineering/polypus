@@ -28,6 +28,7 @@ on:
 permissions:
   contents: write
   packages: write
+  issues: write
 
 jobs:
   gate:
@@ -149,3 +150,74 @@ jobs:
     with:
       version: ${{ needs.release.outputs.new_tag }}
     secrets: inherit
+
+  verify:
+    needs: [release, docker]
+    if: needs.release.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Verify GHCR manifests for release tag
+        env:
+          NEW_TAG: ${{ needs.release.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          VER="${NEW_TAG#v}"
+          GW="ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus:${VER}"
+          SY="ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus-switchyard:${VER}"
+          docker buildx imagetools inspect "$GW"
+          docker buildx imagetools inspect "$SY"
+
+  ci-failure:
+    needs: [gate, release, docker, verify]
+    if: >-
+      always() &&
+      (
+        needs.gate.result == 'failure' ||
+        (
+          needs.release.outputs.skip != 'true' &&
+          (
+            needs.release.result == 'failure' ||
+            needs.docker.result == 'failure' ||
+            needs.verify.result == 'failure'
+          )
+        )
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open ci-failure issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          COUNT="$(gh issue list --repo "${GITHUB_REPOSITORY}" --label ci-failure --state open --search "${RUN_URL}" --json number --jq 'length')"
+          if [ "${COUNT}" != "0" ]; then
+            echo "Issue already open for this run"
+            exit 0
+          fi
+          EXCERPT="$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --log-failed 2>/dev/null | tail -n 80 || true)"
+          if [ -z "$EXCERPT" ]; then
+            EXCERPT="(no failed log excerpt; inspect the run URL)"
+          fi
+          BODY_FILE="$(mktemp)"
+          {
+            echo "Auto patch release pipeline failed."
+            echo
+            echo "- Workflow: ${GITHUB_WORKFLOW}"
+            echo "- Run: ${RUN_URL}"
+            echo "- Ref: ${GITHUB_REF}"
+            echo
+            echo "## Failed log excerpt"
+            echo
+            echo '```'
+            echo "$EXCERPT"
+            echo '```'
+            echo
+            echo "Fix CI or re-run Docker release, then confirm **verify** is green before bumping consumer pins (images.env, submodule). See manage-go-releases publish-complete gate."
+          } >"$BODY_FILE"
+          gh label create ci-failure --repo "${GITHUB_REPOSITORY}" --color B60205 --description "Release or auto-patch CI failure" 2>/dev/null || true
+          gh issue create --repo "${GITHUB_REPOSITORY}" --label ci-failure --title "CI failed: ${GITHUB_WORKFLOW} (${GITHUB_RUN_ID})" --body-file "$BODY_FILE"
+          rm -f "$BODY_FILE"
