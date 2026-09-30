@@ -112,6 +112,14 @@ jobs:
             ${{ steps.meta.outputs.switchyard_image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.switchyard_image }}:latest
 
+      - name: Publish-ready image smoke (pull, binary load, /health)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ci/docker-image-health-smoke.sh
+          scripts/ci/docker-image-health-smoke.sh \
+            "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}" \
+            "${{ steps.meta.outputs.switchyard_image }}:${{ steps.meta.outputs.version }}"
+
       - name: Verify GHCR manifests
         run: |
           set -euo pipefail

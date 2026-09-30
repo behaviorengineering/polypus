@@ -51,6 +51,12 @@ services:
     volumes:
       - switchyard_routes:/var/lib/polypus/switchyard
       - switchyard_inference_failures:/var/lib/switchyard/inference-failures
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:4000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 60s
     depends_on:
       gateway:
         condition: service_healthy

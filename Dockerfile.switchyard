@@ -1,10 +1,11 @@
 # syntax=docker/dockerfile:1
 # Runtime image: COPY pre-built linux/amd64 switchyard-server from GitHub Release assets.
 
-FROM debian:bookworm-slim
+# switchyard-server is built on ubuntu-latest (glibc 2.38+); bookworm is too old.
+FROM debian:trixie-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY docker-bin/switchyard-server /usr/local/bin/switchyard-server
@@ -16,4 +17,8 @@ ENV SWITCHYARD_HOST=0.0.0.0
 ENV SWITCHYARD_PORT=4000
 
 EXPOSE 4000
+
+HEALTHCHECK --interval=5s --timeout=3s --start-period=30s --retries=6 \
+  CMD curl -sf http://127.0.0.1:4000/health || exit 1
+
 ENTRYPOINT ["/bin/sh", "/usr/local/bin/entrypoint.sh"]

@@ -18,4 +18,7 @@ ENV POLYPUS_HOST=0.0.0.0
 ENV POLYPUS_PORT=1320
 EXPOSE 1320
 
+HEALTHCHECK --interval=5s --timeout=3s --start-period=30s --retries=6 \
+  CMD curl -sf http://127.0.0.1:1320/health || exit 1
+
 ENTRYPOINT ["docker-entrypoint.sh"]
