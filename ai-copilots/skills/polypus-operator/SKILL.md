@@ -205,6 +205,13 @@ the client also retries every 502/503 without a budget
 
 Bifrost may expose per-provider `MaxRetries` on leaf dials; that is hop-local and optional. It is not a substitute for Polypus’s breaker, and it does not move retry ownership away from clients for end-to-end chat.
 
+## Releases and publish-complete
+
+**CONSTRAINT:** Treat `vX.Y.Z` as **published** only when **Auto patch release** is green through **verify** (GoReleaser binaries, Docker push, GHCR manifest inspect). MUST NOT bump consumer `images.env` or submodule pins on a half-green tag.
+
+- On failure, GitHub opens a `ci-failure` Issue with the Actions run URL and log excerpt. Use that Issue as the local-agent queue (diagnose with `gh run view --log-failed`, fix CI, re-run Docker release if needed).
+- Fleet policy: cursor-packs `manage-go-releases` publish-complete gate.
+
 ## Refresh this pack
 
 Re-run [../BOOTSTRAP.md](../BOOTSTRAP.md) or edit shards under `ai-copilots/skills/polypus-operator/` only.
