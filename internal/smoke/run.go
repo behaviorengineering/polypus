@@ -40,7 +40,8 @@ type Options struct {
 	BatchModel     string
 	TTSVoice       string
 	TTSText        string
-	RequireCF      bool // when true, TypeSafe billing skips become failures (CI)
+	AudioOutPath   string // optional TTS output file (POLYPUS_SMOKE_OUT)
+	RequireCF      bool   // when true, TypeSafe billing skips become failures (CI)
 	Temperature    float64
 	MaxTokens      int
 }
@@ -92,6 +93,9 @@ func (o *Options) Normalize() {
 	}
 	if strings.TrimSpace(o.TTSText) == "" {
 		o.TTSText = envOr("POLYPUS_SMOKE_TEXT", "Here is what the file shows for this episode.")
+	}
+	if strings.TrimSpace(o.AudioOutPath) == "" {
+		o.AudioOutPath = strings.TrimSpace(os.Getenv("POLYPUS_SMOKE_OUT"))
 	}
 	if o.Temperature == 0 {
 		o.Temperature = 0.1

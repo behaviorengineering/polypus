@@ -77,10 +77,10 @@ make serve        # process-compose TUI: gateway :1320 + backends + Phoenix :600
 make serve-down   # stop this Polypus project only
 make smoke        # TTS L1 integration smoke (builds gateway + mock CF; no make serve)
 make smoke-stt    # TTS+STT integration smoke
-make smoke-local  # TTS via MLX (needs mlx_local up; bash script)
-make smoke-stt-local  # TTS+STT via MLX
+make smoke-local  # TTS integration smoke (mock MLX)
+make smoke-stt-local  # TTS+STT integration smoke (mock MLX)
 make smoke-chat   # L1 chat integration smoke
-make smoke-router # router/investigator via polypus-smoke (needs make serve + Switchyard)
+make smoke-router # router/investigator integration smoke (mock Switchyard)
 make smoke-batch  # OpenAI files+batches integration smoke (opt-in; not in smoke-all)
 make smoke-systemone  # TypeSafe /v1/systemone integration smoke
 make smoke-all    # chat + TTS + STT + systemone integration smoke
@@ -96,9 +96,9 @@ Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_
 
 ## Live smoke
 
-Public package: import `github.com/behaviorengineering/polypus/pkg/polypus` for `Serve` / `Smoke`. L1 probes live in `internal/smoke`. Default operator path: `make smoke-*` or `go test -tags=integration ./internal/smoke/integration` (builds `cmd/polypus`, starts a temp gateway with a mock Cloudflare backend). `cmd/polypus-smoke` dials an already-running gateway (`make serve`).
+Public package: import `github.com/behaviorengineering/polypus/pkg/polypus` for `Serve` / `Smoke`. L1 probes live in `internal/smoke`. Default operator path: `make smoke-*` or `go test -tags=integration ./internal/smoke/integration` (builds `cmd/polypus`, starts a temp gateway with mock backends). Optional `make build-smoke` builds `cmd/polypus-smoke` to dial an already-running gateway.
 
-Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat defaults to `@cf/ibm-granite/granite-4.0-h-micro`; systemone to `typesafe/jev`. Batch smoke (`make smoke-batch`) defaults to `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`); it is opt-in because async Workers AI batches are slow and need `batch_backend` plus a batch-capable model.
+Cloud audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). `make smoke-local` / `make smoke-stt-local` / `make smoke-higgs` use hermetic mock MLX. Chat defaults to `@cf/ibm-granite/granite-4.0-h-micro`; systemone to `typesafe/jev`. `make smoke-router` uses mock Switchyard. Batch smoke (`make smoke-batch`) defaults to `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`); it is opt-in because async Workers AI batches are slow.
 
 Prereqs for cloud channels (`stack/.env` locally; GitHub Actions secrets on **push to main**):
 
@@ -108,10 +108,10 @@ CF_ACCOUNT_ID=...
 ```
 
 ```bash
-make smoke-all      # hermetic: builds gateway + mock CF, runs all default channels
+make smoke-all      # hermetic: mock CF, default channels (not batch)
 make smoke-batch    # batch facade (separate from smoke-all)
-make smoke-router   # needs make serve + Switchyard; uses polypus-smoke
-make smoke-local    # MLX TTS (when mlx_local is up)
+make smoke-router   # mock Switchyard + router/investigator chat
+make smoke-local    # mock MLX TTS
 ```
 
 PR CI runs hermetic integration smoke (`go test -tags=integration`). Push to **main** runs live integration smoke with `POLYPUS_SMOKE_LIVE=1` and repository secrets `CF_AI_API_KEY` / `CF_ACCOUNT_ID`.

@@ -4,9 +4,8 @@ Polypus ships **L1 transport smoke** in this repo. Deeper L2/L3 XML and job-fixt
 
 ## Prerequisites
 
-- Default L1 smokes: **no** running gateway (`make smoke-*` builds and starts one with a mock Cloudflare backend).
-- `make smoke-router` and `polypus-smoke` against your own stack still need `make serve` (and Switchyard when routers are composed).
-- MLX: `make smoke-local` / `make smoke-stt-local` need `mlx_local` up.
+- Default L1 smokes: **no** running gateway (`make smoke-*` builds and starts one with mock backends).
+- Live stack checks against your config: `make serve` plus optional `make build-smoke` and `bin/polypus-smoke -base-url http://127.0.0.1:1320`.
 
 ## L1 smoke (this repo)
 
@@ -23,18 +22,19 @@ make smoke
 make smoke-stt
 make smoke-local
 make smoke-stt-local
+make smoke-higgs
 make smoke-systemone
 ```
 
-Integration: `internal/smoke/integration` (`-tags=integration`). Optional CLI against a running gateway: `bin/polypus-smoke` (`make build-smoke`). Public API: `pkg/polypus.Smoke`.
+Integration: `internal/smoke/integration` (`-tags=integration`). Hermetic mocks: Cloudflare (default channels), MLX speech (`smoke-local` / `smoke-stt-local` / `smoke-higgs`), Switchyard (`smoke-router`). Optional CLI against a running gateway: `bin/polypus-smoke` (`make build-smoke`). Public API: `pkg/polypus.Smoke`.
 
 Default chat model: `cf_local/@cf/ibm-granite/granite-4.0-h-micro` (override with `POLYPUS_CHAT_SMOKE_MODEL`; use GLM or Gemma for reasoning probes).
 
-Default router model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`). Run when `routers:` is configured — especially composed (`stage_router`) routes that need Switchyard.
+Default router model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`). Integration smoke uses mock Switchyard; production routers need `routers:` in config and `make serve`.
 
-Default batch model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`). Opt-in only (`make smoke-batch`); not in `smoke-all` / CI multi-channel.
+Default batch model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`). Opt-in only (`make smoke-batch`); not in `smoke-all` / default live CI.
 
-Default audio models: cf_local Deepgram (`aura-2-en` / `nova-3`). Local MLX: `make smoke-local` / `make smoke-stt-local` (`POLYPUS_SMOKE_LOCAL=1`). Systemone: `cf_local/typesafe/jev`.
+Default audio models: cf_local Deepgram (`aura-2-en` / `nova-3`). MLX integration smokes use Qwen3 TTS / whisper STT model ids (see `internal/smoke/integration/models.go`). Systemone: `cf_local/typesafe/jev`.
 
 ## Tier summary (when host provides harness)
 

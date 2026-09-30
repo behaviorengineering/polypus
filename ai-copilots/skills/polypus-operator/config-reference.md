@@ -10,7 +10,7 @@
 
 Bootstrap: `polypus init` or `make init` (writes `~/.config/polypus/config.yaml` at mode `0600` when missing). Declare `secrets:` in config (env var names only); Polypus loads those from the OS keyring when unset. `polypus secret set` stores a value only if that name is already in `secrets:`. Env and `.env` still win at runtime. Omit `secrets:` for local-only stacks to avoid keyring access. Docker Compose deploy (`config.deploy.yaml.example`) omits `secrets:`; inject `CF_*` via compose env (runner `export-env` / SOPS), not the container keyring.
 
-CI multi-channel smoke (main only) uses `config.ci-smoke.yaml.example`: `cf_local` chat + TTS + STT + systemone only (no MLX, Switchyard, vision, or embed). Expand `${CF_ACCOUNT_ID}` before serve.
+CI: PRs run hermetic `go test -tags=integration` (temp config from `internal/smoke/integration`). Push to **main** runs live integration with `POLYPUS_SMOKE_LIVE=1` and `CF_AI_API_KEY` / `CF_ACCOUNT_ID` secrets.
 
 ## Ports
 
@@ -42,7 +42,7 @@ CF_AI_API_KEY=...
 CF_ACCOUNT_ID=...
 ```
 
-Speech smoke defaults to cf_local (`make smoke` / `make smoke-stt`). MLX: `POLYPUS_SMOKE_LOCAL=1` or `make smoke-local` / `make smoke-stt-local`. Override with `POLYPUS_DEFAULT_MODEL`, `POLYPUS_DEFAULT_STT_MODEL`, `POLYPUS_DEFAULT_VOICE` (or `POLYPUS_CF_*` for cloud ids).
+Speech smoke: cf_local via `make smoke` / `make smoke-stt`; MLX paths via `make smoke-local` / `make smoke-stt-local` / `make smoke-higgs` (hermetic mock MLX in integration tests). Override with `POLYPUS_DEFAULT_MODEL`, `POLYPUS_DEFAULT_STT_MODEL`, `POLYPUS_DEFAULT_VOICE`, or `POLYPUS_SMOKE_OUT` for TTS file output.
 
 ## config.yaml structure
 
