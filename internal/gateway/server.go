@@ -351,7 +351,7 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 		hop = config.DefaultTimeouts().Max
 	}
 	err = h.upstreams.Execute(upstream.NameSwitchyard, func() error {
-		return proxyChatCompletionsOpts(w, r, switchyardURL, body, h.client, hop, "", false)
+		return proxyChatCompletionsOpts(w, r, switchyardURL, body, h.client, hop, "", false, true)
 	})
 	if err != nil {
 		writeUpstreamDialError(w, err, "polypus: switchyard unavailable: ", isSwitchyardUnreachable)

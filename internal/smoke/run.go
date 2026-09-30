@@ -42,18 +42,23 @@ type Options struct {
 	TTSText        string
 	AudioOutPath   string // optional TTS output file (POLYPUS_SMOKE_OUT)
 	RequireCF      bool   // when true, TypeSafe billing skips become failures (CI)
-	Temperature    float64
-	MaxTokens      int
+	// RequireSelectedModel fails chat when Switchyard routing metadata is missing.
+	RequireSelectedModel bool
+	// AllowedSelectedModels when non-empty requires chat selected leaf ∈ list.
+	AllowedSelectedModels []string
+	Temperature           float64
+	MaxTokens             int
 }
 
 // Result is one probe outcome (JSONL-friendly).
 type Result struct {
-	Channel string `json:"channel"`
-	Model   string `json:"model,omitempty"`
-	Probe   string `json:"probe"`
-	Status  string `json:"status"` // pass | fail | skip
-	Ms      int64  `json:"ms"`
-	Detail  string `json:"detail"`
+	Channel       string `json:"channel"`
+	Model         string `json:"model,omitempty"`
+	SelectedModel string `json:"selected_model,omitempty"`
+	Probe         string `json:"probe"`
+	Status        string `json:"status"` // pass | fail | skip
+	Ms            int64  `json:"ms"`
+	Detail        string `json:"detail"`
 }
 
 // AllChannels is the default CI / smoke-all set.

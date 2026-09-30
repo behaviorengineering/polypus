@@ -120,11 +120,32 @@ func chatCompletionsURL(base string) string {
 	return base + "/v1/chat/completions"
 }
 
+const (
+	headerRouterSelectedModel     = "x-model-router-selected-model"
+	headerSwitchyardSelectedModel = "x-switchyard-selected-model"
+)
+
 func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
-	return proxyChatCompletionsOpts(w, r, backendURL, body, client, hopTimeout, backendAuth, true)
+	return proxyChatCompletionsOpts(w, r, backendURL, body, client, hopTimeout, backendAuth, true, false)
 }
 
-func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string, patchThinking bool) error {
+// extractRouterSelectedModel reads Switchyard routing metadata from response headers or JSON body.
+func extractRouterSelectedModel(hdr http.Header, body []byte) string {
+	for _, key := range []string{headerRouterSelectedModel, headerSwitchyardSelectedModel} {
+		if v := strings.TrimSpace(hdr.Get(key)); v != "" {
+			return v
+		}
+	}
+	var root struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &root); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(root.Model)
+}
+
+func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string, patchThinking bool, recordRouterSelectedModel bool) error {
 	if patchThinking {
 		if patched, ok := disableChatThinkingInRequest(body); ok {
 			body = patched
@@ -185,6 +206,9 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if fixed, changed := mergeReasoningIntoContent(raw); changed {
 			raw = fixed
+		}
+		if recordRouterSelectedModel {
+			observability.RecordDownstreamModel(r.Context(), extractRouterSelectedModel(resp.Header, raw))
 		}
 	}
 

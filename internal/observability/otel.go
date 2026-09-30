@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -150,6 +151,19 @@ func WrapTransport(base http.RoundTripper) http.RoundTripper {
 			attribute.String("http.io", "client"),
 		)),
 	)
+}
+
+// RecordDownstreamModel sets polypus.downstream_model on the span in ctx when model is non-empty.
+func RecordDownstreamModel(ctx context.Context, model string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
+	span := trace.SpanFromContext(ctx)
+	if span == nil || !span.IsRecording() {
+		return
+	}
+	span.SetAttributes(attribute.String("polypus.downstream_model", model))
 }
 
 // StartRouterSpan starts an OpenInference span for a composed router hop via Switchyard.

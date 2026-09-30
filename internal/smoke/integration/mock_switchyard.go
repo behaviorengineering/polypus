@@ -28,7 +28,8 @@ func mockSwitchyardHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"via-switchyard"}}]}`))
+		w.Header().Set("x-model-router-selected-model", "cf_local/@cf/google/gemma-4-26b-a4b-it")
+		_, _ = w.Write([]byte(`{"model":"cf_local/@cf/google/gemma-4-26b-a4b-it","choices":[{"message":{"content":"via-switchyard"}}]}`))
 	default:
 		http.NotFound(w, r)
 	}
