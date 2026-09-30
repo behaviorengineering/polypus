@@ -30,7 +30,8 @@ jobs:
         run: |
           set -euo pipefail
           RAW=""
-          if [[ "${{ github.event_name }}" == "workflow_call" ]]; then
+          # Reusable workflows from auto-patch may report workflow_run; inputs.version is set.
+          if [[ -n "${{ inputs.version }}" ]]; then
             RAW="${{ inputs.version }}"
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             RAW="${{ github.event.inputs.tag }}"
