@@ -7,6 +7,21 @@ on:
         description: "Release tag (v0.2.26)"
         required: true
         type: string
+      image_revision:
+        description: "Optional rebuild counter N (>=1) for image tag X.Y.Z-rN"
+        required: false
+        type: string
+        default: ""
+      checkout_ref:
+        description: "Git ref for Docker build context (default app tag)"
+        required: false
+        type: string
+        default: ""
+      move_latest:
+        description: "Push :latest (default true for plain X.Y.Z)"
+        required: false
+        type: boolean
+        default: true
   push:
     tags:
       - "v*"
@@ -16,6 +31,21 @@ on:
         description: "Release tag (v0.2.26)"
         required: true
         type: string
+      image_revision:
+        description: "Optional rebuild counter N (>=1) for X.Y.Z-rN"
+        required: false
+        type: string
+        default: ""
+      checkout_ref:
+        description: "Git ref for Docker build context"
+        required: false
+        type: string
+        default: ""
+      move_latest:
+        description: "Push :latest"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -27,42 +57,100 @@ jobs:
     steps:
       - name: Resolve release ref
         id: release
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_IMAGE_REVISION: ${{ inputs.image_revision }}
+          INPUT_CHECKOUT_REF: ${{ inputs.checkout_ref }}
+          INPUT_MOVE_LATEST: ${{ inputs.move_latest }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          DISPATCH_IMAGE_REVISION: ${{ github.event.inputs.image_revision }}
+          DISPATCH_CHECKOUT_REF: ${{ github.event.inputs.checkout_ref }}
+          DISPATCH_MOVE_LATEST: ${{ github.event.inputs.move_latest }}
         run: |
           set -euo pipefail
           RAW=""
-          # Reusable workflows from auto-patch may report workflow_run; inputs.version is set.
-          if [[ -n "${{ inputs.version }}" ]]; then
-            RAW="${{ inputs.version }}"
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            RAW="${INPUT_VERSION}"
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            RAW="${{ github.event.inputs.tag }}"
+            RAW="${DISPATCH_TAG}"
           else
             RAW="${GITHUB_REF_NAME}"
           fi
-          if [[ ! "$RAW" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+          if [[ ! "$RAW" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "refusing non-semver tag: $RAW (expected vX.Y.Z)" >&2
             exit 1
           fi
-          VER="${RAW#v}"
-          echo "ref=${RAW}" >> "$GITHUB_OUTPUT"
-          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          APP_VER="${RAW#v}"
+
+          REV=""
+          if [[ -n "${INPUT_IMAGE_REVISION}" ]]; then
+            REV="${INPUT_IMAGE_REVISION}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            REV="${DISPATCH_IMAGE_REVISION:-}"
+          fi
+          if [[ -n "$REV" ]]; then
+            if [[ ! "$REV" =~ ^[1-9][0-9]*$ ]]; then
+              echo "image_revision must be a positive integer, got: $REV" >&2
+              exit 1
+            fi
+            IMAGE_TAG="${APP_VER}-r${REV}"
+            REBUILD_LABEL="r${REV}"
+            MOVE_LATEST=false
+          else
+            IMAGE_TAG="${APP_VER}"
+            REBUILD_LABEL=""
+            MOVE_LATEST=true
+          fi
+
+          if [[ -n "${INPUT_CHECKOUT_REF}" ]]; then
+            CHECKOUT_REF="${INPUT_CHECKOUT_REF}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${DISPATCH_CHECKOUT_REF}" ]]; then
+            CHECKOUT_REF="${DISPATCH_CHECKOUT_REF}"
+          else
+            CHECKOUT_REF="${RAW}"
+          fi
+
+          if [[ "${{ github.event_name }}" == "workflow_call" && "${INPUT_MOVE_LATEST}" == "false" ]]; then
+            MOVE_LATEST=false
+          fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${DISPATCH_MOVE_LATEST}" == "false" ]]; then
+            MOVE_LATEST=false
+          fi
+
+          {
+            echo "app_ref=${RAW}"
+            echo "app_version=${APP_VER}"
+            echo "image_tag=${IMAGE_TAG}"
+            echo "rebuild_label=${REBUILD_LABEL}"
+            echo "move_latest=${MOVE_LATEST}"
+            echo "checkout_ref=${CHECKOUT_REF}"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-          ref: ${{ steps.release.outputs.ref }}
+          ref: ${{ steps.release.outputs.checkout_ref }}
+
+      - name: Resolve OCI build metadata
+        id: oci
+        run: |
+          set -euo pipefail
+          echo "git_revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "build_created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Docker meta
         id: meta
         run: |
-          echo "version=${{ steps.release.outputs.version }}" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus" >> "$GITHUB_OUTPUT"
           echo "switchyard_image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus-switchyard" >> "$GITHUB_OUTPUT"
+          echo "gateway_base=debian:bookworm-slim" >> "$GITHUB_OUTPUT"
+          echo "switchyard_base=debian:trixie-slim" >> "$GITHUB_OUTPUT"
 
       - name: Download release binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VER: ${{ steps.release.outputs.version }}
-          TAG: ${{ steps.release.outputs.ref }}
+          VER: ${{ steps.release.outputs.app_version }}
+          TAG: ${{ steps.release.outputs.app_ref }}
         run: |
           set -euo pipefail
           mkdir -p docker-bin release-assets
@@ -90,6 +178,61 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve base image digests (labels)
+        id: base_digest
+        run: |
+          set -euo pipefail
+          gw_digest=""
+          sy_digest=""
+          if gw_digest="$(docker buildx imagetools inspect "${{ steps.meta.outputs.gateway_base }}" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+            true
+          else
+            gw_digest=""
+          fi
+          if sy_digest="$(docker buildx imagetools inspect "${{ steps.meta.outputs.switchyard_base }}" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+            true
+          else
+            sy_digest=""
+          fi
+          echo "gateway=${gw_digest}" >> "$GITHUB_OUTPUT"
+          echo "switchyard=${sy_digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse overwrite of existing GHCR tags
+        env:
+          IMAGE_TAG: ${{ steps.release.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          for img in \
+            "${{ steps.meta.outputs.image }}" \
+            "${{ steps.meta.outputs.switchyard_image }}"; do
+            if docker buildx imagetools inspect "${img}:${IMAGE_TAG}" >/dev/null 2>&1; then
+              echo "refusing overwrite of existing tag ${img}:${IMAGE_TAG}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Build tag list
+        id: tags
+        env:
+          IMAGE_TAG: ${{ steps.release.outputs.image_tag }}
+          MOVE_LATEST: ${{ steps.release.outputs.move_latest }}
+        run: |
+          set -euo pipefail
+          gw="${{ steps.meta.outputs.image }}:${IMAGE_TAG}"
+          sy="${{ steps.meta.outputs.switchyard_image }}:${IMAGE_TAG}"
+          if [[ "${MOVE_LATEST}" == "true" ]]; then
+            gw="${gw}"$'\n'"${{ steps.meta.outputs.image }}:latest"
+            sy="${sy}"$'\n'"${{ steps.meta.outputs.switchyard_image }}:latest"
+          fi
+          {
+            echo "gateway<<EOF"
+            echo "${gw}"
+            echo "EOF"
+            echo "switchyard<<EOF"
+            echo "${sy}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push polypus gateway
         uses: docker/build-push-action@v6
         with:
@@ -97,9 +240,14 @@ jobs:
           file: ./Dockerfile
           push: true
           platforms: linux/amd64
-          tags: |
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
-            ${{ steps.meta.outputs.image }}:latest
+          tags: ${{ steps.tags.outputs.gateway }}
+          build-args: |
+            APP_VERSION=${{ steps.release.outputs.app_version }}
+            GIT_REVISION=${{ steps.oci.outputs.git_revision }}
+            BUILD_CREATED=${{ steps.oci.outputs.build_created }}
+            REBUILD_REVISION=${{ steps.release.outputs.rebuild_label }}
+            BASE_IMAGE=${{ steps.meta.outputs.gateway_base }}
+            BASE_DIGEST=${{ steps.base_digest.outputs.gateway }}
 
       - name: Build and push switchyard
         uses: docker/build-push-action@v6
@@ -108,20 +256,47 @@ jobs:
           file: ./Dockerfile.switchyard
           push: true
           platforms: linux/amd64
-          tags: |
-            ${{ steps.meta.outputs.switchyard_image }}:${{ steps.meta.outputs.version }}
-            ${{ steps.meta.outputs.switchyard_image }}:latest
+          tags: ${{ steps.tags.outputs.switchyard }}
+          build-args: |
+            APP_VERSION=${{ steps.release.outputs.app_version }}
+            GIT_REVISION=${{ steps.oci.outputs.git_revision }}
+            BUILD_CREATED=${{ steps.oci.outputs.build_created }}
+            REBUILD_REVISION=${{ steps.release.outputs.rebuild_label }}
+            BASE_IMAGE=${{ steps.meta.outputs.switchyard_base }}
+            BASE_DIGEST=${{ steps.base_digest.outputs.switchyard }}
 
       - name: Publish-ready image smoke (pull, binary load, /health)
         run: |
           set -euo pipefail
           chmod +x scripts/ci/docker-image-health-smoke.sh
           scripts/ci/docker-image-health-smoke.sh \
-            "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}" \
-            "${{ steps.meta.outputs.switchyard_image }}:${{ steps.meta.outputs.version }}"
+            "${{ steps.meta.outputs.image }}:${{ steps.release.outputs.image_tag }}" \
+            "${{ steps.meta.outputs.switchyard_image }}:${{ steps.release.outputs.image_tag }}"
 
       - name: Verify GHCR manifests
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}"
-          docker buildx imagetools inspect "${{ steps.meta.outputs.switchyard_image }}:${{ steps.meta.outputs.version }}"
+          docker buildx imagetools inspect "${{ steps.meta.outputs.image }}:${{ steps.release.outputs.image_tag }}"
+          docker buildx imagetools inspect "${{ steps.meta.outputs.switchyard_image }}:${{ steps.release.outputs.image_tag }}"
+
+      - name: Assert OCI labels (gateway)
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          IMAGE_TAG: ${{ steps.release.outputs.image_tag }}
+          APP_VER: ${{ steps.release.outputs.app_version }}
+          REBUILD_LABEL: ${{ steps.release.outputs.rebuild_label }}
+        run: |
+          set -euo pipefail
+          docker pull "${IMAGE}:${IMAGE_TAG}"
+          got="$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "${IMAGE}:${IMAGE_TAG}")"
+          if [[ "$got" != "$APP_VER" ]]; then
+            echo "expected org.opencontainers.image.version=$APP_VER, got $got" >&2
+            exit 1
+          fi
+          if [[ -n "$REBUILD_LABEL" ]]; then
+            rb="$(docker inspect -f '{{index .Config.Labels "com.behaviorengineering.image.rebuild-revision"}}' "${IMAGE}:${IMAGE_TAG}")"
+            if [[ "$rb" != "$REBUILD_LABEL" ]]; then
+              echo "expected rebuild label $REBUILD_LABEL, got $rb" >&2
+              exit 1
+            fi
+          fi

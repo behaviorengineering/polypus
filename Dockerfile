@@ -3,6 +3,26 @@
 
 FROM debian:bookworm-slim
 
+ARG APP_VERSION=
+ARG GIT_REVISION=
+ARG BUILD_CREATED=
+ARG REBUILD_REVISION=
+ARG BASE_IMAGE=
+ARG BASE_DIGEST=
+
+LABEL org.opencontainers.image.title="polypus" \
+      org.opencontainers.image.description="Polypus OpenAI-compatible gateway" \
+      org.opencontainers.image.url="https://github.com/behaviorengineering/polypus" \
+      org.opencontainers.image.source="https://github.com/behaviorengineering/polypus" \
+      org.opencontainers.image.documentation="https://github.com/behaviorengineering/polypus#readme" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${GIT_REVISION}" \
+      org.opencontainers.image.created="${BUILD_CREATED}" \
+      org.opencontainers.image.vendor="behaviorengineering" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}" \
+      com.behaviorengineering.image.rebuild-revision="${REBUILD_REVISION}"
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
