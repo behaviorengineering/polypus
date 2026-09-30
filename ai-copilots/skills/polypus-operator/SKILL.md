@@ -106,13 +106,14 @@ Clients speak TypeSafe wire format at `POST /v1/systemone` (point `TYPESAFE_BASE
 
 ### 4. Smoke audio
 
-Default path is **cf_local** (gateway needs `secrets:` for `CF_AI_API_KEY` / `CF_ACCOUNT_ID`, then env or `polypus secret set`). For MLX:
+Default path is **cf_local** (`make smoke` / `make smoke-stt` use hermetic mock Cloudflare). MLX model ids (`make smoke-local`, `make smoke-stt-local`, `make smoke-higgs`) use hermetic mock MLX in integration tests (no `make serve`):
 
 ```bash
 make smoke
 make smoke-stt
 make smoke-local
 make smoke-stt-local
+make smoke-higgs
 ```
 
 ### 5. Full model matrix

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	opts := Options{Live: LiveFromEnv()}
+	opts := Options{Live: LiveFromEnv(), Mode: ModeCloudflare}
 	if err := StartShared(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "integration harness: %v\n", err)
 		os.Exit(1)
@@ -98,6 +99,61 @@ func smokeContextForChannel(h *Harness, channel string) (context.Context, contex
 		}
 	}
 	return context.WithTimeout(context.Background(), timeout)
+}
+
+func TestSmokeTTSLocal(t *testing.T) {
+	h := Start(t, Options{Mode: ModeMLX})
+	runChannelOn(t, h, smoke.ChannelTTS, func(o *smoke.Options) {
+		o.TTSModel = DefaultMLXTTSModel
+		o.TTSVoice = DefaultMLXVoice
+	})
+}
+
+func TestSmokeSTTLocal(t *testing.T) {
+	h := Start(t, Options{Mode: ModeMLX})
+	runChannelOn(t, h, smoke.ChannelSTT, func(o *smoke.Options) {
+		o.TTSModel = DefaultMLXTTSModel
+		o.STTModel = DefaultMLXSTTModel
+		o.TTSVoice = DefaultMLXVoice
+	})
+}
+
+func TestSmokeHiggs(t *testing.T) {
+	h := Start(t, Options{Mode: ModeMLX})
+	out := os.Getenv("POLYPUS_SMOKE_OUT")
+	if strings.TrimSpace(out) == "" {
+		out = t.TempDir() + "/polypus-higgs-smoke.mp3"
+	}
+	runChannelOn(t, h, smoke.ChannelTTS, func(o *smoke.Options) {
+		o.TTSModel = DefaultHiggsTTSModel
+		o.TTSVoice = DefaultMLXVoice
+		o.AudioOutPath = out
+	})
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("expected audio out file %q: %v", out, err)
+	}
+}
+
+func TestSmokeRouter(t *testing.T) {
+	h := Start(t, Options{Mode: ModeRouter})
+	chatModel := strings.TrimSpace(os.Getenv("POLYPUS_ROUTER_SMOKE_MODEL"))
+	if chatModel == "" {
+		chatModel = DefaultRouterChatModel
+	}
+	runChannelOn(t, h, smoke.ChannelChat, func(o *smoke.Options) {
+		o.ChatModel = chatModel
+	})
+}
+
+func runChannelOn(t *testing.T, h *Harness, channel string, mutate func(*smoke.Options)) {
+	ctx, cancel := smokeContextForChannel(h, channel)
+	defer cancel()
+	opts := h.SmokeOpts([]string{channel})
+	if mutate != nil {
+		mutate(&opts)
+	}
+	results, err := smoke.Run(ctx, opts)
+	assertSmokeOK(t, results, err)
 }
 
 func assertSmokeOK(t *testing.T, results []smoke.Result, err error) {

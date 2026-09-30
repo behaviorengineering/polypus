@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -90,6 +91,11 @@ func synthesize(ctx context.Context, opts Options) ([]byte, error) {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("speech status %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+	if path := strings.TrimSpace(opts.AudioOutPath); path != "" {
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			return nil, fmt.Errorf("write audio out %q: %w", path, err)
+		}
 	}
 	return body, nil
 }

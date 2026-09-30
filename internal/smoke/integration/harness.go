@@ -28,6 +28,13 @@ const modulePath = "github.com/behaviorengineering/polypus"
 // Options configures harness startup.
 type Options struct {
 	Live bool
+	Mode Mode
+}
+
+type childEnvConfig struct {
+	disableSwitchyard bool
+	switchyardBaseURL string
+	polypusBackendURL string // POLYPUS_BACKEND_URL (overrides mlx_local when CLI env is set)
 }
 
 // Harness is a running polypus gateway for integration smoke.
@@ -37,8 +44,11 @@ type Harness struct {
 
 	binPath  string
 	cmd      *exec.Cmd
-	mock     *httptest.Server
+	mockCF   *httptest.Server
+	mockMLX  *httptest.Server
+	mockSY   *httptest.Server
 	childEnv []string
+	envCfg   childEnvConfig
 
 	tmpRoot string
 	logBuf  bytes.Buffer
@@ -96,14 +106,27 @@ func startHarness(opts Options) (*Harness, error) {
 	}
 
 	h := &Harness{Opts: opts, tmpRoot: tmpRoot}
-	if opts.Live {
-		if err := h.setupLive(); err != nil {
+	switch opts.Mode {
+	case ModeMLX:
+		if err := h.setupMLX(); err != nil {
 			h.Stop()
 			return nil, err
 		}
-	} else if err := h.setupHermetic(); err != nil {
-		h.Stop()
-		return nil, err
+	case ModeRouter:
+		if err := h.setupRouter(); err != nil {
+			h.Stop()
+			return nil, err
+		}
+	default:
+		if opts.Live {
+			if err := h.setupLive(); err != nil {
+				h.Stop()
+				return nil, err
+			}
+		} else if err := h.setupHermetic(); err != nil {
+			h.Stop()
+			return nil, err
+		}
 	}
 
 	port, err := freePort()
@@ -136,12 +159,43 @@ func startHarness(opts Options) (*Harness, error) {
 }
 
 func (h *Harness) setupHermetic() error {
-	h.mock = startMockCloudflare()
-	cfV1 := strings.TrimRight(h.mock.URL, "/") + "/client/v4/accounts/test/ai/v1"
+	h.mockCF = startMockCloudflare()
+	cfV1 := strings.TrimRight(h.mockCF.URL, "/") + "/client/v4/accounts/test/ai/v1"
 	configPath := filepath.Join(h.tmpRoot, "config.yaml")
 	if err := writeHermeticConfig(configPath, cfV1); err != nil {
 		return err
 	}
+	h.envCfg.disableSwitchyard = true
+	return h.prepareChildEnv(configPath)
+}
+
+func (h *Harness) setupMLX() error {
+	h.mockMLX = startMockMLX()
+	configPath := filepath.Join(h.tmpRoot, "config.yaml")
+	if err := writeMlxConfig(configPath, h.mockMLX.URL); err != nil {
+		return fmt.Errorf("write mlx config: %w", err)
+	}
+	h.envCfg.disableSwitchyard = true
+	h.envCfg.polypusBackendURL = h.mockMLX.URL
+	return h.prepareChildEnv(configPath)
+}
+
+func (h *Harness) setupRouter() error {
+	h.mockSY = startMockSwitchyard()
+	h.mockCF = startMockCloudflare()
+	h.mockMLX = startMockMLX()
+	cfV1 := strings.TrimRight(h.mockCF.URL, "/") + "/client/v4/accounts/test/ai/v1"
+	syDir := filepath.Join(h.tmpRoot, "switchyard")
+	if err := os.MkdirAll(syDir, 0o755); err != nil {
+		return fmt.Errorf("switchyard dir: %w", err)
+	}
+	configPath := filepath.Join(h.tmpRoot, "config.yaml")
+	routesPath := filepath.Join(syDir, "routes.toml")
+	if err := writeRouterConfig(configPath, cfV1, h.mockSY.URL, h.mockMLX.URL, routesPath); err != nil {
+		return fmt.Errorf("write router config: %w", err)
+	}
+	h.envCfg.switchyardBaseURL = h.mockSY.URL
+	h.envCfg.polypusBackendURL = h.mockMLX.URL
 	return h.prepareChildEnv(configPath)
 }
 
@@ -155,6 +209,7 @@ func (h *Harness) setupLive() error {
 	if err := writeLiveConfig(configPath, acct); err != nil {
 		return err
 	}
+	h.envCfg.disableSwitchyard = true
 	return h.prepareChildEnv(configPath)
 }
 
@@ -168,24 +223,35 @@ func (h *Harness) prepareChildEnv(configPath string) error {
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		return err
 	}
-	h.childEnv = childEnv(configPath, h.tmpRoot, home)
+	h.childEnv = childEnv(configPath, h.tmpRoot, home, h.envCfg)
 	return nil
 }
 
-func childEnv(configPath, tmpRoot, home string) []string {
+func childEnv(configPath, tmpRoot, home string, cfg childEnvConfig) []string {
 	overrides := map[string]string{
-		"POLYPUS_CONFIG":     configPath,
-		"POLYPUS_BATCH_DIR":  filepath.Join(tmpRoot, "batch"),
-		"HOME":               home,
-		"XDG_CONFIG_HOME":    filepath.Join(home, ".config"),
-		"XDG_STATE_HOME":     filepath.Join(home, ".local", "state"),
-		"XDG_CACHE_HOME":     filepath.Join(home, ".cache"),
-		"POLYPUS_OTEL":       "0",
-		"POLYPUS_PHOENIX":    "0",
-		"POLYPUS_HYPERDX":    "0",
-		"POLYPUS_SWITCHYARD": "0",
-		"CF_AI_API_KEY":      envOr("CF_AI_API_KEY", "test-token"),
-		"CF_ACCOUNT_ID":      envOr("CF_ACCOUNT_ID", "test"),
+		"POLYPUS_CONFIG":    configPath,
+		"POLYPUS_BATCH_DIR": filepath.Join(tmpRoot, "batch"),
+		"HOME":              home,
+		"XDG_CONFIG_HOME":   filepath.Join(home, ".config"),
+		"XDG_STATE_HOME":    filepath.Join(home, ".local", "state"),
+		"XDG_CACHE_HOME":    filepath.Join(home, ".cache"),
+		"POLYPUS_OTEL":      "0",
+		"POLYPUS_PHOENIX":   "0",
+		"POLYPUS_HYPERDX":   "0",
+		"CF_AI_API_KEY":     envOr("CF_AI_API_KEY", "test-token"),
+		"CF_ACCOUNT_ID":     envOr("CF_ACCOUNT_ID", "test"),
+	}
+	if cfg.disableSwitchyard {
+		overrides["POLYPUS_SWITCHYARD"] = "0"
+	} else if strings.TrimSpace(cfg.switchyardBaseURL) != "" {
+		overrides["POLYPUS_SWITCHYARD"] = "1"
+		overrides["POLYPUS_SWITCHYARD_BASE_URL"] = strings.TrimRight(cfg.switchyardBaseURL, "/")
+	}
+	if u := strings.TrimSpace(cfg.polypusBackendURL); u != "" {
+		overrides["POLYPUS_BACKEND_URL"] = strings.TrimRight(u, "/")
+		overrides["POLYPUS_MLX_URL"] = ""
+		overrides["POLYPUS_MLX_HOST"] = ""
+		overrides["POLYPUS_MLX_PORT"] = ""
 	}
 	out := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, kv := range os.Environ() {
@@ -279,9 +345,17 @@ func (h *Harness) Stop() {
 			<-done
 		}
 	}
-	if h.mock != nil {
-		h.mock.Close()
-		h.mock = nil
+	if h.mockCF != nil {
+		h.mockCF.Close()
+		h.mockCF = nil
+	}
+	if h.mockMLX != nil {
+		h.mockMLX.Close()
+		h.mockMLX = nil
+	}
+	if h.mockSY != nil {
+		h.mockSY.Close()
+		h.mockSY = nil
 	}
 	h.cleanupDirs()
 }

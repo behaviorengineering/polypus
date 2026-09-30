@@ -38,7 +38,7 @@ GO_BUILDFLAGS := -buildvcs=false
 help:
 	@echo "polypus — local OpenAI speech gateway (TTS/STT backends behind loopback)"
 	@echo ""
-	@echo "  make build              Build $(BINARY) + $(SMOKE_BIN) + bin/switchyard-server"
+	@echo "  make build              Build $(BINARY) + bin/switchyard-server"
 	@echo "  make build-gateway      Build the polypus gateway binary"
 	@echo "  make build-smoke        Build polypus-smoke (multi-channel L1 probes)"
 	@echo "  make switchyard-build   Build bin/switchyard-server (Rust; also part of make build)"
@@ -50,13 +50,13 @@ help:
 	@echo "  make serve              process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 + HyperDX :8080 (POLYPUS_PHOENIX=0 / POLYPUS_HYPERDX=0 to skip)"
 	@echo "  make serve-down         Stop this Polypus process-compose project only"
 	@echo "  make smoke              TTS L1 smoke (builds gateway + mock CF; no make serve)"
-	@echo "  make smoke-local        TTS smoke via MLX (requires mlx_local up)"
+	@echo "  make smoke-local        TTS integration smoke (mock MLX backend)"
 	@echo "  make smoke-chat         L1 chat integration smoke (granite-4.0-h-micro)"
-	@echo "  make smoke-router       Named router chat via polypus-smoke (needs make serve + Switchyard)"
+	@echo "  make smoke-router       Named router chat integration smoke (mock Switchyard)"
 	@echo "  make smoke-batch        L1 batch facade integration smoke (gemma-4 default)"
-	@echo "  make smoke-higgs        Higgs v2 TTS smoke (MLX)"
+	@echo "  make smoke-higgs        Higgs v2 TTS integration smoke (mock MLX)"
 	@echo "  make smoke-stt          TTS then STT round-trip (cf_local)"
-	@echo "  make smoke-stt-local    TTS+STT via MLX"
+	@echo "  make smoke-stt-local    TTS+STT integration smoke (mock MLX)"
 	@echo "  make smoke-systemone    TypeSafe /v1/systemone integration smoke"
 	@echo "  make smoke-all          chat + TTS + STT + systemone integration smoke"
 	@echo "  make test-integration   go test -tags=integration ./internal/smoke/integration"
@@ -67,7 +67,7 @@ help:
 	@echo "  make tidy               go mod tidy"
 	@echo "  make ci                 tidy check + gofmt + vet + race tests + build"
 
-build: build-gateway build-smoke switchyard-build
+build: build-gateway switchyard-build
 
 sync-config-example:
 	@cp $(CONFIG_EXAMPLE_SRC) $(CONFIG_EXAMPLE_EMBED)
@@ -106,14 +106,13 @@ smoke:
 	$(INTEGRATION_TEST) -run TestSmokeTTS
 
 smoke-local:
-	chmod +x scripts/smoke.sh
-	POLYPUS_SMOKE_LOCAL=1 ./scripts/smoke.sh
+	$(INTEGRATION_TEST) -run '^TestSmokeTTSLocal$$'
 
 smoke-chat:
 	$(INTEGRATION_TEST) -run TestSmokeChat
 
-smoke-router: build-smoke
-	$(SMOKE_BIN) -channels chat -chat-model $(POLYPUS_ROUTER_SMOKE_MODEL)
+smoke-router:
+	$(INTEGRATION_TEST) -run '^TestSmokeRouter$$'
 
 smoke-batch:
 	$(INTEGRATION_TEST) -run TestSmokeBatch
@@ -132,19 +131,14 @@ switchyard-build:
 		exit 1)
 
 smoke-higgs:
-	chmod +x scripts/smoke.sh
-	POLYPUS_SMOKE_LOCAL=1 \
-	POLYPUS_DEFAULT_MODEL=mlx-community/higgs-audio-v2-3B-mlx-q6 \
-	POLYPUS_DEFAULT_VOICE=vivian \
 	POLYPUS_SMOKE_OUT=/tmp/polypus-higgs-smoke.mp3 \
-	./scripts/smoke.sh
+	$(INTEGRATION_TEST) -run '^TestSmokeHiggs$$'
 
 smoke-stt:
 	$(INTEGRATION_TEST) -run TestSmokeSTT
 
 smoke-stt-local:
-	chmod +x scripts/smoke-stt.sh
-	POLYPUS_SMOKE_LOCAL=1 ./scripts/smoke-stt.sh
+	$(INTEGRATION_TEST) -run '^TestSmokeSTTLocal$$'
 
 smoke-systemone:
 	$(INTEGRATION_TEST) -run TestSmokeSystemOne
