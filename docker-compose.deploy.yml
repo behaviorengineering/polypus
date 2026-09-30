@@ -20,9 +20,11 @@ services:
       CF_AI_API_KEY: ${CF_AI_API_KEY}
       CF_ACCOUNT_ID: ${CF_ACCOUNT_ID}
       POLYPUS_OTLP_ENDPOINT: ${POLYPUS_OTLP_ENDPOINT:-http://phoenix:4317}
+      POLYPUS_FAILURE_DUMP_DIR: /var/lib/polypus/inference-failures
     volumes:
       - ${POLYPUS_HOST_CONFIG}:/etc/polypus/config.yaml:ro
       - switchyard_routes:/var/lib/polypus/switchyard
+      - polypus_inference_failures:/var/lib/polypus/inference-failures
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:1320/health"]
       interval: 5s
@@ -43,8 +45,12 @@ services:
       SWITCHYARD_CONFIG: /var/lib/polypus/switchyard/routes.toml
       SWITCHYARD_HOST: "0.0.0.0"
       SWITCHYARD_PORT: "4000"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${POLYPUS_OTLP_ENDPOINT:-http://phoenix:4317}
+      OTEL_SERVICE_NAME: switchyard-server
+      SWITCHYARD_FAILURE_DUMP_DIR: /var/lib/switchyard/inference-failures
     volumes:
       - switchyard_routes:/var/lib/polypus/switchyard
+      - switchyard_inference_failures:/var/lib/switchyard/inference-failures
     depends_on:
       gateway:
         condition: service_healthy
@@ -79,6 +85,8 @@ services:
 
 volumes:
   switchyard_routes:
+  polypus_inference_failures:
+  switchyard_inference_failures:
   phoenix_data:
   hyperdx_db:
   hyperdx_ch_data:

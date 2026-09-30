@@ -7,6 +7,7 @@ Symptom-first table. Run health before chasing downstream errors.
 ```bash
 curl -sf http://127.0.0.1:1320/health | jq .
 curl -sf http://127.0.0.1:1320/health/backends | jq .   # upstream probe; may be slow
+curl -sf http://127.0.0.1:1320/health/upstreams | jq .  # circuit breaker board (no dials)
 curl -sS http://127.0.0.1:1320/v1/models | jq '.data | length'
 curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq '.data | length'   # cf_local catalog
 curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
@@ -31,18 +32,28 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 | TTS works, STT fails | STT model not allowed or wrong backend | Check `stt_backend.default` and allow list |
 | `router/…` returns 503 | Switchyard down or not ready | `/health/backends` → `switchyard`; `make serve-down && make serve`; `make smoke-router` |
 | Leaf or Switchyard dial returns 503 after recent 5xx | Upstream circuit breaker open (`internal/gateway/upstream.Board`) | Wait for the open window (~30s) or fix the upstream; clients MAY budget-retry 503, MUST NOT expect Polypus to sleep-retry chat (see SKILL.md resilience ownership) |
-| Smoke chat/TTS/STT fail in ~1–3 ms with `circuit breaker is open` on `cf_local` | Breaker still open in a long-lived gateway after earlier CF/auth failures | Fix credentials (`polypus secret set` / env), then `make serve-down && make serve` (breaker state is in-process only). `/health/backends` no longer trips the production breaker. |
+| Smoke chat/TTS/STT fail in ~1–3 ms with `circuit breaker is open` on `cf_local` | Breaker still open in a long-lived gateway after earlier CF/auth failures | Fix credentials (`polypus secret set` / env), then `make serve-down && make serve` (breaker state is in-process only). `/health/backends` no longer trips the production breaker. Compare `/health/upstreams` (`state=open`) vs Cloudflare 429 in dump (`polypus.failure.layer=cloudflare`). |
 | `router/…` returns 502 | Switchyard up but chat hop failed | Check Switchyard logs; upstream leaf error (distinct from 503 unavailable) |
 | `router/…` unknown / 400 | Router not in `routers:` or typo | Check `config.yaml` `routers:`; probe `/v1/models` for `router/<name>` |
 | Passthrough router fails, composed OK | Leaf allow-list or backend | Validate `route.target` leaf in `models.allow` |
 
 ## Logs and traces
 
+Agent decision order when a job fails:
+
+1. `GET http://127.0.0.1:1320/debug/failures/<trace_id>` (or read `logs/inference-failures/<trace_id>.json` on the gateway host)
+2. On child spans, read `polypus.failure.layer` (`cloudflare`, `polypus_breaker`, `switchyard`, `leaf`)
+3. For `router/…` models, also `GET http://127.0.0.1:4000/debug/failures/<trace_id>` for Switchyard retry attempts
+4. `GET /health/upstreams` when layer is `polypus_breaker` but `/health/backends` is green
+5. Phoenix http://127.0.0.1:6006 when OTLP was up (same TraceID should include `switchyard.request` and `libsy.upstream_attempt`)
+
 | Resource | Location |
 |----------|----------|
 | Phoenix UI | http://127.0.0.1:6006 |
-| Inference failure JSON | `logs/inference-failures/<trace_id>.json` (via [olly](https://github.com/behaviorengineering/olly) dump processor) |
-| Gateway trace noise | Set `POLYPUS_OTEL_SKIP_PATHS=/health,/health/backends,/v1/models` |
+| Polypus failure dump API | `GET :1320/debug/failures/<trace_id>` |
+| Switchyard failure dump API | `GET :4000/debug/failures/<trace_id>` |
+| Inference failure JSON (disk) | `POLYPUS_FAILURE_DUMP_DIR` / `SWITCHYARD_FAILURE_DUMP_DIR` (default `logs/inference-failures/`) |
+| Gateway trace noise | Set `POLYPUS_OTEL_SKIP_PATHS=/health,/health/backends,/health/upstreams,/v1/models` |
 
 ## Restart after config change
 

@@ -166,6 +166,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		healthHandler{g.shared}.serveHealth(w, r)
 	case r.URL.Path == "/health/backends" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		healthHandler{g.shared}.serveBackendHealth(w, r)
+	case r.URL.Path == "/health/upstreams" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		healthHandler{g.shared}.serveUpstreamHealth(w, r)
+	case strings.HasPrefix(r.URL.Path, "/debug/failures/") && r.Method == http.MethodGet:
+		healthHandler{g.shared}.serveFailureDump(w, r)
 	case r.URL.Path == "/v1/models" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		modelsHandler{g.shared}.serveModelsList(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/models/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
@@ -255,7 +259,8 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
-	defer func() { observability.EndSpan(span, err) }()
+	dialUpstream := backendID
+	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, vision, chatBodyWantsThinking(body))
 	if err = h.proxyOrBifrostChat(w, r, backendID, downstream, backendURL, rewritten, hop, backendAuth, true); err != nil {
@@ -326,7 +331,8 @@ func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.R
 	}
 	var err error
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
-	defer func() { observability.EndSpan(span, err) }()
+	dialUpstream := backendID
+	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, chatBodyWantsThinking(body))
 	if err = h.proxyOrBifrostChat(w, r, backendID, downstream, backendURL, rewritten, hop, backendAuth, true); err != nil {
@@ -337,21 +343,15 @@ func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.R
 func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Request, body []byte, model, routerName, switchyardURL string) {
 	var err error
 	ctx, span := observability.StartRouterSpan(r.Context(), "polypus.router", model, routerName, switchyardURL)
-	defer func() { observability.EndSpan(span, err) }()
+	dialUpstream := upstream.NameSwitchyard
+	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	r = r.WithContext(ctx)
 	hop := h.timeouts.Max
 	if hop <= 0 {
 		hop = config.DefaultTimeouts().Max
 	}
-	downstream := model
-	if mid, midErr := extractChatModel(body); midErr == nil && strings.TrimSpace(mid) != "" {
-		downstream = mid
-	}
 	err = h.upstreams.Execute(upstream.NameSwitchyard, func() error {
-		if !h.router.UsesBifrost(router.ProviderSwitchyard) {
-			return proxyChatCompletionsOpts(w, r, switchyardURL, body, h.client, hop, "", false)
-		}
-		return h.bifrostChatResponse(w, r, router.ProviderSwitchyard, downstream, body, hop, false)
+		return proxyChatCompletionsOpts(w, r, switchyardURL, body, h.client, hop, "", false)
 	})
 	if err != nil {
 		writeUpstreamDialError(w, err, "polypus: switchyard unavailable: ", isSwitchyardUnreachable)
@@ -468,7 +468,8 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", model, backendID, backendURL, downstream)
-	defer func() { observability.EndSpan(span, err) }()
+	dialUpstream := backendID
+	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveEmbed(r.Header.Get(config.TimeoutHeader))
 	err = h.upstreams.Execute(backendID, func() error {
@@ -524,7 +525,8 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.speech", req.Model, string(backendID), backendURL, downstream)
-	defer func() { observability.EndSpan(span, err) }()
+	dialUpstream := string(backendID)
+	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	hop := h.timeouts.ResolveSpeech(r.Header.Get(config.TimeoutHeader))
 	if hop > 0 {
 		var cancel context.CancelFunc
@@ -594,7 +596,8 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 		}
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.transcription", sttModel, string(backendID), backendURL, downstream)
-	defer func() { observability.EndSpan(span, err) }()
+	dialUpstream := string(backendID)
+	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	hop := h.timeouts.ResolveSpeech(r.Header.Get(config.TimeoutHeader))
 	if hop > 0 {
 		var cancel context.CancelFunc

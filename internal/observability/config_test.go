@@ -26,7 +26,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.DumpDir != defaultDumpDir {
 		t.Fatalf("dump=%s", cfg.DumpDir)
 	}
-	if len(cfg.SkipPaths) != 2 || cfg.SkipPaths[0] != "/health" || cfg.SkipPaths[1] != "/health/backends" {
+	if len(cfg.SkipPaths) != 3 || cfg.SkipPaths[0] != "/health" || cfg.SkipPaths[1] != "/health/backends" || cfg.SkipPaths[2] != "/health/upstreams" {
 		t.Fatalf("skip=%v", cfg.SkipPaths)
 	}
 }
@@ -41,7 +41,7 @@ func TestLoadConfigDisabled(t *testing.T) {
 
 func TestParseSkipPaths(t *testing.T) {
 	got := parseSkipPaths("")
-	if len(got) != 2 || got[0] != "/health" || got[1] != "/health/backends" {
+	if len(got) != 3 || got[0] != "/health" || got[1] != "/health/backends" || got[2] != "/health/upstreams" {
 		t.Fatalf("default skip=%v", got)
 	}
 	got = parseSkipPaths("health, /ready/")
