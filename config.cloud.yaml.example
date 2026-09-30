@@ -52,7 +52,22 @@ backends:
         - "@cf/zai-org/glm-4.7-flash"
         - "@cf/ibm-granite/granite-4.0-h-micro"
         - "@cf/google/gemma-4-26b-a4b-it"
+        - "@cf/deepseek-ai/deepseek-v4-flash-0731"
         - "@cf/openai/gpt-oss-20b"
         - "@cf/deepgram/aura-2-en"
         - "@cf/deepgram/nova-3"
         - "typesafe/jev"
+
+# Optional named routers (public ids: router/<name>). Majordomo tower code tasks use the
+# DeepSeek model id directly; router/code is for ad-hoc local consults (cf_local/... or router/code).
+# routers:
+#   code:
+#     capability: chat
+#     route:
+#       type: passthrough
+#       target: cf_local/@cf/deepseek-ai/deepseek-v4-flash-0731
+#   scribe:
+#     capability: chat
+#     route:
+#       type: passthrough
+#       target: cf_local/@cf/google/gemma-4-26b-a4b-it
