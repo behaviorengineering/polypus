@@ -15,7 +15,7 @@ import (
 func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, backendID, downstream, backendURL string, body []byte, hop time.Duration, backendAuth string, patchThinking bool) error {
 	return h.upstreams.Execute(backendID, func() error {
 		if !h.router.UsesBifrost(backendID) {
-			return proxyChatCompletionsOpts(w, r, backendURL, body, h.client, hop, backendAuth, patchThinking)
+			return proxyChatCompletionsOpts(w, r, backendURL, body, h.client, hop, backendAuth, patchThinking, false)
 		}
 		return h.bifrostChatResponse(w, r, backendID, downstream, body, hop, patchThinking)
 	})

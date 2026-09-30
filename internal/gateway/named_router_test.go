@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +10,12 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 func TestNamedRouterPassthrough(t *testing.T) {
@@ -155,7 +161,8 @@ func TestNamedRouterComposedProxiesToSwitchyard(t *testing.T) {
 				t.Fatalf("expected unchanged router model in body: %s", body)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"via-switchyard"}}]}`))
+			w.Header().Set(headerRouterSelectedModel, "cf_local/@cf/a")
+			_, _ = w.Write([]byte(`{"model":"cf_local/@cf/a","choices":[{"message":{"content":"via-switchyard"}}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -222,6 +229,104 @@ routers:
 	}
 	if !strings.Contains(rec.Body.String(), "via-switchyard") {
 		t.Fatalf("body: %s", rec.Body.String())
+	}
+	if got := rec.Header().Get(headerRouterSelectedModel); got != "cf_local/@cf/a" {
+		t.Fatalf("selected header: %q", got)
+	}
+}
+
+func TestNamedRouterComposedRecordsDownstreamModelSpan(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	otel.SetTracerProvider(tp)
+
+	sw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		case "/v1/chat/completions":
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(headerRouterSelectedModel, "lm_studio/qwen")
+			_, _ = w.Write([]byte(`{"model":"lm_studio/qwen","choices":[{"message":{"content":"ok"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(sw.Close)
+	t.Setenv("POLYPUS_SWITCHYARD_BASE_URL", sw.URL)
+
+	dir := t.TempDir()
+	content := `
+chat_backend:
+  enabled: true
+  default: cf_local
+tts_backend:
+  enabled: true
+  default: mlx_local
+stt_backend:
+  enabled: true
+  default: mlx_local
+proxy_backend:
+  enabled: true
+  default: mlx_local
+backends:
+  mlx_local:
+    base_url: http://127.0.0.1:1322
+    capabilities: [tts, stt, voices]
+  cf_local:
+    base_url: http://127.0.0.1:1323
+    capabilities: [chat]
+    models:
+      allow:
+        - "@cf/a"
+  lm_studio:
+    base_url: http://127.0.0.1:1234/v1
+    capabilities: [chat]
+    models:
+      allow:
+        - qwen
+routers:
+  investigator:
+    capability: chat
+    route:
+      type: stage_router
+      picker: efficient_first
+      confidence_threshold: 0.5
+      capable: cf_local/@cf/a
+      efficient: lm_studio/qwen
+`
+	writeConfig(t, dir, content)
+
+	inner, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := observability.WrapHandler(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"router/investigator","messages":[{"role":"user","content":"hi"}]}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d body %s", rec.Code, rec.Body.String())
+	}
+
+	var downstream string
+	for _, sp := range exporter.GetSpans() {
+		if sp.Name != "polypus.router" {
+			continue
+		}
+		for _, kv := range sp.Attributes {
+			if kv.Key == "polypus.downstream_model" {
+				downstream = kv.Value.AsString()
+			}
+		}
+	}
+	if downstream != "lm_studio/qwen" {
+		t.Fatalf("polypus.downstream_model: %q spans=%+v", downstream, exporter.GetSpans())
 	}
 }
 

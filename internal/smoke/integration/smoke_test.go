@@ -142,6 +142,11 @@ func TestSmokeRouter(t *testing.T) {
 	}
 	runChannelOn(t, h, smoke.ChannelChat, func(o *smoke.Options) {
 		o.ChatModel = chatModel
+		o.RequireSelectedModel = true
+		o.AllowedSelectedModels = []string{
+			"cf_local/@cf/google/gemma-4-26b-a4b-it",
+			"cf_local/@cf/zai-org/glm-4.7-flash",
+		}
 	})
 }
 

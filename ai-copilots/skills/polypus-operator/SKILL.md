@@ -84,6 +84,10 @@ Default model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`
 
 `/health/backends` probing Switchyard is **not** a substitute for this smoke; it only checks `:4000/health`.
 
+Router smoke integration requires Switchyard routing metadata: response header `x-model-router-selected-model` (or body `model` = served leaf). `polypus.Smoke` Options `RequireSelectedModel` and `AllowedSelectedModels` enforce that leaf is present and in the configured capable/efficient set.
+
+**Tracing:** On composed router chat, the gateway `polypus.router` span sets `polypus.downstream_model` when Switchyard returns selected-model metadata. Switchyard child spans already record `gen_ai.request.model` on `libsy.client_call`. Phoenix (`POLYPUS_OTLP_ENDPOINT`, default `http://127.0.0.1:4317`) shows both.
+
 ### 3c. Smoke OpenAI batch facade
 
 Requires `batch_backend` enabled, `batch` capability on a Cloudflare extension backend, and a Workers AI batch-capable model on the allow list. Not part of `make smoke-all` (async poll can take minutes).
