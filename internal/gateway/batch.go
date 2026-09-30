@@ -160,7 +160,8 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.batch.create", publicModel, backendID, backend.BaseURL, downstream)
 	var submitErr error
-	defer func() { observability.EndSpan(span, submitErr) }()
+	dialUpstream := backendID
+	defer func() { observability.EndDialSpan(span, submitErr, dialUpstream) }()
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, false)
 	if hop > 0 {
 		var cancel context.CancelFunc

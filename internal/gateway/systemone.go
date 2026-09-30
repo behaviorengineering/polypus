@@ -64,7 +64,8 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 	}
 
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.systemone", publicModel, backendID, backendURL, downstream)
-	defer func() { observability.EndSpan(span, err) }()
+	dialUpstream := backendID
+	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, false)
 	if hop > 0 {
 		var cancel context.CancelFunc

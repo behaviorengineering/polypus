@@ -11,6 +11,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 )
 
 const backendProbeTimeout = 5 * time.Second
@@ -42,6 +43,22 @@ type backendHealthResponse struct {
 	Status   string               `json:"status"`
 	Router   string               `json:"router"`
 	Backends []backendProbeResult `json:"backends"`
+}
+
+type upstreamHealthResponse struct {
+	Status    string                      `json:"status"`
+	Upstreams []upstream.UpstreamSnapshot `json:"upstreams"`
+}
+
+// serveUpstreamHealth reports in-process circuit breaker state (no upstream dials).
+func (h healthHandler) serveUpstreamHealth(w http.ResponseWriter, _ *http.Request) {
+	resp := upstreamHealthResponse{
+		Status:    "ok",
+		Upstreams: h.upstreams.Snapshot(),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // serveHealth reports gateway liveness only (no upstream probes).

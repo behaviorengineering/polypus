@@ -56,10 +56,13 @@ func Init(cfg Config) (func(context.Context) error, error) {
 			Diagnostics:      stderrDiag{},
 		},
 	}
+	dumpDir := cfg.DumpDir
 	if !cfg.Enabled {
 		ollyCfg.OTLPEndpoint = ""
 		ollyCfg.Dump.Dir = ""
+		dumpDir = ""
 	}
+	SetFailureDumpDir(dumpDir)
 
 	shutdown, err := olly.Init(ollyCfg)
 	if err != nil {

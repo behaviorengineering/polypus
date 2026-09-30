@@ -9,10 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
+	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 // fakeRouter satisfies Router without bifrost.Init (UsesBifrost always false).
@@ -327,9 +333,24 @@ backends:
 	}
 }
 
-func TestSwitchyardComposedViaRecordingBifrost(t *testing.T) {
+func TestSwitchyardComposedViaHTTPProxy(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}))
+
 	t.Setenv("POLYPUS_SWITCHYARD", "1")
-	t.Setenv("POLYPUS_SWITCHYARD_BASE_URL", "http://127.0.0.1:1")
+	var sawTraceparent bool
+	sy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("traceparent") != "" {
+			sawTraceparent = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"via-proxy"}}]}`))
+	}))
+	t.Cleanup(sy.Close)
+	t.Setenv("POLYPUS_SWITCHYARD_BASE_URL", sy.URL)
 
 	dir := t.TempDir()
 	content := `
@@ -374,27 +395,30 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	recRouter := &recordingRouter{
-		reg:  reg,
-		uses: map[string]bool{router.ProviderSwitchyard: true},
-	}
-	handler := newTestGateway(t, opts, recRouter)
+	recRouter := &recordingRouter{reg: reg}
+	handler := observability.WrapHandler(newTestGateway(t, opts, recRouter))
 
+	ctx, root := tp.Tracer("client").Start(context.Background(), "test.client")
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"router/investigator","messages":[{"role":"user","content":"hi"}]}`,
 	))
+	req = req.WithContext(ctx)
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+	root.End()
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: %d body %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "via-bifrost") {
+	if !strings.Contains(rec.Body.String(), "via-proxy") {
 		t.Fatalf("body: %q", rec.Body.String())
 	}
-	want := router.ProviderSwitchyard + ":router/investigator"
-	if len(recRouter.chatProviders) != 1 || recRouter.chatProviders[0] != want {
-		t.Fatalf("chatProviders=%v want %q", recRouter.chatProviders, want)
+	if len(recRouter.chatProviders) != 0 {
+		t.Fatalf("expected HTTP proxy to Switchyard, bifrost chatProviders=%v", recRouter.chatProviders)
+	}
+	if !sawTraceparent {
+		t.Fatal("expected traceparent on Switchyard proxy request")
 	}
 }
 
