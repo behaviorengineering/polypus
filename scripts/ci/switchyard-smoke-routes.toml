@@ -1,0 +1,8 @@
+# Hermetic routes for docker-release image health smoke (no upstream dials).
+schema_version = 1
+
+[targets]
+
+[routes.noop]
+id = "switchyard/noop"
+type = "noop"
