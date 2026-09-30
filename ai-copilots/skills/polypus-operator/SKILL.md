@@ -52,13 +52,14 @@ Compare to `config.yaml` `backends.*.models.allow`. Enabled list = first call; f
 
 ### 3. Smoke all Cloudflare channels
 
-With the gateway up and Cloudflare `secrets:` filled (env or `polypus secret set`):
+Hermetic L1 smoke builds `cmd/polypus`, starts a temp gateway with a mock Cloudflare backend, and runs probes (no `make serve`):
 
 ```bash
 make smoke-all
+# or: go test -tags=integration -count=1 ./internal/smoke/integration
 ```
 
-Runs chat (glm-4.7-flash), TTS (aura), STT (nova), and systemone (`typesafe/jev`) via `bin/polypus-smoke`. Any failure fails the command. On **push to main**, CI expands [`config.ci-smoke.yaml.example`](../../../config.ci-smoke.yaml.example) with secrets `CF_AI_API_KEY` and `CF_ACCOUNT_ID` and runs the same probes (`-require-cf`).
+Runs chat (granite-4.0-h-micro), TTS (aura), STT (nova), and systemone (`typesafe/jev`). On **push to main**, CI runs the same package with `POLYPUS_SMOKE_LIVE=1` and secrets `CF_AI_API_KEY` / `CF_ACCOUNT_ID` against real Workers AI.
 
 ### 3a. Smoke chat only (L1 transport)
 
@@ -66,7 +67,7 @@ Runs chat (glm-4.7-flash), TTS (aura), STT (nova), and systemone (`typesafe/jev`
 make smoke-chat
 ```
 
-Default model: `cf_local/@cf/zai-org/glm-4.7-flash` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
+Default model: `cf_local/@cf/ibm-granite/granite-4.0-h-micro` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
 
 ### 3b. Smoke named router (when `routers:` configured)
 
@@ -91,7 +92,7 @@ Requires `batch_backend` enabled, `batch` capability on a Cloudflare extension b
 make smoke-batch
 ```
 
-Default model: `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`). Probes upload JSONL (`POST /v1/files`), create a batch (`POST /v1/batches`), poll until terminal, then check output file content for the smoke `custom_id`.
+Default model: `cf_local/@cf/google/gemma-4-26b-a4b-it`. Integration test `TestSmokeBatch` probes upload JSONL (`POST /v1/files`), create a batch (`POST /v1/batches`), poll until terminal, then check output file content for the smoke `custom_id`.
 
 ### 3d. Smoke systemone (TypeSafe / Jev)
 
@@ -105,13 +106,14 @@ Clients speak TypeSafe wire format at `POST /v1/systemone` (point `TYPESAFE_BASE
 
 ### 4. Smoke audio
 
-Default path is **cf_local** (gateway needs `secrets:` for `CF_AI_API_KEY` / `CF_ACCOUNT_ID`, then env or `polypus secret set`). For MLX:
+Default path is **cf_local** (`make smoke` / `make smoke-stt` use hermetic mock Cloudflare). MLX model ids (`make smoke-local`, `make smoke-stt-local`, `make smoke-higgs`) use hermetic mock MLX in integration tests (no `make serve`):
 
 ```bash
 make smoke
 make smoke-stt
 make smoke-local
 make smoke-stt-local
+make smoke-higgs
 ```
 
 ### 5. Full model matrix
@@ -202,6 +204,13 @@ the client also retries every 502/503 without a budget
 ```
 
 Bifrost may expose per-provider `MaxRetries` on leaf dials; that is hop-local and optional. It is not a substitute for Polypus’s breaker, and it does not move retry ownership away from clients for end-to-end chat.
+
+## Releases and publish-complete
+
+**CONSTRAINT:** Treat `vX.Y.Z` as **published** only when **Auto patch release** is green through **verify** (GoReleaser binaries, Docker push, GHCR manifest inspect). MUST NOT bump consumer `images.env` or submodule pins on a half-green tag.
+
+- On failure, GitHub opens a `ci-failure` Issue with the Actions run URL and log excerpt. Use that Issue as the local-agent queue (diagnose with `gh run view --log-failed`, fix CI, re-run Docker release if needed).
+- Fleet policy: cursor-packs `manage-go-releases` publish-complete gate.
 
 ## Refresh this pack
 

@@ -1,4 +1,6 @@
-.PHONY: help build build-gateway build-smoke install init sync-config-example check-config-example test vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-batch smoke-higgs smoke-stt smoke-stt-local smoke-systemone smoke-all switchyard-build docker-build
+.PHONY: help build build-gateway build-smoke install init sync-config-example check-config-example test test-integration vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-batch smoke-higgs smoke-stt smoke-stt-local smoke-systemone smoke-all switchyard-build docker-build
+
+INTEGRATION_TEST := go test -tags=integration -count=1 -timeout 15m ./internal/smoke/integration
 
 CONFIG_EXAMPLE_SRC := config.yaml.example
 CONFIG_EXAMPLE_EMBED := internal/config/config.yaml.example
@@ -21,7 +23,7 @@ ifneq ($(wildcard $(abspath $(CURDIR)/../..)/stack/.env.example),)
 PARENT_MONOREPO_ROOT := $(abspath $(CURDIR)/../..)
 endif
 SMOKE_BIN := $(dir $(BINARY))polypus-smoke
-POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/zai-org/glm-4.7-flash
+POLYPUS_CHAT_SMOKE_MODEL ?= cf_local/@cf/ibm-granite/granite-4.0-h-micro
 POLYPUS_ROUTER_SMOKE_MODEL ?= router/investigator
 POLYPUS_BATCH_SMOKE_MODEL ?= cf_local/@cf/google/gemma-4-26b-a4b-it
 
@@ -36,7 +38,7 @@ GO_BUILDFLAGS := -buildvcs=false
 help:
 	@echo "polypus — local OpenAI speech gateway (TTS/STT backends behind loopback)"
 	@echo ""
-	@echo "  make build              Build $(BINARY) + $(SMOKE_BIN) + bin/switchyard-server"
+	@echo "  make build              Build $(BINARY) + bin/switchyard-server"
 	@echo "  make build-gateway      Build the polypus gateway binary"
 	@echo "  make build-smoke        Build polypus-smoke (multi-channel L1 probes)"
 	@echo "  make switchyard-build   Build bin/switchyard-server (Rust; also part of make build)"
@@ -47,24 +49,25 @@ help:
 	@echo "  make mlx-sync           uv sync for backends/mlx"
 	@echo "  make serve              process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 + HyperDX :8080 (POLYPUS_PHOENIX=0 / POLYPUS_HYPERDX=0 to skip)"
 	@echo "  make serve-down         Stop this Polypus process-compose project only"
-	@echo "  make smoke              TTS smoke via gateway (cf_local default)"
-	@echo "  make smoke-local        TTS smoke via MLX"
-	@echo "  make smoke-chat         L1 chat smoke via polypus-smoke (glm-4.7-flash)"
-	@echo "  make smoke-router       Named router chat smoke (router/investigator by default)"
-	@echo "  make smoke-batch        L1 OpenAI batch facade smoke (files+batches; gemma-4 by default)"
-	@echo "  make smoke-higgs        Higgs v2 TTS smoke (MLX)"
+	@echo "  make smoke              TTS L1 smoke (builds gateway + mock CF; no make serve)"
+	@echo "  make smoke-local        TTS integration smoke (mock MLX backend)"
+	@echo "  make smoke-chat         L1 chat integration smoke (granite-4.0-h-micro)"
+	@echo "  make smoke-router       Named router chat integration smoke (mock Switchyard)"
+	@echo "  make smoke-batch        L1 batch facade integration smoke (gemma-4 default)"
+	@echo "  make smoke-higgs        Higgs v2 TTS integration smoke (mock MLX)"
 	@echo "  make smoke-stt          TTS then STT round-trip (cf_local)"
-	@echo "  make smoke-stt-local    TTS+STT via MLX"
-	@echo "  make smoke-systemone    TypeSafe /v1/systemone (skips without CF_AI_API_KEY)"
-	@echo "  make smoke-all          chat + TTS + STT + systemone via polypus-smoke (gateway must be up)"
+	@echo "  make smoke-stt-local    TTS+STT integration smoke (mock MLX)"
+	@echo "  make smoke-systemone    TypeSafe /v1/systemone integration smoke"
+	@echo "  make smoke-all          chat + TTS + STT + systemone integration smoke"
+	@echo "  make test-integration   go test -tags=integration ./internal/smoke/integration"
 	@echo "  make docker-build       Build $(IMAGE_REPO):$(IMAGE_TAG)"
-	@echo "  make test               go test ./..."
+	@echo "  make test               go test ./... (unit; excludes integration tag)"
 	@echo "  make vet                go vet ./..."
 	@echo "  make lint               golangci-lint on ./cmd/... ./internal/... ./pkg/..."
 	@echo "  make tidy               go mod tidy"
 	@echo "  make ci                 tidy check + gofmt + vet + race tests + build"
 
-build: build-gateway build-smoke switchyard-build
+build: build-gateway switchyard-build
 
 sync-config-example:
 	@cp $(CONFIG_EXAMPLE_SRC) $(CONFIG_EXAMPLE_EMBED)
@@ -100,21 +103,19 @@ serve-down:
 	./scripts/pc-down.sh
 
 smoke:
-	chmod +x scripts/smoke.sh
-	./scripts/smoke.sh
+	$(INTEGRATION_TEST) -run TestSmokeTTS
 
 smoke-local:
-	chmod +x scripts/smoke.sh
-	POLYPUS_SMOKE_LOCAL=1 ./scripts/smoke.sh
+	$(INTEGRATION_TEST) -run '^TestSmokeTTSLocal$$'
 
-smoke-chat: build-smoke
-	$(SMOKE_BIN) -channels chat -chat-model $(POLYPUS_CHAT_SMOKE_MODEL)
+smoke-chat:
+	$(INTEGRATION_TEST) -run TestSmokeChat
 
-smoke-router: build-smoke
-	$(SMOKE_BIN) -channels chat -chat-model $(POLYPUS_ROUTER_SMOKE_MODEL)
+smoke-router:
+	$(INTEGRATION_TEST) -run '^TestSmokeRouter$$'
 
-smoke-batch: build-smoke
-	$(SMOKE_BIN) -channels batch -batch-model $(POLYPUS_BATCH_SMOKE_MODEL)
+smoke-batch:
+	$(INTEGRATION_TEST) -run TestSmokeBatch
 
 switchyard-build:
 	@test -f providers/switchyard/Cargo.toml || ( \
@@ -130,26 +131,23 @@ switchyard-build:
 		exit 1)
 
 smoke-higgs:
-	chmod +x scripts/smoke.sh
-	POLYPUS_SMOKE_LOCAL=1 \
-	POLYPUS_DEFAULT_MODEL=mlx-community/higgs-audio-v2-3B-mlx-q6 \
-	POLYPUS_DEFAULT_VOICE=vivian \
 	POLYPUS_SMOKE_OUT=/tmp/polypus-higgs-smoke.mp3 \
-	./scripts/smoke.sh
+	$(INTEGRATION_TEST) -run '^TestSmokeHiggs$$'
 
 smoke-stt:
-	chmod +x scripts/smoke-stt.sh
-	./scripts/smoke-stt.sh
+	$(INTEGRATION_TEST) -run TestSmokeSTT
 
 smoke-stt-local:
-	chmod +x scripts/smoke-stt.sh
-	POLYPUS_SMOKE_LOCAL=1 ./scripts/smoke-stt.sh
+	$(INTEGRATION_TEST) -run '^TestSmokeSTTLocal$$'
 
-smoke-systemone: build-smoke
-	$(SMOKE_BIN) -channels systemone
+smoke-systemone:
+	$(INTEGRATION_TEST) -run TestSmokeSystemOne
 
-smoke-all: build-smoke
-	$(SMOKE_BIN) -channels all
+smoke-all:
+	$(INTEGRATION_TEST) -run TestSmokeAll
+
+test-integration:
+	$(INTEGRATION_TEST)
 
 docker-build:
 	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .

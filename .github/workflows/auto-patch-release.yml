@@ -1,6 +1,6 @@
 # Auto patch release (agent-oriented)
 #
-# On every push to main, create vX.Y.(Z+1) and publish binaries via GoReleaser
+# After CI succeeds on main, create vX.Y.(Z+1) and publish binaries via GoReleaser
 # plus GHCR images, unless decide script skips (docs/chore/ci, harness-only, [skip release]).
 #
 # Manual bump (minor/major/patch): workflow_dispatch.
@@ -9,7 +9,9 @@
 name: Auto patch release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -26,9 +28,45 @@ on:
 permissions:
   contents: write
   packages: write
+  issues: write
 
 jobs:
+  gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: providers/switchyard
+
+      - name: Gate switchyard build (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: providers/switchyard
+        run: cargo build --release -p switchyard-server
+
+      - name: Gate Go tests (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: go test -count=1 ./internal/gateway/...
+
   release:
+    needs: gate
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.decide.outputs.skip }}
@@ -38,13 +76,14 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Decide whether to tag
         id: decide
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          EVENT_NAME: ${{ github.event_name == 'workflow_run' && 'push' || github.event_name }}
           MANUAL_BUMP: ${{ github.event.inputs.bump }}
-          HEAD_MSG: ${{ github.event.head_commit.message }}
+          HEAD_MSG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_commit.message || '' }}
         run: bash .cursor/packs/shared/scripts/auto-patch-decide.sh
 
       - name: Skip notice
@@ -57,6 +96,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.decide.outputs.skip != 'true'
+        with:
+          toolchain: 1.96.1
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.decide.outputs.skip != 'true'
+        with:
+          workspaces: providers/switchyard
 
       - name: Create and push tag
         if: steps.decide.outputs.skip != 'true'
@@ -78,11 +127,103 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build and upload switchyard linux/amd64 archive
+        if: steps.decide.outputs.skip != 'true'
+        env:
+          NEW_TAG: ${{ steps.decide.outputs.new_tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VER="${NEW_TAG#v}"
+          cargo build --release -p switchyard-server --manifest-path providers/switchyard/Cargo.toml
+          mkdir -p dist
+          cp providers/switchyard/target/release/switchyard-server "dist/switchyard-server"
+          ARCHIVE="dist/polypus-switchyard_${VER}_linux_amd64.tar.gz"
+          tar -czf "$ARCHIVE" -C dist switchyard-server
+          sha256sum "$ARCHIVE" | tee "dist/polypus-switchyard_${VER}_linux_amd64.sha256"
+          gh release upload "${NEW_TAG}" "$ARCHIVE" "dist/polypus-switchyard_${VER}_linux_amd64.sha256" --clobber
+
   docker:
     needs: release
     if: needs.release.outputs.skip != 'true'
     uses: ./.github/workflows/docker-release.yml
     with:
       version: ${{ needs.release.outputs.new_tag }}
-      git_ref: ${{ needs.release.outputs.new_tag }}
     secrets: inherit
+
+  verify:
+    needs: [release, docker]
+    if: needs.release.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify GHCR manifests for release tag
+        env:
+          NEW_TAG: ${{ needs.release.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          VER="${NEW_TAG#v}"
+          GW="ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus:${VER}"
+          SY="ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus-switchyard:${VER}"
+          docker buildx imagetools inspect "$GW"
+          docker buildx imagetools inspect "$SY"
+
+  ci-failure:
+    needs: [gate, release, docker, verify]
+    if: >-
+      always() &&
+      (
+        needs.gate.result == 'failure' ||
+        (
+          needs.release.outputs.skip != 'true' &&
+          (
+            needs.release.result == 'failure' ||
+            needs.docker.result == 'failure' ||
+            needs.verify.result == 'failure'
+          )
+        )
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open ci-failure issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          COUNT="$(gh issue list --repo "${GITHUB_REPOSITORY}" --label ci-failure --state open --search "${RUN_URL}" --json number --jq 'length')"
+          if [ "${COUNT}" != "0" ]; then
+            echo "Issue already open for this run"
+            exit 0
+          fi
+          EXCERPT="$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --log-failed 2>/dev/null | tail -n 80 || true)"
+          if [ -z "$EXCERPT" ]; then
+            EXCERPT="(no failed log excerpt; inspect the run URL)"
+          fi
+          BODY_FILE="$(mktemp)"
+          {
+            echo "Auto patch release pipeline failed."
+            echo
+            echo "- Workflow: ${GITHUB_WORKFLOW}"
+            echo "- Run: ${RUN_URL}"
+            echo "- Ref: ${GITHUB_REF}"
+            echo
+            echo "## Failed log excerpt"
+            echo
+            echo '```'
+            echo "$EXCERPT"
+            echo '```'
+            echo
+            echo "Fix CI or re-run Docker release, then confirm **verify** is green before bumping consumer pins (images.env, submodule). See manage-go-releases publish-complete gate."
+          } >"$BODY_FILE"
+          gh label create ci-failure --repo "${GITHUB_REPOSITORY}" --color B60205 --description "Release or auto-patch CI failure" 2>/dev/null || true
+          gh issue create --repo "${GITHUB_REPOSITORY}" --label ci-failure --title "CI failed: ${GITHUB_WORKFLOW} (${GITHUB_RUN_ID})" --body-file "$BODY_FILE"
+          rm -f "$BODY_FILE"

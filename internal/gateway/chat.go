@@ -239,6 +239,17 @@ func disableChatThinkingInRequest(body []byte) ([]byte, bool) {
 		return body, false
 	}
 	model := strings.ToLower(strings.TrimSpace(fmt.Sprint(root["model"])))
+	if strings.Contains(model, "deepseek") {
+		if _, ok := root["reasoning_effort"]; ok {
+			return body, false
+		}
+		root["reasoning_effort"] = "none"
+		out, err := json.Marshal(root)
+		if err != nil {
+			return body, false
+		}
+		return out, true
+	}
 	needs := strings.Contains(model, "gemma") ||
 		strings.Contains(model, "glm") ||
 		strings.Contains(model, "zai-org")

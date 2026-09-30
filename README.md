@@ -75,15 +75,15 @@ make mlx-sync
 make build        # gateway bin/polypus + bin/switchyard-server
 make serve        # process-compose TUI: gateway :1320 + backends + Phoenix :6006 + HyperDX :8080
 make serve-down   # stop this Polypus project only
-make smoke        # TTS smoke (cf_local default) → /tmp/polypus-smoke.mp3
-make smoke-stt    # TTS then STT round-trip (cf_local default)
-make smoke-local  # TTS via MLX (needs mlx_local up)
-make smoke-stt-local  # TTS+STT via MLX
-make smoke-chat   # L1 chat transport (cf_local model when cloud enabled)
-make smoke-router # router/investigator (needs routers: + Switchyard for composed types)
-make smoke-batch  # OpenAI files+batches facade (Workers AI async; opt-in, not in smoke-all)
-make smoke-systemone  # TypeSafe /v1/systemone via cf_local/typesafe/jev (gateway credentials)
-make smoke-all    # chat + TTS + STT + systemone via bin/polypus-smoke (gateway must be up)
+make smoke        # TTS L1 integration smoke (builds gateway + mock CF; no make serve)
+make smoke-stt    # TTS+STT integration smoke
+make smoke-local  # TTS integration smoke (mock MLX)
+make smoke-stt-local  # TTS+STT integration smoke (mock MLX)
+make smoke-chat   # L1 chat integration smoke
+make smoke-router # router/investigator integration smoke (mock Switchyard)
+make smoke-batch  # OpenAI files+batches integration smoke (opt-in; not in smoke-all)
+make smoke-systemone  # TypeSafe /v1/systemone integration smoke
+make smoke-all    # chat + TTS + STT + systemone integration smoke
 ```
 
 Live router config: **`~/.config/polypus/config.yaml`** (or `$XDG_CONFIG_HOME/polypus/config.yaml`). Override with `POLYPUS_CONFIG`. Repo `config.yaml` is a local fallback only (gitignored). Cache: `~/.cache/polypus/`; process-compose socket: `~/.local/state/polypus/`.
@@ -96,9 +96,9 @@ Disable gateway tracing with `POLYPUS_OTEL=0`. Override collector with `POLYPUS_
 
 ## Live smoke
 
-Public package: import `github.com/behaviorengineering/polypus/pkg/polypus` for `Serve` / `Smoke`. Quality runners live in `internal/smoke`; `cmd/polypus-smoke` is a thin CLI.
+Public package: import `github.com/behaviorengineering/polypus/pkg/polypus` for `Serve` / `Smoke`. L1 probes live in `internal/smoke`. Default operator path: `make smoke-*` or `go test -tags=integration ./internal/smoke/integration` (builds `cmd/polypus`, starts a temp gateway with mock backends). Optional `make build-smoke` builds `cmd/polypus-smoke` to dial an already-running gateway.
 
-Audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). Use `make smoke-local` / `make smoke-stt-local` (or `POLYPUS_SMOKE_LOCAL=1`) for MLX. Chat defaults to `@cf/zai-org/glm-4.7-flash`; systemone to `typesafe/jev`. Batch smoke (`make smoke-batch`) defaults to `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`); it is opt-in because async Workers AI batches are slow and need `batch_backend` plus a batch-capable model.
+Cloud audio smokes default to **cf_local** (`@cf/deepgram/aura-2-en` / `nova-3`). `make smoke-local` / `make smoke-stt-local` / `make smoke-higgs` use hermetic mock MLX. Chat defaults to `@cf/ibm-granite/granite-4.0-h-micro`; systemone to `typesafe/jev`. `make smoke-router` uses mock Switchyard. Batch smoke (`make smoke-batch`) defaults to `cf_local/@cf/google/gemma-4-26b-a4b-it` (override with `POLYPUS_BATCH_SMOKE_MODEL`); it is opt-in because async Workers AI batches are slow.
 
 Prereqs for cloud channels (`stack/.env` locally; GitHub Actions secrets on **push to main**):
 
@@ -108,20 +108,13 @@ CF_ACCOUNT_ID=...
 ```
 
 ```bash
-make build
-make serve
-make smoke-all      # chat + TTS + STT + systemone (polypus-smoke)
-make smoke          # cf_local TTS only
-make smoke-stt      # cf_local TTS then STT
-make smoke-chat     # glm-4.7-flash chat
-make smoke-local    # MLX TTS (when mlx_local is up)
-make smoke-stt-local
-make smoke-router   # default router/investigator
-make smoke-batch    # files upload + batch create/poll + output JSONL
-make smoke-systemone
+make smoke-all      # hermetic: mock CF, default channels (not batch)
+make smoke-batch    # batch facade (separate from smoke-all)
+make smoke-router   # mock Switchyard + router/investigator chat
+make smoke-local    # mock MLX TTS
 ```
 
-CI on `main` runs the same multi-channel smoke with repository secrets `CF_AI_API_KEY` / `CF_ACCOUNT_ID`, using [`config.ci-smoke.yaml.example`](config.ci-smoke.yaml.example) (chat + TTS + STT + systemone on `cf_local` only; no MLX or Switchyard). PRs stay unit/vet/build only.
+PR CI runs hermetic integration smoke (`go test -tags=integration`). Push to **main** runs live integration smoke with `POLYPUS_SMOKE_LIVE=1` and repository secrets `CF_AI_API_KEY` / `CF_ACCOUNT_ID`.
 
 ## Layout
 
@@ -251,7 +244,7 @@ Set `POLYPUS_PHOENIX=0` and/or `POLYPUS_HYPERDX=0` to skip either container unde
 
 ## Releases
 
-**Auto patch (default):** Every push to `main` that includes releasable product changes creates `vX.Y.(Z+1)` and publishes GoReleaser binaries plus GHCR gateway/switchyard images (`.github/workflows/auto-patch-release.yml`). Skipped for docs/chore/ci-only commits, cursor-packs harness-only diffs (`.cursor/`, `lefthook.yml`), or `[skip release]`.
+**Auto patch (default):** Every push to `main` that includes releasable product changes creates `vX.Y.(Z+1)` and publishes GoReleaser binaries plus GHCR gateway/switchyard images (`.github/workflows/auto-patch-release.yml`). A tag is **published** only when that workflow is green through the **verify** job (GHCR manifests for the version). Skipped for docs/chore/ci-only commits, cursor-packs harness-only diffs (`.cursor/`, `lefthook.yml`), or `[skip release]`. On failure, CI opens a `ci-failure` Issue with the run URL; fix or re-run before bumping consumer pins (`images.env`, submodule). See cursor-packs `manage-go-releases` publish-complete gate.
 
 **Manual bump:** Run the **Auto patch release** workflow with `bump: minor|major|patch`, or push an annotated `v*` tag on `main` (`.github/workflows/release.yml`).
 

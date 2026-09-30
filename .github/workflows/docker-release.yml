@@ -4,27 +4,17 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Image version (v0.2.26 or 0.2.26)"
+        description: "Release tag (v0.2.26)"
         required: true
         type: string
-      git_ref:
-        description: "Git ref to build (tag name or branch)"
-        required: false
-        type: string
-        default: main
   push:
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image version (v0.2.26 or 0.2.26)"
+        description: "Release tag (v0.2.26)"
         required: true
-        type: string
-      git_ref:
-        description: "Git ref to build (default main; use when the release tag predates docker fixes)"
-        required: false
-        default: main
         type: string
 
 permissions:
@@ -38,20 +28,23 @@ jobs:
       - name: Resolve release ref
         id: release
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_call" ]]; then
+          set -euo pipefail
+          RAW=""
+          # Reusable workflows from auto-patch may report workflow_run; inputs.version is set.
+          if [[ -n "${{ inputs.version }}" ]]; then
             RAW="${{ inputs.version }}"
-            VER="${RAW#v}"
-            echo "ref=${{ inputs.git_ref }}" >> "$GITHUB_OUTPUT"
-            echo "version=${VER}" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             RAW="${{ github.event.inputs.tag }}"
-            VER="${RAW#v}"
-            echo "ref=${{ github.event.inputs.git_ref }}" >> "$GITHUB_OUTPUT"
-            echo "version=${VER}" >> "$GITHUB_OUTPUT"
           else
-            echo "ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            RAW="${GITHUB_REF_NAME}"
           fi
+          if [[ ! "$RAW" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "refusing non-semver tag: $RAW (expected vX.Y.Z)" >&2
+            exit 1
+          fi
+          VER="${RAW#v}"
+          echo "ref=${RAW}" >> "$GITHUB_OUTPUT"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
@@ -64,6 +57,32 @@ jobs:
           echo "version=${{ steps.release.outputs.version }}" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus" >> "$GITHUB_OUTPUT"
           echo "switchyard_image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus-switchyard" >> "$GITHUB_OUTPUT"
+
+      - name: Download release binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VER: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p docker-bin release-assets
+          gh release download "$TAG" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "polypus_${VER}_linux_amd64.tar.gz" \
+            --pattern "polypus-switchyard_${VER}_linux_amd64.tar.gz" \
+            --dir release-assets
+          gw=(release-assets/polypus_"${VER}"_linux_amd64.tar.gz)
+          sy=(release-assets/polypus-switchyard_"${VER}"_linux_amd64.tar.gz)
+          if [ "${#gw[@]}" -ne 1 ] || [ "${#sy[@]}" -ne 1 ]; then
+            echo "expected exactly one gateway and one switchyard archive" >&2
+            ls -la release-assets >&2 || true
+            exit 1
+          fi
+          tar -xzf "${gw[0]}" -C docker-bin polypus
+          tar -xzf "${sy[0]}" -C docker-bin switchyard-server
+          chmod +x docker-bin/polypus docker-bin/switchyard-server
+          test -x docker-bin/polypus
+          test -x docker-bin/switchyard-server
 
       - uses: docker/login-action@v3
         with:
@@ -92,3 +111,9 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.switchyard_image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.switchyard_image }}:latest
+
+      - name: Verify GHCR manifests
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}"
+          docker buildx imagetools inspect "${{ steps.meta.outputs.switchyard_image }}:${{ steps.meta.outputs.version }}"

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +139,32 @@ func TestSystemOneFailInsufficientBalanceWhenRequireCF(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected fail when RequireCF")
+	}
+}
+
+func TestTTSWritesAudioOutPath(t *testing.T) {
+	dir := t.TempDir()
+	out := dir + "/out.mp3"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/audio/speech" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(bytesRepeat(128, 'a'))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := smoke.Run(context.Background(), smoke.Options{
+		BaseURL:      srv.URL,
+		Channels:     []string{smoke.ChannelTTS},
+		AudioOutPath: out,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("audio out: %v", err)
 	}
 }
 
