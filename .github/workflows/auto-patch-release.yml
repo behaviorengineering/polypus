@@ -159,6 +159,12 @@ jobs:
       contents: read
       packages: read
     steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Verify GHCR manifests for release tag
         env:
           NEW_TAG: ${{ needs.release.outputs.new_tag }}
