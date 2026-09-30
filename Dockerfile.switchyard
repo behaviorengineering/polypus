@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 # Runtime image: COPY pre-built linux/amd64 switchyard-server from GitHub Release assets.
 
-FROM debian:bookworm-slim
+# switchyard-server is built on ubuntu-latest (glibc 2.38+); bookworm is too old.
+FROM ubuntu:24.04
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
