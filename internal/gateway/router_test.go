@@ -588,6 +588,8 @@ backends:
 		{"invalid", derrors.New(derrors.CodeInvalid, "router.Synthesize", "input required"), http.StatusBadRequest},
 		{"timeout", derrors.New(derrors.CodeTimeout, "cloudflare.Synthesize", "deadline"), http.StatusGatewayTimeout},
 		{"unavailable", derrors.New(derrors.CodeUnavailable, "router.bifrost", "provider call"), http.StatusBadGateway},
+		{"rate_limited", derrors.New(derrors.CodeRateLimited, "router.bifrost", "provider rate limited").
+			With("cf_code", "3036"), http.StatusTooManyRequests},
 		{"plain", fmt.Errorf("not a domain error"), http.StatusBadGateway},
 	}
 	for _, tc := range cases {

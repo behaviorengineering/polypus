@@ -184,7 +184,7 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 			writeHandlerError(w, err)
 			return
 		}
-		writeHandlerError(w, submitErr)
+		writeUpstreamDialError(w, submitErr, "", backendID, nil)
 		return
 	}
 	meta.CFRequestID = cfRequestID

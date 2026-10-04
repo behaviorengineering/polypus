@@ -203,7 +203,11 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "read response")
 	}
 	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, len(raw))
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	status := resp.StatusCode
+	if rewritten, ok := openaiRateLimitBody(resp.StatusCode, resp.Header, raw); ok {
+		raw = rewritten
+		status = http.StatusTooManyRequests
+	} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if fixed, changed := mergeReasoningIntoContent(raw); changed {
 			raw = fixed
 		}
@@ -214,15 +218,36 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 
 	copyChatResponseHeaders(w, resp.Header)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(raw)))
-	w.WriteHeader(resp.StatusCode)
+	w.WriteHeader(status)
 	_, err = w.Write(raw)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "write response")
 	}
-	return upstream.StatusFailure(resp.StatusCode)
+	return upstream.StatusFailure(status)
 }
 
 func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string, streaming bool) error {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, chatMaxBody))
+		if err != nil {
+			observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, -1)
+			return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "read stream")
+		}
+		status := resp.StatusCode
+		if rewritten, ok := openaiRateLimitBody(resp.StatusCode, resp.Header, raw); ok {
+			raw = rewritten
+			status = http.StatusTooManyRequests
+		}
+		copyChatResponseHeaders(w, resp.Header)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(raw)))
+		w.WriteHeader(status)
+		_, err = w.Write(raw)
+		observability.RecordProxyIO(r.Context(), target, streaming, status, len(raw))
+		if err != nil {
+			return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "write stream")
+		}
+		return upstream.StatusFailure(status)
+	}
 	copyChatResponseHeaders(w, resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	n, err := io.Copy(w, io.LimitReader(resp.Body, chatMaxBody))

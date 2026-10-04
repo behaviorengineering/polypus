@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/sony/gobreaker"
 )
 
@@ -37,6 +38,24 @@ func TestBoardTripsAfterConsecutiveFailures(t *testing.T) {
 	}
 	if !errors.Is(err, gobreaker.ErrOpenState) {
 		t.Fatalf("want ErrOpenState, got %v", err)
+	}
+}
+
+func TestBoardRateLimitedDoesNotTrip(t *testing.T) {
+	b := NewBoard()
+	fail := derrors.New(derrors.CodeRateLimited, "router.bifrost", "provider rate limited")
+	for i := 0; i < 5; i++ {
+		err := b.Execute("cf_local", func() error { return fail })
+		if !errors.Is(err, derrors.ErrRateLimited) {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+	}
+	called := false
+	if err := b.Execute("cf_local", func() error {
+		called = true
+		return nil
+	}); err != nil || !called {
+		t.Fatalf("breaker must stay closed: err=%v called=%v", err, called)
 	}
 }
 

@@ -1,13 +1,16 @@
 package gateway
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 )
 
 func TestLeafChatCircuitOpensAfterFailures(t *testing.T) {
@@ -68,8 +71,21 @@ backends:
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("open status: %d body %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "unavailable") {
-		t.Fatalf("body: %q", rec.Body.String())
+	if got := rec.Header().Get("Retry-After"); got != strconv.Itoa(int(upstream.OpenTimeout.Seconds())) {
+		t.Fatalf("Retry-After=%q", got)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("Content-Type=%q", ct)
+	}
+	var errBody openaiErrorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &errBody); err != nil {
+		t.Fatalf("json: %v body=%q", err, rec.Body.String())
+	}
+	if errBody.Error.Code != upstream.LayerPolypusBreaker {
+		t.Fatalf("error.code=%q", errBody.Error.Code)
+	}
+	if errBody.Polypus == nil || errBody.Polypus.Failure.Layer != upstream.LayerPolypusBreaker {
+		t.Fatalf("polypus=%+v", errBody.Polypus)
 	}
 	if n != dialed {
 		t.Fatalf("circuit open still dialed: before=%d after=%d", dialed, n)

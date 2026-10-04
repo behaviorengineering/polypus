@@ -83,10 +83,29 @@ func TestHTTPStatusTimeout(t *testing.T) {
 	if HTTPStatus(ErrNotReady) != http.StatusServiceUnavailable {
 		t.Fatalf("not_ready status=%d", HTTPStatus(ErrNotReady))
 	}
+	if HTTPStatus(ErrRateLimited) != http.StatusTooManyRequests {
+		t.Fatalf("rate_limited status=%d", HTTPStatus(ErrRateLimited))
+	}
 	if HTTPStatus(ErrUnimplemented) != http.StatusNotImplemented {
 		t.Fatalf("unimplemented status=%d", HTTPStatus(ErrUnimplemented))
 	}
 	if HTTPStatus(fmt.Errorf("plain")) != http.StatusInternalServerError {
 		t.Fatalf("plain=%d", HTTPStatus(fmt.Errorf("x")))
+	}
+}
+
+func TestFieldWalksWrapChain(t *testing.T) {
+	inner := New(CodeRateLimited, "cloudflare.workers", "quota").
+		With("cf_code", "3036").
+		With("retry_after", "9")
+	outer := Wrap(inner, CodeRateLimited, "router.bifrost", "provider rate limited")
+	if Field(outer, "cf_code") != "3036" {
+		t.Fatalf("cf_code=%q", Field(outer, "cf_code"))
+	}
+	if Field(outer, "retry_after") != "9" {
+		t.Fatalf("retry_after=%q", Field(outer, "retry_after"))
+	}
+	if Field(outer, "missing") != "" {
+		t.Fatal("missing field")
 	}
 }
