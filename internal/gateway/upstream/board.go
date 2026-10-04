@@ -8,12 +8,20 @@ import (
 	"sync"
 	"time"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/sony/gobreaker"
 )
 
 // Well-known breaker names.
 const (
 	NameSwitchyard = "switchyard"
+)
+
+// Gobreaker policy shared with HTTP Retry-After on breaker rejects.
+const (
+	OpenTimeout             = 30 * time.Second
+	HalfOpenMaxRequests     = uint32(1)
+	ConsecutiveFailuresTrip = uint32(3)
 )
 
 // ErrResponseWritten means the upstream HTTP status was already copied to the
@@ -72,11 +80,18 @@ func (b *Board) breaker(name string) *gobreaker.CircuitBreaker {
 	}
 	c := gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:        name,
-		MaxRequests: 1,
+		MaxRequests: HalfOpenMaxRequests,
 		Interval:    0,
-		Timeout:     30 * time.Second,
+		Timeout:     OpenTimeout,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			return counts.ConsecutiveFailures >= 3
+			return counts.ConsecutiveFailures >= ConsecutiveFailuresTrip
+		},
+		IsSuccessful: func(err error) bool {
+			if err == nil {
+				return true
+			}
+			// Quota and capacity 429s are caller-visible, not a dead upstream.
+			return derrors.CodeOf(err) == derrors.CodeRateLimited
 		},
 	})
 	b.cb[name] = c

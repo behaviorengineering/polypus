@@ -410,20 +410,55 @@ func bifrostErr(berr *schemas.BifrostError) error {
 	if berr == nil {
 		return derrors.New(derrors.CodeInternal, "router.bifrost", "bifrost error")
 	}
-	if berr.Error != nil && berr.Error.Error != nil {
-		out := derrors.Wrap(berr.Error.Error, derrors.CodeUnavailable, "router.bifrost", "provider call")
-		if berr.StatusCode != nil {
-			out = out.With("status", fmt.Sprintf("%d", *berr.StatusCode))
-		}
-		return out
+	status := 0
+	if berr.StatusCode != nil {
+		status = *berr.StatusCode
 	}
 	msg := "request failed"
 	if berr.Error != nil && strings.TrimSpace(berr.Error.Message) != "" {
 		msg = strings.TrimSpace(berr.Error.Message)
 	}
+	hints := []string{msg}
+	if berr.Error != nil && berr.Error.Code != nil {
+		hints = append(hints, strings.TrimSpace(*berr.Error.Code))
+	}
+	if rl := cloudflare.ClassifyRateLimit("cloudflare.workers", status, nil, bifrostRawBody(berr), hints...); rl != nil {
+		return derrors.Wrap(rl, derrors.CodeRateLimited, "router.bifrost", "provider rate limited")
+	}
+	if berr.Error != nil && berr.Error.Error != nil {
+		out := derrors.Wrap(berr.Error.Error, derrors.CodeUnavailable, "router.bifrost", "provider call")
+		if status > 0 {
+			out = out.With("status", fmt.Sprintf("%d", status))
+		}
+		return out
+	}
 	out := derrors.New(derrors.CodeUnavailable, "router.bifrost", msg)
-	if berr.StatusCode != nil {
-		out = out.With("status", fmt.Sprintf("%d", *berr.StatusCode))
+	if status > 0 {
+		out = out.With("status", fmt.Sprintf("%d", status))
 	}
 	return out
+}
+
+func bifrostRawBody(berr *schemas.BifrostError) []byte {
+	if berr == nil {
+		return nil
+	}
+	raw := berr.ExtraFields.RawResponse
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []byte:
+		return v
+	case string:
+		return []byte(v)
+	case json.RawMessage:
+		return v
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		return b
+	}
 }

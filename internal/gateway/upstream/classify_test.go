@@ -1,7 +1,6 @@
 package upstream
 
 import (
-	"errors"
 	"fmt"
 	"testing"
 
@@ -9,33 +8,54 @@ import (
 	"github.com/sony/gobreaker"
 )
 
-func TestClassifyDialFailureBreaker(t *testing.T) {
-	err := fmt.Errorf("upstream cf_local unavailable: %w", gobreaker.ErrOpenState)
-	cls := ClassifyDialFailure(err, "cf_local")
-	if cls.Layer != LayerPolypusBreaker {
-		t.Fatalf("layer=%s", cls.Layer)
-	}
-	if cls.BreakerState != "open" {
-		t.Fatalf("state=%s", cls.BreakerState)
+func TestResolveUpstreamNameFromBreakerWrap(t *testing.T) {
+	err := fmt.Errorf("upstream edge_cf unavailable: %w", gobreaker.ErrOpenState)
+	got := ResolveUpstreamName(err, "")
+	if got != "edge_cf" {
+		t.Fatalf("got %q", got)
 	}
 }
 
-func TestClassifyDialFailureCloudflareStatus(t *testing.T) {
-	err := derrors.New(derrors.CodeUnavailable, "router.bifrost", "provider call").
-		With("status", "429")
-	cls := ClassifyDialFailure(err, "cf_local")
-	if cls.Layer != LayerCloudflare {
-		t.Fatalf("layer=%s", cls.Layer)
+func TestResolveUpstreamNameHintWins(t *testing.T) {
+	err := fmt.Errorf("upstream other unavailable: %w", gobreaker.ErrOpenState)
+	got := ResolveUpstreamName(err, "hint_backend")
+	if got != "hint_backend" {
+		t.Fatalf("got %q", got)
 	}
-	if cls.HTTPStatus != 429 {
+}
+
+func TestClassifyDialFailureCloudflareBackendID(t *testing.T) {
+	err := derrors.New(derrors.CodeUnavailable, "router.bifrost", "provider call").
+		With("status", "502").
+		With("cf_code", "3036")
+	cls := ClassifyDialFailure(err, "my_cloudflare_backend")
+	if cls.Layer != LayerCloudflare {
+		t.Fatalf("layer=%q", cls.Layer)
+	}
+	if cls.Upstream != "my_cloudflare_backend" {
+		t.Fatalf("upstream=%q", cls.Upstream)
+	}
+}
+
+func TestClassifyDialFailureBifrostLeafStatus(t *testing.T) {
+	err := derrors.New(derrors.CodeUnavailable, "router.bifrost", "provider call").
+		With("status", "502")
+	cls := ClassifyDialFailure(err, "lm_studio")
+	if cls.Layer != LayerLeaf {
+		t.Fatalf("layer=%q want leaf", cls.Layer)
+	}
+	if cls.HTTPStatus != 502 {
 		t.Fatalf("status=%d", cls.HTTPStatus)
 	}
 }
 
-func TestClassifyDialFailureSwitchyard(t *testing.T) {
-	err := errors.New("polypus: switchyard unavailable")
-	cls := ClassifyDialFailure(err, NameSwitchyard)
-	if cls.Layer != LayerSwitchyard {
-		t.Fatalf("layer=%s", cls.Layer)
+func TestClassifyDialFailureBreakerUpstreamParsed(t *testing.T) {
+	err := fmt.Errorf("upstream cf_local unavailable: %w", gobreaker.ErrOpenState)
+	cls := ClassifyDialFailure(err, "")
+	if cls.Upstream != "cf_local" {
+		t.Fatalf("upstream=%q", cls.Upstream)
+	}
+	if cls.Layer != LayerPolypusBreaker {
+		t.Fatalf("layer=%q", cls.Layer)
 	}
 }

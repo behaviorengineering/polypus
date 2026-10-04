@@ -154,6 +154,9 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 		return "", derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.Transcribe", "read body")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if rl := ClassifyRateLimit("cloudflare.Transcribe", resp.StatusCode, resp.Header, body); rl != nil {
+			return "", rl
+		}
 		return "", derrors.New(derrors.CodeUnavailable, "cloudflare.Transcribe", "workers ai error").
 			With("status", strconv.Itoa(resp.StatusCode)).
 			With("body", truncate(string(body), 256))
@@ -168,6 +171,9 @@ func readAudioBody(resp *http.Response) ([]byte, string, error) {
 		return nil, contentType, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "read body")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if rl := ClassifyRateLimit("cloudflare.speech", resp.StatusCode, resp.Header, body); rl != nil {
+			return nil, contentType, rl
+		}
 		return nil, contentType, derrors.New(derrors.CodeUnavailable, "cloudflare.speech", "workers ai error").
 			With("status", strconv.Itoa(resp.StatusCode)).
 			With("body", truncate(string(body), 256))
@@ -184,6 +190,9 @@ func readAudioBody(resp *http.Response) ([]byte, string, error) {
 			return nil, contentType, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "parse json")
 		}
 		if !envelope.Success {
+			if rl := ClassifyRateLimit("cloudflare.speech", resp.StatusCode, resp.Header, body); rl != nil {
+				return nil, contentType, rl
+			}
 			msg := "cloudflare workers ai error"
 			if len(envelope.Errors) > 0 && envelope.Errors[0].Message != "" {
 				msg = envelope.Errors[0].Message

@@ -33,6 +33,8 @@ const (
 	CodeFailedPrecondition Code = "failed_precondition"
 	// CodeUnavailable is a downstream hop that failed or is unreachable.
 	CodeUnavailable Code = "unavailable"
+	// CodeRateLimited is an upstream throttle (HTTP 429), including quota and capacity.
+	CodeRateLimited Code = "rate_limited"
 	// CodeNotReady is local config or dependency not ready to serve (HTTP 503).
 	CodeNotReady Code = "not_ready"
 	// CodeInternal is an unexpected local failure.
@@ -55,6 +57,7 @@ var (
 	ErrCanceled           = &Error{code: CodeCanceled, message: "canceled"}
 	ErrFailedPrecondition = &Error{code: CodeFailedPrecondition, message: "failed precondition"}
 	ErrUnavailable        = &Error{code: CodeUnavailable, message: "unavailable"}
+	ErrRateLimited        = &Error{code: CodeRateLimited, message: "rate limited"}
 	ErrNotReady           = &Error{code: CodeNotReady, message: "not ready"}
 	ErrInternal           = &Error{code: CodeInternal, message: "internal"}
 	ErrConflict           = &Error{code: CodeConflict, message: "conflict"}
@@ -244,6 +247,8 @@ func HTTPStatus(err error) int {
 		return StatusClientClosedRequest
 	case CodeNotReady:
 		return http.StatusServiceUnavailable
+	case CodeRateLimited:
+		return http.StatusTooManyRequests
 	case CodeUnimplemented:
 		return http.StatusNotImplemented
 	case CodeInternal:
@@ -251,4 +256,27 @@ func HTTPStatus(err error) int {
 	default:
 		return http.StatusBadGateway
 	}
+}
+
+// Field walks the unwrap chain and returns the first metadata value for key.
+func Field(err error, key string) string {
+	key = strings.TrimSpace(key)
+	if err == nil || key == "" {
+		return ""
+	}
+	for err != nil {
+		if de, ok := err.(*Error); ok && de != nil {
+			if v := strings.TrimSpace(de.fields[key]); v != "" {
+				return v
+			}
+			err = de.cause
+			continue
+		}
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return ""
+		}
+		err = u.Unwrap()
+	}
+	return ""
 }

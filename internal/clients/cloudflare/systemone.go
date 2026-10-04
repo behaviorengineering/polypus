@@ -61,6 +61,9 @@ func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]by
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.SystemOne", "read body")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if rl := ClassifyRateLimit("cloudflare.SystemOne", resp.StatusCode, resp.Header, raw); rl != nil {
+			return nil, rl
+		}
 		msg := workersAIErrorMessage(raw)
 		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.SystemOne", msg).
 			With("status", strconv.Itoa(resp.StatusCode)).
@@ -128,6 +131,9 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 		}
 		if envelope.Success != nil {
 			if !*envelope.Success {
+				if rl := ClassifyRateLimit("cloudflare.unwrapRunResult", 0, nil, cur); rl != nil {
+					return nil, rl
+				}
 				msg := "cloudflare workers ai error"
 				if len(envelope.Errors) > 0 && envelope.Errors[0].Message != "" {
 					msg = envelope.Errors[0].Message

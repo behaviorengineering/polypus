@@ -152,6 +152,9 @@ func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte)
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.postBatchRun", "read body")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if rl := ClassifyRateLimit("cloudflare.postBatchRun", resp.StatusCode, resp.Header, raw); rl != nil {
+			return nil, rl
+		}
 		msg := workersAIErrorMessage(raw)
 		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.postBatchRun", msg).
 			With("status", strconv.Itoa(resp.StatusCode)).

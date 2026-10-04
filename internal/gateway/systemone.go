@@ -81,7 +81,7 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		return h.proxySystemOnePassthrough(w, r, backend, backendURL, downstream, body)
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "", nil)
+		writeUpstreamDialError(w, err, "", backendID, nil)
 	}
 }
 

@@ -264,7 +264,7 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, vision, chatBodyWantsThinking(body))
 	if err = h.proxyOrBifrostChat(w, r, backendID, downstream, backendURL, rewritten, hop, backendAuth, true); err != nil {
-		writeUpstreamDialError(w, err, "", nil)
+		writeUpstreamDialError(w, err, "", string(backendID), nil)
 		return
 	}
 }
@@ -336,7 +336,7 @@ func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.R
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, chatBodyWantsThinking(body))
 	if err = h.proxyOrBifrostChat(w, r, backendID, downstream, backendURL, rewritten, hop, backendAuth, true); err != nil {
-		writeUpstreamDialError(w, err, "", nil)
+		writeUpstreamDialError(w, err, "", string(backendID), nil)
 	}
 }
 
@@ -354,7 +354,7 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 		return proxyChatCompletionsOpts(w, r, switchyardURL, body, h.client, hop, "", false, true)
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "polypus: switchyard unavailable: ", isSwitchyardUnreachable)
+		writeUpstreamDialError(w, err, "polypus: switchyard unavailable: ", upstream.NameSwitchyard, isSwitchyardUnreachable)
 	}
 }
 
@@ -393,27 +393,38 @@ func writeHandlerError(w http.ResponseWriter, err error) {
 	if err == nil || upstream.ResponseWritten(err) {
 		return
 	}
+	if writeRateLimitError(w, err) {
+		return
+	}
+	if upstream.Unavailable(err) {
+		writeUnavailableError(w, err, err.Error(), upstream.ResolveUpstreamName(err, ""))
+		return
+	}
 	http.Error(w, err.Error(), derrors.HTTPStatus(err))
 }
 
 // writeUpstreamDialError writes a dial failure unless the upstream body was already sent.
 // prefix is prepended for Switchyard-style messages; unreachable maps to 503 when set.
 // Typed domain errors use HTTPStatus; other errors stay 502 unless the breaker or unreachable hook says 503.
-func writeUpstreamDialError(w http.ResponseWriter, err error, prefix string, unreachable func(error) bool) {
+func writeUpstreamDialError(w http.ResponseWriter, err error, prefix, upstreamName string, unreachable func(error) bool) {
 	if err == nil || upstream.ResponseWritten(err) {
+		return
+	}
+	if writeRateLimitError(w, err) {
 		return
 	}
 	msg := err.Error()
 	if prefix != "" {
 		msg = prefix + msg
 	}
+	if upstream.Unavailable(err) || (unreachable != nil && unreachable(err)) {
+		writeUnavailableError(w, err, msg, upstreamName)
+		return
+	}
 	code := http.StatusBadGateway
 	var de *derrors.Error
 	if errors.As(err, &de) {
 		code = derrors.HTTPStatus(err)
-	}
-	if upstream.Unavailable(err) || (unreachable != nil && unreachable(err)) {
-		code = http.StatusServiceUnavailable
 	}
 	http.Error(w, msg, code)
 }
@@ -489,7 +500,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return proxyEmbeddings(w, r, backendURL, rewritten, h.client, hop, backendAuth)
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "", nil)
+		writeUpstreamDialError(w, err, "", string(backendID), nil)
 		return
 	}
 }
@@ -546,7 +557,7 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 		return synthErr
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "", nil)
+		writeUpstreamDialError(w, err, "", string(backendID), nil)
 		return
 	}
 	w.Header().Set("Content-Type", speechContentType(req.ResponseFormat))
@@ -618,7 +629,7 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 		return trErr
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "", nil)
+		writeUpstreamDialError(w, err, "", string(backendID), nil)
 		return
 	}
 	w.Header().Set("Content-Type", ct)

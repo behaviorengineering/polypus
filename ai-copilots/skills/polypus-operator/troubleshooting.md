@@ -32,7 +32,9 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 | TTS works, STT fails | STT model not allowed or wrong backend | Check `stt_backend.default` and allow list |
 | `router/…` returns 503 | Switchyard down or not ready | `/health/backends` → `switchyard`; `make serve-down && make serve`; `make smoke-router` |
 | Leaf or Switchyard dial returns 503 after recent 5xx | Upstream circuit breaker open (`internal/gateway/upstream.Board`) | Wait for the open window (~30s) or fix the upstream; clients MAY budget-retry 503, MUST NOT expect Polypus to sleep-retry chat (see SKILL.md resilience ownership) |
-| Smoke chat/TTS/STT fail in ~1–3 ms with `circuit breaker is open` on `cf_local` | Breaker still open in a long-lived gateway after earlier CF/auth failures | Fix credentials (`polypus secret set` / env), then `make serve-down && make serve` (breaker state is in-process only). `/health/backends` no longer trips the production breaker. Compare `/health/upstreams` (`state=open`) vs Cloudflare 429 in dump (`polypus.failure.layer=cloudflare`). |
+| Smoke chat/TTS/STT fail in ~1–3 ms with `circuit breaker is open` on `cf_local` | Breaker still open in a long-lived gateway after earlier CF/auth failures | Fix credentials (`polypus secret set` / env), then `make serve-down && make serve` (breaker state is in-process only). `/health/backends` no longer trips the production breaker. Compare `/health/upstreams` (`state=open`) vs Cloudflare throttle in dump (`polypus.failure.layer=cloudflare`). |
+| `POST /v1/chat/completions` returns **429** JSON (`error.type=rate_limit_error`) | Cloudflare Workers AI throttled the account or model (quota 3036, capacity 3040, edge 1015) | Cloudflare throttled you; honor upstream `Retry-After` / `Cf-Ray`. Do not treat as Polypus breaker. |
+| Same path returns **503** JSON (`error.code=polypus_breaker`, `polypus.failure.layer=polypus_breaker`) | Polypus `gobreaker` refused the dial (open or half-open limit) | Polypus will not dial until the open window ends; honor `Retry-After: 30`. `/health/upstreams` is a live snapshot only, not the response body. |
 | `router/…` returns 502 | Switchyard up but chat hop failed | Check Switchyard logs; upstream leaf error (distinct from 503 unavailable) |
 | `router/…` unknown / 400 | Router not in `routers:` or typo | Check `config.yaml` `routers:`; probe `/v1/models` for `router/<name>` |
 | Passthrough router fails, composed OK | Leaf allow-list or backend | Validate `route.target` leaf in `models.allow` |
@@ -66,3 +68,5 @@ Agent decision order when a job fails:
 - Downstream apps must not store remote cloud inference URLs.
 - No semantic cache of sensitive narration on the gateway.
 - Callers use `POLYPUS_BASE_URL` only.
+- **HTTP 429** with OpenAI `rate_limit_error`: Cloudflare throttled the Workers AI hop; retry with backoff using response headers.
+- **HTTP 503** with `error.code=polypus_breaker` (and matching `polypus.failure.layer` in JSON): Polypus refused to dial because the upstream circuit breaker is open; honor `Retry-After` (open-window seconds). Clients MAY retry after that delay; Polypus does not sleep-retry on behalf of callers.
