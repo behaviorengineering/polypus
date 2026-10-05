@@ -153,7 +153,9 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
   polypus secret set CF_ACCOUNT_ID
   ```
   `secret set` refuses names that are not listed under `secrets:` in the live config. Omit `secrets:` for MLX-only so the keyring is never queried. Docker Compose / Windows GitLab: put `CF_*` in the container env (SOPS); do not use the host keyring inside Linux containers.
-- After allow-list or secrets change: restart gateway in process-compose TUI (or `make serve-down && make serve`). With `cf_local` configured, serve fail-closes on startup if Cloudflare Model Search ping fails (fix `secret set` / env; MLX-only configs skip this probe).
+- After YAML `backends`, `routers:`, or secrets change: restart gateway in process-compose TUI (or `make serve-down && make serve`). Runtime extras via `POST /v1/admin/models/allow` or `polypus admin-key` do **not** require restart.
+- Admin keys: `polypus admin-key generate --name ops --yes` (non-interactive) or wizard on a TTY; use Bearer token on `POST /v1/admin/models/allow`. List metadata with `polypus admin-key list`.
+- With `cf_local` configured, serve fail-closes on startup if Cloudflare Model Search ping fails (fix `secret set` / env; MLX-only configs skip this probe).
 - **MUST NOT** add non-loopback backend URLs when `reject_non_loopback_backends` applies.
 
 ## Observability

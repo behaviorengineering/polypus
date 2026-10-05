@@ -28,6 +28,8 @@ func Run(args []string) int {
 		return runInit(args[1:])
 	case "secret":
 		return runSecret(args[1:])
+	case "admin-key":
+		return runAdminKey(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
@@ -44,6 +46,7 @@ func printUsage() {
   polypus processes [--print mlx]    # process-compose toggles from config processes.*
   polypus init [--force]             # write ~/.config/polypus/config.yaml from example
   polypus secret set <ENV> [--stdin] # store CF_* in OS keyring (prompt or --stdin; flag before/after ENV)
+  polypus admin-key generate|rotate|delete|list  # admin API keys for POST /v1/admin/models/allow
   polypus version                    # print release version
 
 flags:

@@ -17,10 +17,14 @@ COMMANDS BY RISK & LIFECYCLE
   Inspect & Validate
     version              Build identity
     processes            Print process-compose toggles from config
+    admin-key list       List admin API key metadata (no secrets)
 
   Execute & Mutate
     serve                Start gateway (see --host, --port, --backend)
     switchyard-render    Render routes.toml from config
+    admin-key generate   Create admin API key (plaintext once)
+    admin-key rotate     Rotate admin API key secret
+    admin-key delete     Remove admin API key
 
 AUTOMATION RULES FOR AGENTS
   - Confirm /health before running downstream model or speech diagnostics.

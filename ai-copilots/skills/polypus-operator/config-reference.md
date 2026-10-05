@@ -153,8 +153,20 @@ Build Switchyard: `make switchyard-build` (Rust toolchain per `providers/switchy
 | `GET /v1/models` | **Enabled** only (`models.allow` when set) |
 | `GET /v1/models?view=inventory` | Full synced upstream catalog |
 | POST inference | 400 `model_not_allowed` if not in allow list |
+| `POST /v1/admin/models/allow` | Add one model to `models.allow` when it exists in inventory (Bearer admin API key) |
 
 Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.json`.
+
+### Runtime allow overlay and admin keys
+
+| Env | Default path | Role |
+|-----|----------------|------|
+| `POLYPUS_MODELS_ALLOW_OVERLAY` | `~/.local/state/polypus/models-allow-overlay.yaml` | Extra `models.allow` entries (additive; not in git config) |
+| `POLYPUS_ADMIN_KEYS` | `~/.local/state/polypus/admin-api-keys.json` | Hashed admin API keys (`polypus admin-key` CLI) |
+
+`POST /v1/admin/models/allow` body: `{"backend":"cf_local","model":"@cf/..."}`. Header: `Authorization: Bearer ppk.<id>.<secret>`. Plaintext keys are printed once by `polypus admin-key generate` or `rotate`; never stored on disk.
+
+Overlay POST and `admin-key` file edits take effect without restarting `polypus serve`. YAML `backends`, `routers:`, and secrets still require a gateway restart.
 
 ## Data directories (XDG)
 
@@ -163,6 +175,8 @@ Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.jso
 | `~/.config/polypus/config.yaml` | Router config |
 | `~/.cache/polypus/models-inventory.json` | Model inventory cache |
 | `~/.cache/polypus/switchyard/routes.toml` | Generated Switchyard routes (from `routers:`) |
+| `~/.local/state/polypus/models-allow-overlay.yaml` | Runtime allow overlay |
+| `~/.local/state/polypus/admin-api-keys.json` | Admin API key hashes |
 | `~/.local/state/polypus/process-compose.sock` | process-compose control socket |
 
 ## Capabilities routing
