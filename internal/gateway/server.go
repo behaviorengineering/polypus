@@ -162,6 +162,10 @@ func newFallbackProxy(backendURL string) (http.Handler, error) {
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
+	case r.URL.Path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		g.serveLanding(w, r)
+	case r.URL.Path == bannerAssetPath && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		g.serveBannerWebP(w, r)
 	case r.URL.Path == "/health" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		healthHandler{g.shared}.serveHealth(w, r)
 	case r.URL.Path == "/health/backends" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
