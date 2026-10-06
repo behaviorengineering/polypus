@@ -153,8 +153,23 @@ Build Switchyard: `make switchyard-build` (Rust toolchain per `providers/switchy
 | `GET /v1/models` | **Enabled** only (`models.allow` when set) |
 | `GET /v1/models?view=inventory` | Full synced upstream catalog |
 | POST inference | 400 `model_not_allowed` if not in allow list |
+| `POST /v1/admin/models/allow` | Add one model to `models.allow` when it exists in inventory (no separate allow key; optional gateway access key when store is non-empty) |
+| `GET /` | Landing hub with allow form (backend + model) posting to `/v1/admin/models/allow` |
 
 Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.json`.
+
+### Runtime allow overlay and gateway access keys
+
+| Env | Default path | Role |
+|-----|----------------|------|
+| `POLYPUS_MODELS_ALLOW_OVERLAY` | `~/.local/state/polypus/models-allow-overlay.yaml` | Extra `models.allow` entries (additive; not in git config) |
+| `POLYPUS_ADMIN_KEYS` | `~/.local/state/polypus/admin-api-keys.json` | Hashed gateway access keys (`polypus admin-key` CLI) |
+
+`POST /v1/admin/models/allow` body: `{"backend":"cf_local","model":"@cf/..."}`. The model must appear in backend inventory; the backend must have `models.allow` configured. No dedicated allow Bearer.
+
+When `admin-api-keys.json` contains at least one key, all routes except `GET|HEAD /health`, `/health/backends`, and `/health/upstreams` require a gateway access key: `Authorization: Bearer ppk.<id>.<secret>`, `X-Api-Key`, or HTTP Basic (password = the full `ppk...` token). Plaintext keys print once on `polypus admin-key generate` or `rotate`.
+
+Overlay POST and key-file changes take effect without restarting `polypus serve`. YAML `backends`, `routers:`, and secrets still require a gateway restart.
 
 ## Data directories (XDG)
 
@@ -163,6 +178,8 @@ Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.jso
 | `~/.config/polypus/config.yaml` | Router config |
 | `~/.cache/polypus/models-inventory.json` | Model inventory cache |
 | `~/.cache/polypus/switchyard/routes.toml` | Generated Switchyard routes (from `routers:`) |
+| `~/.local/state/polypus/models-allow-overlay.yaml` | Runtime allow overlay |
+| `~/.local/state/polypus/admin-api-keys.json` | Gateway access key hashes |
 | `~/.local/state/polypus/process-compose.sock` | process-compose control socket |
 
 ## Capabilities routing

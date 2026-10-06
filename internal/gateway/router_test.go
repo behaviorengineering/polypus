@@ -130,8 +130,11 @@ func newTestGateway(t *testing.T, opts config.ServeOptions, r Router, extra ...H
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gw, ok := handler.(*Gateway); ok {
-		t.Cleanup(gw.Close)
+	switch h := handler.(type) {
+	case *accessProtector:
+		t.Cleanup(h.Close)
+	case *Gateway:
+		t.Cleanup(h.Close)
 	}
 	return handler
 }
@@ -189,7 +192,10 @@ backends:
 	if !strings.Contains(rec.Body.String(), "via-fake") {
 		t.Fatalf("body: %q", rec.Body.String())
 	}
-	gw := handler.(*Gateway)
+	gw, ok := gatewayFromHandler(handler)
+	if !ok {
+		t.Fatal("expected gateway handler")
+	}
 	if gw.ownedRouter {
 		t.Fatal("injected router must not be owned")
 	}

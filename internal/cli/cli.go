@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 // version is set by GoReleaser via -ldflags -X .../internal/cli.version=...
@@ -10,53 +14,50 @@ var version = "dev"
 
 // Run dispatches polypus subcommands. Returns a process exit code.
 func Run(args []string) int {
-	if len(args) == 0 {
-		fmt.Print(agentOperatingGuide())
+	root := newRoot()
+	root.SetArgs(args)
+	root.SetOut(os.Stdout)
+	root.SetErr(os.Stderr)
+
+	_, err := root.ExecuteC()
+	if err == nil {
 		return 0
 	}
-	switch args[0] {
-	case "version", "-version", "--version":
-		fmt.Printf("polypus %s\n", version)
-		return 0
-	case "serve":
-		return runServe(args[1:])
-	case "switchyard-render":
-		return runSwitchyardRender(args[1:])
-	case "processes":
-		return runProcesses(args[1:])
-	case "init":
-		return runInit(args[1:])
-	case "secret":
-		return runSecret(args[1:])
-	case "help", "-h", "--help":
-		printUsage()
-		return 0
-	default:
-		printUsage()
+	var ex *exitError
+	if errors.As(err, &ex) {
+		if ex.msg != "" {
+			fmt.Fprintln(os.Stderr, ex.msg)
+		}
+		return ex.code
+	}
+	if isUnknownCommand(err) {
 		return 2
 	}
+	fmt.Fprintln(os.Stderr, err)
+	return 1
 }
 
-func printUsage() {
-	fmt.Fprintf(os.Stderr, `usage:
-  polypus serve [flags]              # OpenAI speech API gateway (loopback)
-  polypus switchyard-render [flags]  # render Switchyard routes.toml from config
-  polypus processes [--print mlx]    # process-compose toggles from config processes.*
-  polypus init [--force]             # write ~/.config/polypus/config.yaml from example
-  polypus secret set <ENV> [--stdin] # store CF_* in OS keyring (prompt or --stdin; flag before/after ENV)
-  polypus version                    # print release version
+func isUnknownCommand(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unknown command")
+}
 
-flags:
-  --host HOST       gateway listen host
-  --port PORT       gateway listen port (default 1320)
-  --backend URL     MLX or other OpenAI speech backend
-
-env: POLYPUS_HOST, POLYPUS_PORT, POLYPUS_BACKEND_URL, POLYPUS_MLX_HOST, POLYPUS_MLX_PORT
-     POLYPUS_OTEL, POLYPUS_OTLP_ENDPOINT, POLYPUS_FAILURE_DUMP_DIR, POLYPUS_SERVICE_NAME
-     POLYPUS_OTEL_SKIP_PATHS   # comma list; default /health; "none" traces all paths
-
-config processes.mlx (bool) drives whether make serve starts the MLX process.
-POLYPUS_ENABLE_MLX still overrides when set.
-
-`)
+// polypusCommands walks Polypus-owned commands for tests and guide helpers.
+func polypusCommands(root *cobra.Command) []*cobra.Command {
+	var out []*cobra.Command
+	var walk func(*cobra.Command)
+	walk = func(cmd *cobra.Command) {
+		if cmd == nil || cmd.Name() == "help" {
+			return
+		}
+		out = append(out, cmd)
+		for _, child := range cmd.Commands() {
+			walk(child)
+		}
+	}
+	walk(root)
+	return out
 }

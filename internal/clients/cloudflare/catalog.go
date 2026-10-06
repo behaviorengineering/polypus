@@ -10,11 +10,13 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
@@ -115,6 +117,9 @@ func (c *Client) Ping(ctx context.Context) error {
 func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
 		return ModelList{}, fmt.Errorf("cloudflare: not configured")
+	}
+	if cached, ok := c.cached(); ok {
+		return ModelList{Object: "list", Data: cached}, nil
 	}
 	models, err := c.fetchAll(ctx)
 	if err != nil {
@@ -234,6 +239,10 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 		return nil, 0, fmt.Errorf("cloudflare models: read: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, 0, derrors.Wrap(nil, derrors.CodeUnauthorized, "cloudflare.fetchPage", "API key rejected").
+				With("status", strconv.Itoa(resp.StatusCode))
+		}
 		return nil, 0, fmt.Errorf("cloudflare models: status %d: %s", resp.StatusCode, truncate(string(raw), 200))
 	}
 	var body cfModelsSearchResponse

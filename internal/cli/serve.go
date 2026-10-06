@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"time"
@@ -12,25 +11,16 @@ import (
 	"github.com/behaviorengineering/polypus/pkg/polypus"
 )
 
-func runServe(args []string) int {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	host := fs.String("host", "", "gateway listen host (default POLYPUS_HOST or 127.0.0.1)")
-	port := fs.Int("port", 0, "gateway listen port (default POLYPUS_PORT or 1320)")
-	backend := fs.String("backend", "", "speech backend base URL (default POLYPUS_BACKEND_URL)")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-
+func runServeWithOpts(host string, port int, backend string) int {
 	opts := config.LoadServeOptions()
-	if *host != "" {
-		opts.Host = *host
+	if host != "" {
+		opts.Host = host
 	}
-	if *port > 0 {
-		opts.Port = *port
+	if port > 0 {
+		opts.Port = port
 	}
-	if *backend != "" {
-		opts.BackendURL = *backend
+	if backend != "" {
+		opts.BackendURL = backend
 	}
 
 	fmt.Fprintf(os.Stderr, "polypus gateway: http://%s/\n", opts.ListenAddr())

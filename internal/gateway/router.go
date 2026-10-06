@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
@@ -48,8 +50,11 @@ type CloudflareClientGet func(config.BackendDef) (*cloudflare.Client, error)
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
-	router Router
-	cfGet  CloudflareClientGet
+	router        Router
+	cfGet         CloudflareClientGet
+	overlayPath   string
+	adminKeysPath string
+	clock         func() time.Time
 }
 
 // WithRouter injects a Router so tests can avoid bifrost.Init.
@@ -67,6 +72,17 @@ func WithRouter(r Router) HandlerOption {
 func WithCloudflareClientGet(fn CloudflareClientGet) HandlerOption {
 	return func(o *handlerOptions) {
 		o.cfGet = fn
+	}
+}
+
+// WithAdminStateDir sets overlay and admin key paths under dir (tests).
+func WithAdminStateDir(dir string) HandlerOption {
+	if strings.TrimSpace(dir) == "" {
+		panic("gateway: WithAdminStateDir(empty)")
+	}
+	return func(o *handlerOptions) {
+		o.overlayPath = filepath.Join(dir, "models-allow-overlay.yaml")
+		o.adminKeysPath = filepath.Join(dir, "admin-api-keys.json")
 	}
 }
 

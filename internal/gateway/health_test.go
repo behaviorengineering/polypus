@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func startMockSwitchyard(t *testing.T) *httptest.Server {
@@ -205,6 +207,49 @@ func TestProbeCloudflareCredentialsSkipsLocal(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("cfGet calls=%d", calls)
+	}
+}
+
+func TestProbeCloudflareCredentialsFailsOnPing401(t *testing.T) {
+	const sentinel = "sentinel-token-not-for-logs"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/ai/models/search") {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv("CF_AI_API_KEY", sentinel)
+	cfg := config.RouterConfig{
+		Backends: map[string]config.BackendDef{
+			"cf_local": {
+				ID:           "cf_local",
+				Remote:       true,
+				Extension:    config.ExtensionCloudflare,
+				BaseURL:      srv.URL + "/client/v4/accounts/acct/ai/v1",
+				Auth:         config.BackendAuth{BearerEnv: "CF_AI_API_KEY"},
+				Capabilities: []config.Capability{config.CapChat},
+			},
+		},
+	}
+	getCF := func(def config.BackendDef) (*cloudflare.Client, error) {
+		return cloudflare.NewClient(def)
+	}
+	err := probeCloudflareCredentials(context.Background(), cfg, getCF)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, derrors.ErrUnauthorized) {
+		t.Fatalf("expected unauthorized: %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "cf_local") {
+		t.Fatalf("error %v", err)
+	}
+	if strings.Contains(msg, sentinel) {
+		t.Fatalf("error leaked token: %v", err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/admin/keys"
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -34,6 +35,8 @@ type shared struct {
 	cfGet       CloudflareClientGet
 	batchStore  *batch.DiskStore
 	batchNow    func() time.Time
+	overlayPath string
+	adminKeys   *keys.Store
 }
 
 // Gateway is the Polypus HTTP mux (controller) over capability handlers.
@@ -66,9 +69,21 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 		}
 	}
 
-	rcfg, err := config.LoadRouterConfig(opts)
+	overlayPath := ho.overlayPath
+	if overlayPath == "" {
+		overlayPath = config.ResolveModelsAllowOverlayPath()
+	}
+	adminKeysPath := ho.adminKeysPath
+	if adminKeysPath == "" {
+		adminKeysPath = config.ResolveAdminKeysPath()
+	}
+	jobClock := ho.clock
+	if jobClock == nil {
+		jobClock = func() time.Time { return time.Now().UTC() }
+	}
+	adminKeys, err := keys.Config{Path: adminKeysPath, Clock: jobClock}.CreateStore()
 	if err != nil {
-		return nil, fmt.Errorf("gateway: %w", err)
+		return nil, fmt.Errorf("gateway: admin keys: %w", err)
 	}
 
 	cfGet := ho.cfGet
@@ -78,9 +93,19 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 
 	var rc Router
 	owned := false
+	var rcfg config.RouterConfig
 	if ho.router != nil {
 		rc = ho.router
+		rcfg = rc.Registry().Config()
 	} else {
+		loaded, loadErr := config.LoadRouterConfig(opts)
+		if loadErr != nil {
+			return nil, fmt.Errorf("gateway: %w", loadErr)
+		}
+		if err := config.ApplyAllowOverlay(&loaded, overlayPath); err != nil {
+			return nil, fmt.Errorf("gateway: allow overlay: %w", err)
+		}
+		rcfg = loaded
 		var clientOpts []router.ClientOption
 		if ho.cfGet != nil {
 			clientOpts = append(clientOpts, router.WithCloudflareClientGet(router.CloudflareClientGet(ho.cfGet)))
@@ -131,9 +156,12 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 		upstreams:   upstream.NewBoard(),
 		cfGet:       cfGet,
 		batchStore:  batchStore,
-		batchNow:    func() time.Time { return time.Now().UTC() },
+		batchNow:    jobClock,
+		overlayPath: overlayPath,
+		adminKeys:   adminKeys,
 	}
-	return &Gateway{shared: s}, nil
+	gw := &Gateway{shared: s}
+	return wrapGatewayAccess(adminKeys, gw), nil
 }
 
 func (s *shared) batchNowTime() time.Time {
@@ -162,6 +190,10 @@ func newFallbackProxy(backendURL string) (http.Handler, error) {
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
+	case r.URL.Path == "/":
+		g.serveLanding(w, r)
+	case r.URL.Path == bannerAssetPath:
+		g.serveBannerWebP(w, r)
 	case r.URL.Path == "/health" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		healthHandler{g.shared}.serveHealth(w, r)
 	case r.URL.Path == "/health/backends" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
@@ -192,6 +224,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		batchesHandler{g.shared}.serveBatches(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/batches/"):
 		batchesHandler{g.shared}.serveBatchByID(w, r)
+	case r.URL.Path == "/v1/admin/models/allow" && r.Method == http.MethodPost:
+		adminHandler{g.shared}.serveModelsAllow(w, r)
 	default:
 		http.NotFound(w, r)
 	}
