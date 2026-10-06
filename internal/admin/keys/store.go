@@ -26,7 +26,7 @@ type Config struct {
 	Rand  io.Reader
 }
 
-// Store manages hashed admin API keys on disk.
+// Store manages hashed gateway access keys on disk.
 type Store struct {
 	path  string
 	clock func() time.Time

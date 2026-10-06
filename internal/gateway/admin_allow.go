@@ -29,20 +29,6 @@ type adminAllowResponse struct {
 type adminHandler struct{ *shared }
 
 func (h adminHandler) serveModelsAllow(w http.ResponseWriter, r *http.Request) {
-	if h.adminKeys == nil {
-		writeAdminUnauthorized(w)
-		return
-	}
-	token := bearerToken(r.Header.Get("Authorization"))
-	if token == "" {
-		writeAdminUnauthorized(w)
-		return
-	}
-	if _, err := h.adminKeys.Verify(token); err != nil {
-		writeAdminUnauthorized(w)
-		return
-	}
-
 	body, err := io.ReadAll(io.LimitReader(r.Body, adminAllowMaxBody))
 	if err != nil {
 		writeAdminJSONError(w, http.StatusBadRequest, "invalid_request_error", "invalid", "read body")
@@ -127,19 +113,6 @@ func modelInInventory(backendID, down, req string, models []openaiModel) bool {
 		}
 	}
 	return false
-}
-
-func bearerToken(header string) string {
-	header = strings.TrimSpace(header)
-	if len(header) < 7 || !strings.EqualFold(header[:6], "bearer") {
-		return ""
-	}
-	return strings.TrimSpace(header[6:])
-}
-
-func writeAdminUnauthorized(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Bearer realm="polypus-admin"`)
-	writeAdminJSONError(w, http.StatusUnauthorized, "invalid_request_error", "unauthorized", "admin API key required")
 }
 
 func writeAdminJSONError(w http.ResponseWriter, status int, typ, code, msg string) {

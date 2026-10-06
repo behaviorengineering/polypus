@@ -16,29 +16,6 @@ import (
 // adminKeyNow stamps key metadata; tests may replace.
 var adminKeyNow = func() time.Time { return time.Now().UTC() }
 
-func runAdminKey(args []string) int {
-	if len(args) == 0 {
-		printAdminKeyUsage()
-		return 2
-	}
-	switch args[0] {
-	case "generate":
-		return runAdminKeyGenerate(args[1:])
-	case "rotate":
-		return runAdminKeyRotate(args[1:])
-	case "delete":
-		return runAdminKeyDelete(args[1:])
-	case "list":
-		return runAdminKeyList(args[1:])
-	case "help", "-h", "--help":
-		printAdminKeyUsage()
-		return 0
-	default:
-		printAdminKeyUsage()
-		return 2
-	}
-}
-
 func printAdminKeyUsage() {
 	fmt.Fprintf(os.Stderr, `usage:
   polypus admin-key generate [--name NAME] [--yes] [--json] [--dry-run]

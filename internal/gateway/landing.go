@@ -12,6 +12,9 @@ import (
 
 const bannerAssetPath = "/media/banner.webp"
 
+// Matte sampled from media/banner.webp so the page matches the logo asset (not #000).
+const landingPageBackground = "#010302"
+
 type landingLink struct {
 	Href        string
 	Title       string
@@ -29,7 +32,7 @@ const landingPageTmpl = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Polypus</title>
 <style>
-html, body { margin: 0; min-height: 100%; background: #000; color: #e8e8e8; font-family: system-ui, sans-serif; }
+html, body { margin: 0; min-height: 100%; background: ` + landingPageBackground + `; color: #e8e8e8; font-family: system-ui, sans-serif; }
 main { max-width: 42rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; text-align: center; }
 img.banner { display: block; max-width: min(100%, 28rem); height: auto; margin: 0 auto 2rem; }
 nav { text-align: left; }
@@ -38,6 +41,13 @@ li { margin: 0 0 1.25rem; }
 a { color: #7eb8ff; text-decoration: none; font-weight: 600; }
 a:hover { text-decoration: underline; }
 p.desc { margin: 0.35rem 0 0; font-size: 0.9rem; color: #a8a8a8; line-height: 1.45; }
+section.allow { text-align: left; margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #333; }
+section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; }
+#allow-form label { display: block; margin-bottom: 0.75rem; font-size: 0.9rem; }
+#allow-form input { display: block; width: 100%; margin-top: 0.25rem; padding: 0.45rem 0.5rem; box-sizing: border-box; background: #111; border: 1px solid #444; color: #e8e8e8; border-radius: 4px; }
+#allow-form button { margin-top: 0.5rem; padding: 0.5rem 1rem; background: #1a3a5c; color: #e8e8e8; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; }
+#allow-form button:hover { background: #254a70; }
+#allow-result { margin-top: 1rem; padding: 0.75rem; background: #111; border: 1px solid #333; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; color: #c8c8c8; min-height: 2rem; }
 </style>
 </head>
 <body>
@@ -50,7 +60,41 @@ p.desc { margin: 0.35rem 0 0; font-size: 0.9rem; color: #a8a8a8; line-height: 1.
 {{end}}
 </ul>
 </nav>
+<section class="allow">
+<h2>Allow model (inventory check)</h2>
+<form id="allow-form">
+<label>Backend <input name="backend" autocomplete="off" required placeholder="cf_local"></label>
+<label>Model <input name="model" autocomplete="off" required placeholder="@cf/..."></label>
+<button type="submit">Add to allow list</button>
+</form>
+<pre id="allow-result"></pre>
+</section>
 </main>
+<script>
+(function () {
+  var form = document.getElementById('allow-form');
+  var out = document.getElementById('allow-result');
+  if (!form || !out) return;
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var fd = new FormData(form);
+    var payload = { backend: String(fd.get('backend') || '').trim(), model: String(fd.get('model') || '').trim() };
+    out.textContent = 'Sending…';
+    fetch('/v1/admin/models/allow', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        out.textContent = res.status + ' ' + text;
+      });
+    }).catch(function (err) {
+      out.textContent = String(err);
+    });
+  });
+})();
+</script>
 </body>
 </html>`
 

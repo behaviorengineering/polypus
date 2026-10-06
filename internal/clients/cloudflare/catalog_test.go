@@ -3,12 +3,14 @@ package cloudflare
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func TestCatalogPaginated(t *testing.T) {
@@ -118,6 +120,110 @@ func TestCatalogFailureEmpty(t *testing.T) {
 	_, strictErr := client.ListModelsStrict(context.Background())
 	if strictErr == nil {
 		t.Fatal("expected strict error with no cache")
+	}
+}
+
+func TestCatalogUsesFreshCacheWithoutRefetch(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/ai/models/search") {
+			http.NotFound(w, r)
+			return
+		}
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"result":[{"name":"@cf/cached"}],"result_info":{"page":1,"total_pages":1}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv("CF_TEST_KEY", "secret")
+	client, err := NewClient(config.BackendDef{
+		ID:        "cf_local",
+		Remote:    true,
+		Extension: config.ExtensionCloudflare,
+		BaseURL:   srv.URL + "/client/v4/accounts/test-acc/ai/v1",
+		Auth:      config.BackendAuth{BearerEnv: "CF_TEST_KEY"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := client.ListModelsStrict(context.Background())
+	if err != nil || len(first.Data) != 1 {
+		t.Fatalf("first: %+v err=%v", first, err)
+	}
+	second, err := client.ListModelsStrict(context.Background())
+	if err != nil || len(second.Data) != 1 {
+		t.Fatalf("second: %+v err=%v", second, err)
+	}
+	if hits != 1 {
+		t.Fatalf("handler hits: got %d want 1", hits)
+	}
+}
+
+func TestCatalogUnauthorizedStopsPagination(t *testing.T) {
+	var pages []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/ai/models/search") {
+			http.NotFound(w, r)
+			return
+		}
+		pages = append(pages, r.URL.Query().Get("page"))
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv("CF_TEST_KEY", "secret")
+	client, err := NewClient(config.BackendDef{
+		ID:        "cf_local",
+		Remote:    true,
+		Extension: config.ExtensionCloudflare,
+		BaseURL:   srv.URL + "/client/v4/accounts/test-acc/ai/v1",
+		Auth:      config.BackendAuth{BearerEnv: "CF_TEST_KEY"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.ListModelsStrict(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, derrors.ErrUnauthorized) {
+		t.Fatalf("expected unauthorized: %v", err)
+	}
+	for _, p := range pages {
+		if p == "2" {
+			t.Fatalf("fetched page 2: %v", pages)
+		}
+	}
+}
+
+func TestPingRejectedKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/ai/models/search") {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv("CF_TEST_KEY", "secret")
+	client, err := NewClient(config.BackendDef{
+		ID:        "cf_local",
+		Remote:    true,
+		Extension: config.ExtensionCloudflare,
+		BaseURL:   srv.URL + "/client/v4/accounts/test-acc/ai/v1",
+		Auth:      config.BackendAuth{BearerEnv: "CF_TEST_KEY"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.Ping(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, derrors.ErrUnauthorized) {
+		t.Fatalf("expected unauthorized: %v", err)
 	}
 }
 

@@ -30,11 +30,20 @@ func ListenAndServe(opts config.ServeOptions) error {
 	if err != nil {
 		return err
 	}
-	g, ok := handler.(*Gateway)
+	g, ok := gatewayFromHandler(handler)
 	if !ok {
+		if _, wrapped := handler.(*accessProtector); wrapped {
+			return fmt.Errorf("gateway: access-protected handler could not be unwrapped (internal wiring error)")
+		}
 		return fmt.Errorf("gateway: unexpected handler type %T", handler)
 	}
-	defer g.Close()
+	defer func() {
+		if c, ok := handler.(interface{ Close() }); ok {
+			c.Close()
+			return
+		}
+		g.Close()
+	}()
 
 	if err := writeSwitchyardConfig(g, opts); err != nil {
 		return err

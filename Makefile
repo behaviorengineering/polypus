@@ -1,4 +1,4 @@
-.PHONY: help build build-gateway build-smoke install init sync-config-example check-config-example test test-integration vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-batch smoke-higgs smoke-stt smoke-stt-local smoke-systemone smoke-all switchyard-build docker-build
+.PHONY: help build build-gateway build-smoke install init sync-config-example check-config-example test test-integration vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-batch smoke-higgs smoke-stt smoke-stt-local smoke-systemone smoke-all smoke-landing switchyard-build docker-build
 
 INTEGRATION_TEST := go test -tags=integration -count=1 -timeout 15m ./internal/smoke/integration
 
@@ -53,6 +53,7 @@ help:
 	@echo "  make smoke-local        TTS integration smoke (mock MLX backend)"
 	@echo "  make smoke-chat         L1 chat integration smoke (granite-4.0-h-micro)"
 	@echo "  make smoke-router       Named router chat integration smoke (mock Switchyard)"
+	@echo "  make smoke-landing      GET / landing page + banner WebP (subprocess gateway)"
 	@echo "  make smoke-batch        L1 batch facade integration smoke (gemma-4 default)"
 	@echo "  make smoke-higgs        Higgs v2 TTS integration smoke (mock MLX)"
 	@echo "  make smoke-stt          TTS then STT round-trip (cf_local)"
@@ -113,6 +114,9 @@ smoke-chat:
 
 smoke-router:
 	$(INTEGRATION_TEST) -run '^TestSmokeRouter$$'
+
+smoke-landing:
+	$(INTEGRATION_TEST) -run '^TestGatewayLanding$$'
 
 smoke-batch:
 	$(INTEGRATION_TEST) -run TestSmokeBatch

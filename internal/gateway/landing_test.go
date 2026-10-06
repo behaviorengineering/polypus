@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +11,7 @@ import (
 	"github.com/behaviorengineering/polypus/media"
 )
 
-func TestLandingPageHTML(t *testing.T) {
+func newLandingTestHandler(t *testing.T) http.Handler {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -20,6 +21,11 @@ func TestLandingPageHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return handler
+}
+
+func TestLandingPageHTML(t *testing.T) {
+	handler := newLandingTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "127.0.0.1:1320"
@@ -41,10 +47,16 @@ func TestLandingPageHTML(t *testing.T) {
 		"http://127.0.0.1:6006/",
 		"http://127.0.0.1:8080/",
 		"Gateway liveness JSON (no upstream dials).",
+		"Probes each configured backend",
+		"Circuit-breaker state",
 		"OpenAI-compatible catalog of models enabled on this gateway.",
 		"OpenInference LLM traces for chat and router spans",
 		"App traces and logs",
 		bannerAssetPath,
+		`id="allow-form"`,
+		`name="backend"`,
+		`name="model"`,
+		"/v1/admin/models/allow",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
@@ -52,16 +64,51 @@ func TestLandingPageHTML(t *testing.T) {
 	}
 }
 
-func TestLandingSiblingURLsRespectForwardedProto(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(backend.Close)
+func TestLandingHEAD(t *testing.T) {
+	handler := newLandingTestHandler(t)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
-	if err != nil {
-		t.Fatal(err)
+	req := httptest.NewRequest(http.MethodHead, "/", nil)
+	req.Host = "127.0.0.1:1320"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d", rec.Code)
 	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("content-type: %q", ct)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("body len: got %d", rec.Body.Len())
+	}
+}
+
+func TestLandingMethodNotAllowed(t *testing.T) {
+	handler := newLandingTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status: got %d", rec.Code)
+	}
+}
+
+func TestLandingWrongAssetPath(t *testing.T) {
+	handler := newLandingTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/media/other.webp", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d", rec.Code)
+	}
+}
+
+func TestLandingSiblingURLsRespectForwardedProto(t *testing.T) {
+	handler := newLandingTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "polypus.example:1320"
@@ -79,15 +126,7 @@ func TestLandingSiblingURLsRespectForwardedProto(t *testing.T) {
 }
 
 func TestBannerWebP(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(backend.Close)
-
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
+	handler := newLandingTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, bannerAssetPath, nil)
 	rec := httptest.NewRecorder()
@@ -104,16 +143,41 @@ func TestBannerWebP(t *testing.T) {
 	}
 }
 
-func TestHealthUnchangedAfterLanding(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(backend.Close)
+func TestBannerHEAD(t *testing.T) {
+	handler := newLandingTestHandler(t)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
-	if err != nil {
-		t.Fatal(err)
+	req := httptest.NewRequest(http.MethodHead, bannerAssetPath, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d", rec.Code)
 	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/webp" {
+		t.Fatalf("content-type: %q", ct)
+	}
+	if cl := rec.Header().Get("Content-Length"); cl == "" {
+		t.Fatal("missing Content-Length")
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("body len: got %d", rec.Body.Len())
+	}
+}
+
+func TestBannerMethodNotAllowed(t *testing.T) {
+	handler := newLandingTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, bannerAssetPath, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status: got %d", rec.Code)
+	}
+}
+
+func TestHealthUnchangedAfterLanding(t *testing.T) {
+	handler := newLandingTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -131,12 +195,61 @@ func TestHealthUnchangedAfterLanding(t *testing.T) {
 }
 
 func TestRequestHostnameSanitization(t *testing.T) {
-	if got := requestHostname(nil); got != "127.0.0.1" {
-		t.Fatalf("nil request: got %q", got)
-	}
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Host = "evil\nhost:1320"
-	if got := requestHostname(req); got != "127.0.0.1" {
-		t.Fatalf("unsafe host: got %q", got)
-	}
+	t.Run("nil request", func(t *testing.T) {
+		if got := requestHostname(nil); got != "127.0.0.1" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("empty host", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "http:///", nil)
+		req.Host = ""
+		req.URL.Host = ""
+		if got := requestHostname(req); got != "127.0.0.1" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("unsafe host", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Host = "evil\nhost:1320"
+		if got := requestHostname(req); got != "127.0.0.1" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("strip port", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Host = "gateway.example.com:1320"
+		if got := requestHostname(req); got != "gateway.example.com" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("ipv6 bracket fallback", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Host = "[::1]:1320"
+		if got := requestHostname(req); got != "127.0.0.1" {
+			t.Fatalf("got %q", got)
+		}
+	})
+}
+
+func TestRequestScheme(t *testing.T) {
+	t.Run("forwarded proto first value", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Forwarded-Proto", "https, http")
+		if got := requestScheme(req); got != "https" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("default http", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		if got := requestScheme(req); got != "http" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("tls", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.TLS = &tls.ConnectionState{}
+		if got := requestScheme(req); got != "https" {
+			t.Fatalf("got %q", got)
+		}
+	})
 }

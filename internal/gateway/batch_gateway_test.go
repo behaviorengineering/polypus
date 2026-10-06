@@ -411,7 +411,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw, ok := handler.(*Gateway)
+	gw, ok := gatewayFromHandler(handler)
 	if !ok {
 		t.Fatal("expected *Gateway handler")
 	}

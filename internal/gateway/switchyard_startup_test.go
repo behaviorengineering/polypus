@@ -48,7 +48,7 @@ routers:
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if g, ok := handler.(*Gateway); ok {
+		if g, ok := gatewayFromHandler(handler); ok {
 			g.Close()
 		}
 	})
@@ -97,7 +97,10 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := handler.(*Gateway)
+	g, ok := gatewayFromHandler(handler)
+	if !ok {
+		t.Fatal("expected gateway handler")
+	}
 	t.Cleanup(g.Close)
 
 	if err := writeSwitchyardConfig(g, opts); err != nil {

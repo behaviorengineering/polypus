@@ -14,23 +14,6 @@ import (
 
 const secretCLIInsecureWarning = "WARNING! Passing the secret on the command line is insecure. Use a hidden prompt or --stdin."
 
-func runSecret(args []string) int {
-	if len(args) == 0 {
-		printSecretUsage()
-		return 2
-	}
-	switch args[0] {
-	case "set":
-		return runSecretSet(args[1:])
-	case "help", "-h", "--help":
-		printSecretUsage()
-		return 0
-	default:
-		printSecretUsage()
-		return 2
-	}
-}
-
 func printSecretUsage() {
 	fmt.Fprintf(os.Stderr, `usage:
   polypus secret set <ENV>              # hidden prompt on a TTY

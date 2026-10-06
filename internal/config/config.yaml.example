@@ -1,6 +1,9 @@
 # Polypus multi-backend router.
 # Copy to ~/.config/polypus/config.yaml (or set POLYPUS_CONFIG).
 # Env-only single backend works without this file (mlx_local from POLYPUS_MLX_*).
+# Runtime state (optional): POLYPUS_MODELS_ALLOW_OVERLAY, POLYPUS_ADMIN_KEYS under
+# ~/.local/state/polypus/ — allow form on GET / and POST /v1/admin/models/allow;
+# non-empty POLYPUS_ADMIN_KEYS locks the gateway (see config-reference.md).
 #
 # Secrets: only env names listed here are loaded from the OS keyring when unset in
 # the process environment (env and stack .env still win). Omit secrets entirely for

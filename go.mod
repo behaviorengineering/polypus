@@ -7,6 +7,7 @@ require (
 	github.com/behaviorengineering/operatorconfig v0.1.1
 	github.com/maximhq/bifrost/core v1.8.4
 	github.com/sony/gobreaker v1.0.0
+	github.com/spf13/cobra v1.10.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
@@ -110,6 +111,7 @@ require (
 	github.com/hashicorp/hcl v1.0.1-vault-7 // indirect
 	github.com/hashicorp/vault/api v1.23.0 // indirect
 	github.com/huaweicloud/huaweicloud-sdk-go-v3 v0.1.207 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/json-iterator/go v1.1.13-0.20220915233716-71ac16282d12 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect

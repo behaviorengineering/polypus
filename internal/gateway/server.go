@@ -160,7 +160,8 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 		overlayPath: overlayPath,
 		adminKeys:   adminKeys,
 	}
-	return &Gateway{shared: s}, nil
+	gw := &Gateway{shared: s}
+	return wrapGatewayAccess(adminKeys, gw), nil
 }
 
 func (s *shared) batchNowTime() time.Time {
@@ -189,9 +190,9 @@ func newFallbackProxy(backendURL string) (http.Handler, error) {
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
-	case r.URL.Path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+	case r.URL.Path == "/":
 		g.serveLanding(w, r)
-	case r.URL.Path == bannerAssetPath && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+	case r.URL.Path == bannerAssetPath:
 		g.serveBannerWebP(w, r)
 	case r.URL.Path == "/health" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		healthHandler{g.shared}.serveHealth(w, r)
