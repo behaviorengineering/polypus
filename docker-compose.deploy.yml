@@ -46,7 +46,7 @@ services:
       SWITCHYARD_CONFIG: /var/lib/polypus/switchyard/routes.toml
       SWITCHYARD_HOST: "0.0.0.0"
       SWITCHYARD_PORT: "4000"
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${POLYPUS_OTLP_ENDPOINT:-http://phoenix:4317}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${POLYPUS_OTLP_ENDPOINT:-http://otelcol:4317}
       OTEL_SERVICE_NAME: switchyard-server
       SWITCHYARD_FAILURE_DUMP_DIR: /var/lib/switchyard/inference-failures
     volumes:
