@@ -40,16 +40,19 @@ func TestLandingPageHTML(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"/health",
+		`class="layout"`,
+		`class="col col-models"`,
+		`class="col col-ops"`,
 		"/health/backends",
 		"/health/upstreams",
-		"/v1/models",
+		"/v1/apis",
+		"/v1/apis/openai/models",
+		"/v1/apis/systemone/models",
 		"http://127.0.0.1:6006/",
 		"http://127.0.0.1:8080/",
-		"Gateway liveness JSON (no upstream dials).",
 		"Probes each configured backend",
 		"Circuit-breaker state",
-		"OpenAI-compatible catalog of models enabled on this gateway.",
+		"REST index of OpenAI and SystemOne APIs with links to model lists and schemas.",
 		"OpenInference LLM traces for chat and router spans",
 		"App traces and logs",
 		bannerAssetPath,
@@ -61,6 +64,12 @@ func TestLandingPageHTML(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
 		}
+	}
+	iOps := strings.Index(body, `class="col col-ops"`)
+	iBanner := strings.Index(body, `class="banner"`)
+	iHealth := strings.Index(body, "Health &amp; collectors")
+	if iOps < 0 || iBanner < 0 || iHealth < 0 || iOps >= iBanner || iBanner >= iHealth {
+		t.Fatalf("banner should be at top of left ops column:\n%s", body)
 	}
 }
 

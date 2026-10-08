@@ -1,0 +1,75 @@
+openapi: 3.1.0
+info:
+  title: Polypus OpenAI-compatible API
+  version: 1.0.0
+  description: |
+    Subset of OpenAI-compatible routes implemented by the Polypus gateway.
+    Model catalog canonical path is GET /v1/apis/openai/models.
+    GET /v1/models is a compatibility alias of the OpenAI surface list.
+servers:
+  - url: /
+paths:
+  /v1/apis/openai/models:
+    get:
+      summary: List models (OpenAI surface)
+      operationId: listOpenAIModels
+      responses:
+        "200":
+          description: OpenAI-shaped model list
+  /v1/models:
+    get:
+      summary: List models (legacy alias)
+      description: Same response as GET /v1/apis/openai/models
+      operationId: listModelsLegacy
+      responses:
+        "200":
+          description: OpenAI-shaped model list
+  /v1/chat/completions:
+    post:
+      summary: Create chat completion
+      operationId: createChatCompletion
+      responses:
+        "200":
+          description: Chat completion
+  /v1/embeddings:
+    post:
+      summary: Create embeddings
+      operationId: createEmbedding
+      responses:
+        "200":
+          description: Embedding vectors
+  /v1/audio/speech:
+    post:
+      summary: Create speech
+      operationId: createSpeech
+      responses:
+        "200":
+          description: Audio bytes
+  /v1/audio/transcriptions:
+    post:
+      summary: Create transcription
+      operationId: createTranscription
+      responses:
+        "200":
+          description: Transcription JSON
+  /v1/audio/voices:
+    get:
+      summary: List voices
+      operationId: listVoices
+      responses:
+        "200":
+          description: Voice list
+  /v1/files:
+    get:
+      summary: Files API (proxy)
+      operationId: listFiles
+      responses:
+        "200":
+          description: File list
+  /v1/batches:
+    post:
+      summary: Create batch job
+      operationId: createBatch
+      responses:
+        "200":
+          description: Batch object

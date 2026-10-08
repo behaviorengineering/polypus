@@ -76,6 +76,27 @@ func mergeBackendInventories(cfg config.RouterConfig, asInventory bool, results 
 	return byID
 }
 
+// mergeAllowSyntheticMissing appends allow-list ids missing from upstream inventory (for example typesafe/jev).
+func mergeAllowSyntheticMissing(backendID string, live []openaiModel, allow []string) []openaiModel {
+	synth := syntheticModels(backendID, allow)
+	if len(synth) == 0 {
+		return live
+	}
+	seen := make(map[string]struct{}, len(live)+len(synth))
+	for _, m := range live {
+		seen[m.ID] = struct{}{}
+	}
+	out := append([]openaiModel(nil), live...)
+	for _, m := range synth {
+		if _, ok := seen[m.ID]; ok {
+			continue
+		}
+		seen[m.ID] = struct{}{}
+		out = append(out, m)
+	}
+	return out
+}
+
 // mergeSeedModels adds env speech seeds that are allowed and not already present.
 func mergeSeedModels(cfg config.RouterConfig, asInventory bool, ids []string, byID map[string]openaiModel, seeds []openaiModel) {
 	if byID == nil {

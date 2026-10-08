@@ -93,8 +93,8 @@ backends:
 # Example chat: model=cf_local/@cf/zai-org/glm-4.7-flash
 # Example STT: model=alt_stt/whisper-large-v3
 #
-# GET /v1/models          → enabled models only (models.allow when set)
-# GET /v1/models?view=inventory → full upstream inventory
+# GET /v1/apis/openai/models → enabled models (models.allow when set); GET /v1/models is legacy alias
+# GET /v1/apis/openai/models?view=inventory → full upstream inventory
 
 # Optional Switchyard (always-on when using composed routers):
 # switchyard:

@@ -7,6 +7,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultSystemOneDownstream is the downstream model id when clients omit model on POST /v1/systemone.
+const DefaultSystemOneDownstream = "typesafe/jev"
+
 // BackendModels controls inventory sync and enablement for one backend.
 type BackendModels struct {
 	// Sync pulls upstream inventory when true (default). When false, list only allow entries.
@@ -15,13 +18,18 @@ type BackendModels struct {
 	AllowConfigured bool `yaml:"-"`
 	// Allow is the enable list (bare or backend_id/… ids).
 	Allow []string `yaml:"-"`
+	// SystemOneAllowConfigured is true when systemone_allow was present in YAML.
+	SystemOneAllowConfigured bool `yaml:"-"`
+	// SystemOneAllow lists downstream ids for GET /v1/apis/systemone/models (optional).
+	SystemOneAllow []string `yaml:"-"`
 }
 
 // UnmarshalYAML distinguishes missing allow from allow: [].
 func (m *BackendModels) UnmarshalYAML(value *yaml.Node) error {
 	var raw struct {
-		Sync  *bool     `yaml:"sync"`
-		Allow *[]string `yaml:"allow"`
+		Sync           *bool     `yaml:"sync"`
+		Allow          *[]string `yaml:"allow"`
+		SystemOneAllow *[]string `yaml:"systemone_allow"`
 	}
 	if err := value.Decode(&raw); err != nil {
 		return err
@@ -30,6 +38,10 @@ func (m *BackendModels) UnmarshalYAML(value *yaml.Node) error {
 	if raw.Allow != nil {
 		m.AllowConfigured = true
 		m.Allow = append([]string(nil), (*raw.Allow)...)
+	}
+	if raw.SystemOneAllow != nil {
+		m.SystemOneAllowConfigured = true
+		m.SystemOneAllow = append([]string(nil), (*raw.SystemOneAllow)...)
 	}
 	return nil
 }
@@ -67,6 +79,17 @@ func (b BackendDef) IsModelAllowed(model string) bool {
 		return true
 	}
 	return ModelInAllowList(b.ID, model, b.Models.Allow)
+}
+
+// IsSystemOneDownstream reports whether downstream belongs on the SystemOne model catalog surface.
+func (b BackendDef) IsSystemOneDownstream(downstream string) bool {
+	if !b.HasCapability(CapSystemOne) {
+		return false
+	}
+	if b.Models != nil && b.Models.SystemOneAllowConfigured {
+		return ModelInAllowList(b.ID, downstream, b.Models.SystemOneAllow)
+	}
+	return ModelInAllowList(b.ID, downstream, []string{DefaultSystemOneDownstream})
 }
 
 // ModelInAllowList matches model against allow entries (bare or prefixed).
@@ -133,6 +156,13 @@ func (m *BackendModels) validate(backendID string) error {
 		for i, a := range m.Allow {
 			if strings.TrimSpace(a) == "" {
 				return fmt.Errorf("router: backends.%s.models.allow[%d] empty", backendID, i)
+			}
+		}
+	}
+	if m.SystemOneAllowConfigured {
+		for i, a := range m.SystemOneAllow {
+			if strings.TrimSpace(a) == "" {
+				return fmt.Errorf("router: backends.%s.models.systemone_allow[%d] empty", backendID, i)
 			}
 		}
 	}

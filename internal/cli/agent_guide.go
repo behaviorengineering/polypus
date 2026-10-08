@@ -9,7 +9,7 @@ import (
 
 func agentOperatingGuide(root *cobra.Command) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf(`polypus %s — OpenAI-compatible inference gateway (loopback)
+	fmt.Fprintf(&b, `polypus %s — OpenAI-compatible inference gateway (loopback)
 
 ROLE & BOUNDARIES
   Routes speech and chat traffic to configured MLX or remote backends.
@@ -20,7 +20,7 @@ AGENT OPERATING GUIDE
   Listening requires explicit polypus serve (never bare polypus).
 
 COMMANDS BY RISK & LIFECYCLE
-`, version))
+`, version)
 	appendGuideGroup(&b, root, groupInspect, "Inspect & Validate")
 	appendGuideGroup(&b, root, groupSetup, "Setup & secrets")
 	appendGuideGroup(&b, root, groupMutate, "Execute & Mutate")

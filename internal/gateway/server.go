@@ -37,6 +37,7 @@ type shared struct {
 	batchNow    func() time.Time
 	overlayPath string
 	adminKeys   *keys.Store
+	uiMounts    []uiProxyMount
 }
 
 // Gateway is the Polypus HTTP mux (controller) over capability handlers.
@@ -145,6 +146,15 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 		}
 		batchStore = bs
 	}
+	uiMounts, uiErr := buildUIMounts(rcfg.UIProxies)
+	if uiErr != nil {
+		if owned {
+			if c, ok := rc.(routerCloser); ok {
+				c.Close()
+			}
+		}
+		return nil, uiErr
+	}
 	s := &shared{
 		opts:        opts,
 		router:      rc,
@@ -159,6 +169,7 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 		batchNow:    jobClock,
 		overlayPath: overlayPath,
 		adminKeys:   adminKeys,
+		uiMounts:    uiMounts,
 	}
 	gw := &Gateway{shared: s}
 	return wrapGatewayAccess(adminKeys, gw), nil
@@ -202,6 +213,28 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		healthHandler{g.shared}.serveUpstreamHealth(w, r)
 	case strings.HasPrefix(r.URL.Path, "/debug/failures/") && r.Method == http.MethodGet:
 		healthHandler{g.shared}.serveFailureDump(w, r)
+	case r.URL.Path == "/v1/apis" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		apiCatalogHandler{g.shared}.serveCatalog(w, r)
+	case r.URL.Path == "/v1/apis/openai/openapi.yaml" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		serveOpenAPISpec(w, r)
+	case r.URL.Path == "/v1/apis/systemone/schema.json" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		cfg := config.RouterConfig{}
+		if g.router != nil {
+			cfg = g.router.Registry().Config()
+		}
+		if !systemOneAPIEnabled(cfg) {
+			writeAPINotConfigured(w)
+		} else {
+			serveSystemOneSchema(w, r)
+		}
+	case r.URL.Path == "/v1/apis/openai/models" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		modelsHandler{g.shared}.serveModelsListForSurface(surfaceOpenAI, w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/apis/openai/models/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		modelsHandler{g.shared}.serveModelRetrieveForSurface(surfaceOpenAI, "/v1/apis/openai/models/", w, r)
+	case r.URL.Path == "/v1/apis/systemone/models" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		modelsHandler{g.shared}.serveModelsListForSurface(surfaceSystemOne, w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/apis/systemone/models/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		modelsHandler{g.shared}.serveModelRetrieveForSurface(surfaceSystemOne, "/v1/apis/systemone/models/", w, r)
 	case r.URL.Path == "/v1/models" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		modelsHandler{g.shared}.serveModelsList(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/models/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
@@ -227,6 +260,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/v1/admin/models/allow" && r.Method == http.MethodPost:
 		adminHandler{g.shared}.serveModelsAllow(w, r)
 	default:
+		if g.serveUIProxy(w, r) {
+			return
+		}
 		http.NotFound(w, r)
 	}
 }

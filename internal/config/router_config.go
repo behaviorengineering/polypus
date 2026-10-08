@@ -66,6 +66,7 @@ type RouterConfig struct {
 	Backends   map[string]BackendDef `yaml:"backends"`
 	Routers    map[string]NamedRouter
 	Switchyard SwitchyardConfig
+	UIProxies  []UIProxy
 }
 
 // EffectiveChatBackend returns the chat default when chat is enabled; otherwise empty.
@@ -163,6 +164,7 @@ type routerFile struct {
 	Backends         map[string]backendFileEntry `yaml:"backends"`
 	Switchyard       switchyardFile              `yaml:"switchyard"`
 	Routers          map[string]namedRouterFile  `yaml:"routers"`
+	UIProxies        []uiProxyFile               `yaml:"ui_proxies"`
 }
 
 type backendFileEntry struct {
@@ -237,6 +239,10 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 	if err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
+	uiProxies, err := ParseUIProxies(file.UIProxies)
+	if err != nil {
+		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
+	}
 	cfg := RouterConfig{
 		Chat:       parseCapabilityBackend(file.ChatBackend),
 		Vision:     parseCapabilityBackend(file.VisionBackend),
@@ -251,6 +257,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 		Backends:   make(map[string]BackendDef, len(file.Backends)),
 		Routers:    routers,
 		Switchyard: mergeSwitchyardFile(file.Switchyard),
+		UIProxies:  uiProxies,
 	}
 	for id, entry := range file.Backends {
 		id = strings.TrimSpace(id)

@@ -16,22 +16,6 @@ import (
 // adminKeyNow stamps key metadata; tests may replace.
 var adminKeyNow = func() time.Time { return time.Now().UTC() }
 
-func printAdminKeyUsage() {
-	fmt.Fprintf(os.Stderr, `usage:
-  polypus admin-key generate [--name NAME] [--yes] [--json] [--dry-run]
-  polypus admin-key rotate   [--name NAME] [--yes] [--json] [--dry-run]
-  polypus admin-key delete   [--name NAME] [--yes] [--dry-run]
-  polypus admin-key list     [--json]
-
-options:
-  --name string   Key name (required for non-interactive mutate)
-  --yes           Skip confirmation (required when stdin is not a TTY)
-  --json          Machine-readable output on stdout
-  --dry-run       Validate without writing
-
-`)
-}
-
 func openAdminKeyStore() (*keys.Store, error) {
 	return keys.Config{
 		Path:  config.ResolveAdminKeysPath(),
