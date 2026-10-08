@@ -16,9 +16,11 @@ import (
 	"github.com/behaviorengineering/polypus/internal/config"
 )
 
-const modelsListTimeout = 5 * time.Second
-const modelsMaxBody = 4 << 20
-const modelsInventoryCacheTTL = time.Hour
+const (
+	modelsListTimeout       = 5 * time.Second
+	modelsMaxBody           = 4 << 20
+	modelsInventoryCacheTTL = time.Hour
+)
 
 // openaiModel is the OpenAI Models API object (list + retrieve).
 type openaiModel struct {
@@ -145,16 +147,60 @@ func inventoryView(r *http.Request) bool {
 }
 
 func (h modelsHandler) serveModelsList(w http.ResponseWriter, r *http.Request) {
-	models := h.collectModels(r, inventoryView(r))
+	h.serveModelsListForSurface(surfaceOpenAI, w, r)
+}
+
+func (h modelsHandler) serveModelsListForSurface(surface ModelSurface, w http.ResponseWriter, r *http.Request) {
+	cfg := config.RouterConfig{}
+	if h.router != nil {
+		cfg = h.router.Registry().Config()
+	}
+	if surface == surfaceSystemOne && !systemOneAPIEnabled(cfg) {
+		writeAPINotConfigured(w)
+		return
+	}
+	all := h.collectModels(r, inventoryView(r))
+	models := modelsForSurface(cfg, all, surface)
+	if surface == surfaceOpenAI {
+		setOpenAIModelsCanonicalLink(w)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(openaiModelList{
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	encodeJSON(w, openaiModelList{
 		Object: "list",
 		Data:   models,
 	})
 }
 
+func writeAPINotConfigured(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	encodeJSON(w, map[string]any{
+		"error": map[string]any{
+			"message": "SystemOne API is not configured on this gateway",
+			"type":    "invalid_request_error",
+			"code":    "api_not_configured",
+		},
+	})
+}
+
 func (h modelsHandler) serveModelRetrieve(w http.ResponseWriter, r *http.Request) {
-	rawID := strings.TrimPrefix(r.URL.Path, "/v1/models/")
+	h.serveModelRetrieveForSurface(surfaceOpenAI, "/v1/models/", w, r)
+}
+
+func (h modelsHandler) serveModelRetrieveForSurface(surface ModelSurface, pathPrefix string, w http.ResponseWriter, r *http.Request) {
+	cfg := config.RouterConfig{}
+	if h.router != nil {
+		cfg = h.router.Registry().Config()
+	}
+	if surface == surfaceSystemOne && !systemOneAPIEnabled(cfg) {
+		writeAPINotConfigured(w)
+		return
+	}
+	rawID := strings.TrimPrefix(r.URL.Path, pathPrefix)
 	rawID = strings.Trim(rawID, "/")
 	if rawID == "" {
 		http.NotFound(w, r)
@@ -166,17 +212,19 @@ func (h modelsHandler) serveModelRetrieve(w http.ResponseWriter, r *http.Request
 		return
 	}
 	id = strings.TrimSpace(id)
-	// Retrieve is tool-facing unless inventory view is requested.
-	for _, m := range h.collectModels(r, inventoryView(r)) {
-		if m.ID == id {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(m)
-			return
+	asInventory := inventoryView(r)
+	all := h.collectModelsForRetrieve(r, asInventory, id)
+	if m, ok := lookupModelForSurface(cfg, all, surface, id); ok {
+		if surface == surfaceOpenAI {
+			setOpenAIModelsCanonicalLink(w)
 		}
+		w.Header().Set("Content-Type", "application/json")
+		encodeJSON(w, m)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotFound)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	encodeJSON(w, map[string]any{
 		"error": map[string]any{
 			"message": fmt.Sprintf("The model `%s` does not exist", id),
 			"type":    "invalid_request_error",
@@ -184,6 +232,34 @@ func (h modelsHandler) serveModelRetrieve(w http.ResponseWriter, r *http.Request
 			"code":    "model_not_found",
 		},
 	})
+}
+
+// collectModelsForRetrieve loads catalog data for a single model id when not in inventory view.
+func (h modelsHandler) collectModelsForRetrieve(r *http.Request, asInventory bool, targetID string) []openaiModel {
+	if asInventory || h.router == nil {
+		return h.collectModels(r, asInventory)
+	}
+	targetID = strings.TrimSpace(targetID)
+	reg := h.router.Registry()
+	cfg := reg.Config()
+	catalog := routerCatalogModels(cfg)
+	for _, m := range catalog {
+		if m.ID == targetID {
+			return catalog
+		}
+	}
+	backendID, _ := backendAndDownstreamForPublicID(cfg, targetID)
+	if backendID == "" {
+		return h.collectModels(r, false)
+	}
+	b, ok := cfg.Backends[backendID]
+	if !ok {
+		return h.collectModels(r, false)
+	}
+	results := []backendInventory{{backend: backendID, models: h.inventoryForBackend(r, b)}}
+	byID := mergeBackendInventories(cfg, false, results)
+	mergeSeedModels(cfg, false, []string{backendID}, byID, seedModelsFromEnv(cfg))
+	return finalizeModelList(catalog, byID)
 }
 
 func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openaiModel {
@@ -220,6 +296,9 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 	modelsCfg := b.Models
 	if b.IsCloudflareExtension() && (modelsCfg == nil || modelsCfg.ShouldSync()) {
 		if live := h.cloudflareInventory(r, b); len(live) > 0 {
+			if modelsCfg != nil && modelsCfg.HasAllowGate() {
+				live = mergeAllowSyntheticMissing(b.ID, live, modelsCfg.Allow)
+			}
 			if h.invCache != nil {
 				h.invCache.put(b.ID, live)
 			}
@@ -240,6 +319,9 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 	}
 	live := h.fetchBackendModelsProtected(r, b)
 	if len(live) > 0 {
+		if modelsCfg != nil && modelsCfg.HasAllowGate() {
+			live = mergeAllowSyntheticMissing(b.ID, live, modelsCfg.Allow)
+		}
 		if h.invCache != nil {
 			h.invCache.put(b.ID, live)
 		}

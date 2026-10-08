@@ -39,19 +39,29 @@ func TestLandingPageHTML(t *testing.T) {
 		t.Fatalf("content-type: %q", ct)
 	}
 	body := rec.Body.String()
+	if strings.Contains(body, `href="http://127.0.0.1:4317"`) || strings.Contains(body, `href="http://127.0.0.1:4318"`) {
+		t.Fatalf("OTLP endpoints must be notes, not links, body:\n%s", body)
+	}
 	for _, want := range []string{
-		"/health",
+		`class="layout"`,
+		`class="col col-models"`,
+		`class="col col-ops"`,
 		"/health/backends",
 		"/health/upstreams",
-		"/v1/models",
-		"http://127.0.0.1:6006/",
-		"http://127.0.0.1:8080/",
-		"Gateway liveness JSON (no upstream dials).",
+		"/v1/apis",
+		"/v1/apis/openai/models",
+		`href="http://127.0.0.1:6006/"`,
+		`href="http://127.0.0.1:8080/"`,
+		`class="notes"`,
+		"Notes",
 		"Probes each configured backend",
 		"Circuit-breaker state",
-		"OpenAI-compatible catalog of models enabled on this gateway.",
+		"Discovery index with model list URLs",
 		"OpenInference LLM traces for chat and router spans",
-		"App traces and logs",
+		"APM traces and logs",
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"grpc: http://127.0.0.1:4317",
+		"http: http://127.0.0.1:4318",
 		bannerAssetPath,
 		`id="allow-form"`,
 		`name="backend"`,
@@ -61,6 +71,12 @@ func TestLandingPageHTML(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
 		}
+	}
+	iOps := strings.Index(body, `class="col col-ops"`)
+	iBanner := strings.Index(body, `class="banner"`)
+	iHealth := strings.Index(body, "Health &amp; collectors")
+	if iOps < 0 || iBanner < 0 || iHealth < 0 || iOps >= iBanner || iBanner >= iHealth {
+		t.Fatalf("banner should be at top of left ops column:\n%s", body)
 	}
 }
 
@@ -107,7 +123,7 @@ func TestLandingWrongAssetPath(t *testing.T) {
 	}
 }
 
-func TestLandingSiblingURLsRespectForwardedProto(t *testing.T) {
+func TestLandingObservabilityUsesHostPorts(t *testing.T) {
 	handler := newLandingTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -117,11 +133,20 @@ func TestLandingSiblingURLsRespectForwardedProto(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "https://polypus.example:6006/") {
-		t.Fatalf("expected https sibling phoenix link, body:\n%s", body)
+	if strings.Contains(body, `href="/phoenix/"`) || strings.Contains(body, `href="/hyperdx/"`) {
+		t.Fatalf("expected port-based observability links, body:\n%s", body)
 	}
-	if !strings.Contains(body, "https://polypus.example:8080/") {
-		t.Fatalf("expected https sibling hyperdx link, body:\n%s", body)
+	if !strings.Contains(body, `href="http://polypus.example:6006/"`) || !strings.Contains(body, `href="http://polypus.example:8080/"`) {
+		t.Fatalf("missing host-port hrefs, body:\n%s", body)
+	}
+	if strings.Contains(body, `href="https://polypus.example:4317"`) || strings.Contains(body, `href="https://polypus.example:4318"`) {
+		t.Fatalf("OTLP endpoints must be notes, not links, body:\n%s", body)
+	}
+	if !strings.Contains(body, "grpc: https://polypus.example:4317") {
+		t.Fatalf("missing OTLP gRPC https scheme in note, body:\n%s", body)
+	}
+	if !strings.Contains(body, "http: https://polypus.example:4318") {
+		t.Fatalf("missing OTLP HTTP https scheme in note, body:\n%s", body)
 	}
 }
 

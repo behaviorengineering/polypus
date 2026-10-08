@@ -44,11 +44,13 @@ curl -sf http://127.0.0.1:1320/health | jq .
 ### 2. Which models are enabled?
 
 ```bash
-curl -sS http://127.0.0.1:1320/v1/models | jq '.data[].id'
-curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq '.data[].id'
+curl -sS http://127.0.0.1:1320/v1/apis | jq '.apis[] | {id, models, schema}'
+curl -sS http://127.0.0.1:1320/v1/apis/openai/models | jq '.data[].id'
+curl -sS http://127.0.0.1:1320/v1/apis/systemone/models | jq '.data[].id'
+curl -sS 'http://127.0.0.1:1320/v1/apis/openai/models?view=inventory' | jq '.data[].id'
 ```
 
-Compare to `config.yaml` `backends.*.models.allow`. Enabled list = first call; full upstream = second.
+Compare to `config.yaml` `backends.*.models.allow`. OpenAI surface = chat/embed/audio/router ids; SystemOne surface = `models.systemone_allow` (default `typesafe/jev`). Inventory view = last call.
 
 ### 3. Smoke all Cloudflare channels
 
@@ -136,7 +138,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 
 ### 8. cf_local down
 
-- Probe: `curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq '.data | length'`
+- Probe: `curl -sS 'http://127.0.0.1:1320/v1/apis/openai/models?view=inventory' | jq '.data | length'`
 - Needs: `cf_local` in `config.yaml`, `secrets:` listing `CF_AI_API_KEY` and `CF_ACCOUNT_ID`, and those values in the process environment **or** OS keyring (`polypus secret set`). Env and `stack/.env` still win. Compose / GitLab inject env only (no keyring in the container).
 
 ### 9. lm_studio down

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/media"
 )
 
@@ -22,7 +23,9 @@ type landingLink struct {
 }
 
 type landingPageData struct {
-	Links []landingLink
+	ModelLinks []landingLink
+	OpsLinks   []landingLink
+	OTLPNote   string
 }
 
 const landingPageTmpl = `<!DOCTYPE html>
@@ -33,16 +36,21 @@ const landingPageTmpl = `<!DOCTYPE html>
 <title>Polypus</title>
 <style>
 html, body { margin: 0; min-height: 100%; background: ` + landingPageBackground + `; color: #e8e8e8; font-family: system-ui, sans-serif; }
-main { max-width: 42rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; text-align: center; }
-img.banner { display: block; max-width: min(100%, 28rem); height: auto; margin: 0 auto 2rem; }
-nav { text-align: left; }
+main { max-width: 56rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+.layout { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem 2.5rem; align-items: start; }
+@media (max-width: 720px) { .layout { grid-template-columns: 1fr; } }
+.col { text-align: left; min-width: 0; }
+img.banner { display: block; max-width: min(100%, 28rem); height: auto; margin: 0 0 2rem; }
+nav h2, section.notes h2 { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #888; margin: 0 0 0.75rem; }
 ul { list-style: none; padding: 0; margin: 0; }
 li { margin: 0 0 1.25rem; }
 a { color: #7eb8ff; text-decoration: none; font-weight: 600; }
 a:hover { text-decoration: underline; }
 p.desc { margin: 0.35rem 0 0; font-size: 0.9rem; color: #a8a8a8; line-height: 1.45; }
-section.allow { text-align: left; margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #333; }
-section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; }
+section.notes { margin-top: 1.75rem; }
+pre.note { margin: 0; padding: 0.75rem; background: #111; border: 1px solid #333; font-size: 0.8rem; line-height: 1.5; overflow-x: auto; white-space: pre; color: #c8c8c8; }
+section.allow { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #333; }
+section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; text-transform: none; letter-spacing: normal; color: #e8e8e8; }
 #allow-form label { display: block; margin-bottom: 0.75rem; font-size: 0.9rem; }
 #allow-form input { display: block; width: 100%; margin-top: 0.25rem; padding: 0.45rem 0.5rem; box-sizing: border-box; background: #111; border: 1px solid #444; color: #e8e8e8; border-radius: 4px; }
 #allow-form button { margin-top: 0.5rem; padding: 0.5rem 1rem; background: #1a3a5c; color: #e8e8e8; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; }
@@ -52,11 +60,26 @@ section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; }
 </head>
 <body>
 <main>
+<div class="layout">
+<div class="col col-ops">
 <img class="banner" src="` + bannerAssetPath + `" width="1536" height="753" alt="Polypus">
-<nav>
+<nav aria-label="Health and observability">
+<h2>Health &amp; collectors</h2>
 <ul>
-{{range .Links}}
-<li><a href="{{.Href}}">{{.Title}}</a><p class="desc">{{.Description}}</p></li>
+{{range .OpsLinks}}<li><a href="{{.Href}}">{{.Title}}</a><p class="desc">{{.Description}}</p></li>
+{{end}}
+</ul>
+</nav>
+{{if .OTLPNote}}<section class="notes" aria-label="OpenTelemetry endpoints">
+<h2>Notes</h2>
+<pre class="note">{{.OTLPNote}}</pre>
+</section>{{end}}
+</div>
+<div class="col col-models">
+<nav aria-label="Models and APIs">
+<h2>Models</h2>
+<ul>
+{{range .ModelLinks}}<li><a href="{{.Href}}">{{.Title}}</a><p class="desc">{{.Description}}</p></li>
 {{end}}
 </ul>
 </nav>
@@ -69,6 +92,8 @@ section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; }
 </form>
 <pre id="allow-result"></pre>
 </section>
+</div>
+</div>
 </main>
 <script>
 (function () {
@@ -98,16 +123,43 @@ section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; }
 </body>
 </html>`
 
-var landingPageTemplate = template.Must(template.New("landing").Parse(landingPageTmpl))
+var landingPageTemplate = template.Must(
+	template.New("landing").Parse(landingPageTmpl),
+)
 
-func landingLinksForRequest(r *http.Request) []landingLink {
-	base := siblingUIBaseURL(r)
-	return []landingLink{
+func landingPageDataForRequest(r *http.Request, cfg config.RouterConfig) landingPageData {
+	return landingPageData{
+		ModelLinks: landingModelLinks(cfg),
+		OpsLinks:   landingOpsLinks(r),
+		OTLPNote:   landingOTLPNote(r),
+	}
+}
+
+func landingModelLinks(cfg config.RouterConfig) []landingLink {
+	links := []landingLink{
 		{
-			Href:        "/health",
-			Title:       "Health",
-			Description: "Gateway liveness JSON (no upstream dials).",
+			Href:        "/v1/apis",
+			Title:       "API catalog",
+			Description: "Discovery index with model list URLs for each API surface.",
 		},
+		{
+			Href:        "/v1/apis/openai/models",
+			Title:       "OpenAI models (enabled)",
+			Description: "Chat, vision, embed, audio, and router models allowed on this gateway.",
+		},
+	}
+	if cfg.EffectiveSystemOneBackend() != "" {
+		links = append(links, landingLink{
+			Href:        "/v1/apis/systemone/models",
+			Title:       "SystemOne models",
+			Description: "TypeSafe and JEV decider models (POST /v1/systemone).",
+		})
+	}
+	return links
+}
+
+func landingOpsLinks(r *http.Request) []landingLink {
+	links := []landingLink{
 		{
 			Href:        "/health/backends",
 			Title:       "Backend health",
@@ -118,28 +170,41 @@ func landingLinksForRequest(r *http.Request) []landingLink {
 			Title:       "Upstream breakers",
 			Description: "Circuit-breaker state without dialing leaf backends.",
 		},
+	}
+	return append(links, landingObservabilityUILinks(r)...)
+}
+
+func landingHostPortURL(r *http.Request, port string) string {
+	// Phoenix and HyperDX listen plaintext HTTP on these ports (Tailscale TCP forward).
+	return "http://" + requestHostname(r) + ":" + port
+}
+
+func landingOTLPEndpointURL(r *http.Request, port string) string {
+	// Homelab landing is HTTPS (Tailscale Serve); local make serve is HTTP.
+	return requestScheme(r) + "://" + requestHostname(r) + ":" + port
+}
+
+func landingObservabilityUILinks(r *http.Request) []landingLink {
+	return []landingLink{
 		{
-			Href:        "/v1/models",
-			Title:       "Models",
-			Description: "OpenAI-compatible catalog of models enabled on this gateway.",
-		},
-		{
-			Href:        base + ":6006/",
+			Href:        landingHostPortURL(r, "6006") + "/",
 			Title:       "Phoenix (Arize)",
-			Description: "OpenInference LLM traces for chat and router spans (OTLP gRPC :4317).",
+			Description: "OpenInference LLM traces for chat and router spans.",
 		},
 		{
-			Href:        base + ":8080/",
+			Href:        landingHostPortURL(r, "8080") + "/",
 			Title:       "HyperDX (OpenTelemetry)",
-			Description: "App traces and logs (OTLP gRPC :4319, HTTP :4318).",
+			Description: "APM traces and logs.",
 		},
 	}
 }
 
-func siblingUIBaseURL(r *http.Request) string {
-	scheme := requestScheme(r)
-	host := requestHostname(r)
-	return scheme + "://" + host
+func landingOTLPNote(r *http.Request) string {
+	grpc := landingOTLPEndpointURL(r, "4317")
+	httpURL := landingOTLPEndpointURL(r, "4318")
+	return "OTEL_EXPORTER_OTLP_ENDPOINT\n" +
+		"grpc: " + grpc + "\n" +
+		"http: " + httpURL
 }
 
 func requestScheme(r *http.Request) string {
@@ -205,7 +270,11 @@ func (g *Gateway) serveLanding(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	data := landingPageData{Links: landingLinksForRequest(r)}
+	cfg := config.RouterConfig{}
+	if g.router != nil {
+		cfg = g.router.Registry().Config()
+	}
+	data := landingPageDataForRequest(r, cfg)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)

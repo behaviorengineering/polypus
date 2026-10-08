@@ -55,6 +55,13 @@ func ListenAndServe(opts config.ServeOptions) error {
 		return fmt.Errorf("gateway: %w", err)
 	}
 
+	if modelsWarmupEnabled() {
+		cfg := g.router.Registry().Config()
+		warmCtx, warmCancel := context.WithTimeout(context.Background(), modelsWarmupTimeout(cfg))
+		defer warmCancel()
+		modelsHandler{g.shared}.warmModelsInventory(warmCtx)
+	}
+
 	server := &http.Server{
 		Addr:              opts.ListenAddr(),
 		Handler:           observability.WrapHandler(handler),

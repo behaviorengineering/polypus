@@ -8,8 +8,10 @@ Symptom-first table. Run health before chasing downstream errors.
 curl -sf http://127.0.0.1:1320/health | jq .
 curl -sf http://127.0.0.1:1320/health/backends | jq .   # upstream probe; may be slow
 curl -sf http://127.0.0.1:1320/health/upstreams | jq .  # circuit breaker board (no dials)
-curl -sS http://127.0.0.1:1320/v1/models | jq '.data | length'
-curl -sS 'http://127.0.0.1:1320/v1/models?view=inventory' | jq '.data | length'   # cf_local catalog
+curl -sS http://127.0.0.1:1320/v1/apis | jq '.apis[].id'
+curl -sS http://127.0.0.1:1320/v1/apis/openai/models | jq '.data | length'
+curl -sS 'http://127.0.0.1:1320/v1/apis/openai/models?view=inventory' | jq '.data | length'   # cf_local catalog
+curl -sS http://127.0.0.1:1320/v1/apis/systemone/models | jq '.data | length'
 curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 ```
 
@@ -23,7 +25,7 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 | Model in host job config but smoke fails | Allow-list drift | Align Polypus `models.allow` with host job model ids |
 | Empty `message.content`, job XML fail | Thinking on; text in `reasoning_content` | [thinking-policy.md](thinking-policy.md); host L2 harness if available |
 | Chat hits MLX `:1322` | Wrong `chat_backend.default` or missing prefix | Set `chat_backend`; use `cf_local/` or `lm_studio/` prefix |
-| cf_local missing from `/v1/models` | Catalog sync failed or credentials missing | Probe inventory view; check `CF_AI_API_KEY` / `CF_ACCOUNT_ID` |
+| cf_local missing from `GET /v1/apis/openai/models` | Catalog sync failed or credentials missing | Probe `?view=inventory`; check `CF_AI_API_KEY` / `CF_ACCOUNT_ID` |
 | cf_local 401/403 | Missing CF credentials | `CF_AI_API_KEY`, `CF_ACCOUNT_ID` |
 | LM Studio errors | Server not started | User starts LM Studio on `:1234` |
 | OCR/embed fails, chat OK | `lm_studio` down or model not allowed | Probe `:1234`; check embed allow-list |
@@ -36,7 +38,7 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 | `POST /v1/chat/completions` returns **429** JSON (`error.type=rate_limit_error`) | Cloudflare Workers AI throttled the account or model (quota 3036, capacity 3040, edge 1015) | Cloudflare throttled you; honor upstream `Retry-After` / `Cf-Ray`. Do not treat as Polypus breaker. |
 | Same path returns **503** JSON (`error.code=polypus_breaker`, `polypus.failure.layer=polypus_breaker`) | Polypus `gobreaker` refused the dial (open or half-open limit) | Polypus will not dial until the open window ends; honor `Retry-After: 30`. `/health/upstreams` is a live snapshot only, not the response body. |
 | `router/…` returns 502 | Switchyard up but chat hop failed | Check Switchyard logs; upstream leaf error (distinct from 503 unavailable) |
-| `router/…` unknown / 400 | Router not in `routers:` or typo | Check `config.yaml` `routers:`; probe `/v1/models` for `router/<name>` |
+| `router/…` unknown / 400 | Router not in `routers:` or typo | Check `config.yaml` `routers:`; probe `GET /v1/apis/openai/models` for `router/<name>` |
 | Passthrough router fails, composed OK | Leaf allow-list or backend | Validate `route.target` leaf in `models.allow` |
 
 ## Logs and traces
@@ -55,7 +57,7 @@ Agent decision order when a job fails:
 | Polypus failure dump API | `GET :1320/debug/failures/<trace_id>` |
 | Switchyard failure dump API | `GET :4000/debug/failures/<trace_id>` |
 | Inference failure JSON (disk) | `POLYPUS_FAILURE_DUMP_DIR` / `SWITCHYARD_FAILURE_DUMP_DIR` (default `logs/inference-failures/`) |
-| Gateway trace noise | Set `POLYPUS_OTEL_SKIP_PATHS=/health,/health/backends,/health/upstreams,/v1/models` |
+| Gateway trace noise | Set `POLYPUS_OTEL_SKIP_PATHS=/health,/health/backends,/health/upstreams,/v1/models,/v1/apis,/v1/apis/openai/models,/v1/apis/systemone/models` |
 
 ## Restart after config change
 

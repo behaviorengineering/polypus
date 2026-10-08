@@ -262,6 +262,7 @@ echo "process-compose TUI (this project only); 0 quit."
 exec process-compose up \
   --config "$POLYPUS_DIR/process-compose.yaml" \
   --shortcuts "$POLYPUS_DIR/process-compose-shortcuts.yaml" \
+  --no-server \
   -U -u "$SOCK" \
   "${NS_FLAGS[@]}" \
   "$@"

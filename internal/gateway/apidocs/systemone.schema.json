@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://polypus.local/schemas/systemone-request.json",
+  "title": "SystemOne evaluate request",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["state", "questions"],
+  "properties": {
+    "model": {
+      "type": "string",
+      "description": "Public model id (for example cf_local/typesafe/jev or typesafe/jev). Omitted uses the gateway default."
+    },
+    "state": {
+      "description": "Opaque state passed to the decider (any JSON value except null)."
+    },
+    "questions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": true,
+      "description": "Question id to question spec objects."
+    }
+  },
+  "x-polypus-operation": {
+    "method": "POST",
+    "path": "/v1/systemone"
+  }
+}

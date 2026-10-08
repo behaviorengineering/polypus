@@ -64,6 +64,21 @@ func TestMergeBackendInventoriesAllowList(t *testing.T) {
 	}
 }
 
+func TestMergeAllowSyntheticMissing(t *testing.T) {
+	live := []openaiModel{{ID: "cf_local/@cf/a", Object: "model", OwnedBy: "cf_local"}}
+	got := mergeAllowSyntheticMissing("cf_local", live, []string{"@cf/a", "typesafe/jev"})
+	seen := map[string]bool{}
+	for _, m := range got {
+		seen[m.ID] = true
+	}
+	if !seen["cf_local/typesafe/jev"] {
+		t.Fatalf("missing allow-only jev: %#v", got)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected live + jev, got %#v", got)
+	}
+}
+
 func TestMergeSeedModelsSkipsDisallowed(t *testing.T) {
 	cfg := config.RouterConfig{
 		Backends: map[string]config.BackendDef{

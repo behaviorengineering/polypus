@@ -91,6 +91,7 @@ backends:
     models:
       sync: true
       allow: [...]
+      systemone_allow: [typesafe/jev]  # optional; defaults to typesafe/jev for SystemOne catalog surface
   lm_studio:
     base_url: http://127.0.0.1:1234/v1
     capabilities: [chat, vision, embed]
@@ -146,17 +147,28 @@ Backend id `router` is reserved. Composed routers return **503** when Switchyard
 
 Build Switchyard: `make switchyard-build` (Rust toolchain per `providers/switchyard/rust-toolchain.toml`).
 
+## API discovery and model catalogs
+
+| HTTP | Returns |
+|------|---------|
+| `GET /v1/apis` | JSON `api_catalog` with links to each API surface, model list URLs, and schema documents |
+| `GET /v1/apis/openai/openapi.yaml` | OpenAPI 3 subset of gateway OpenAI-compatible routes |
+| `GET /v1/apis/systemone/schema.json` | JSON Schema for `POST /v1/systemone` request body (404 when `systemone_backend` disabled) |
+
 ## Inventory vs enabled
 
 | HTTP | Returns |
 |------|---------|
-| `GET /v1/models` | **Enabled** only (`models.allow` when set) |
-| `GET /v1/models?view=inventory` | Full synced upstream catalog |
+| `GET /v1/apis/openai/models` | **Enabled** OpenAI-surface models (`models.allow` when set); excludes SystemOne / JEV ids |
+| `GET /v1/apis/systemone/models` | **Enabled** SystemOne models (`models.systemone_allow`, default `typesafe/jev`) |
+| `GET /v1/models` | Legacy alias of `GET /v1/apis/openai/models` (`Link: </v1/apis/openai/models>; rel="canonical"`) |
+| `GET /v1/apis/openai/models?view=inventory` | Full synced upstream catalog for the OpenAI surface |
+| `GET /v1/apis/systemone/models?view=inventory` | Inventory view for SystemOne-classified models |
 | POST inference | 400 `model_not_allowed` if not in allow list |
 | `POST /v1/admin/models/allow` | Add one model to `models.allow` when it exists in inventory (no separate allow key; optional gateway access key when store is non-empty) |
 | `GET /` | Landing hub with allow form (backend + model) posting to `/v1/admin/models/allow` |
 
-Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.json`.
+Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.json`. On `polypus serve` startup (after CF credential probe), the gateway warms enabled model catalogs into that cache (`POLYPUS_MODELS_WARMUP=off` to skip).
 
 ### Runtime allow overlay and gateway access keys
 
@@ -191,6 +203,7 @@ Overlay POST and key-file changes take effect without restarting `polypus serve`
 | embed | `POST /v1/embeddings` | `lm_studio` |
 | tts | `POST /v1/audio/speech` | `mlx_local`, `cf_local` |
 | stt | `POST /v1/audio/transcriptions` | `mlx_local`, `cf_local` |
+| systemone | `POST /v1/systemone` | `cf_local` (TypeSafe / JEV) |
 
 Router picks: (1) model prefix `backend_id/...`, else (2) `default_*_backend`.
 

@@ -57,6 +57,33 @@ func TestSyntheticAllowModels(t *testing.T) {
 	}
 }
 
+func TestIsSystemOneDownstreamDefault(t *testing.T) {
+	b := BackendDef{
+		ID:           "cf_local",
+		Capabilities: []Capability{CapSystemOne},
+	}
+	if !b.IsSystemOneDownstream("typesafe/jev") {
+		t.Fatal("expected default systemone downstream")
+	}
+	if b.IsSystemOneDownstream("typesafe/other") {
+		t.Fatal("expected only default without systemone_allow")
+	}
+}
+
+func TestIsSystemOneDownstreamExplicitAllow(t *testing.T) {
+	b := BackendDef{
+		ID:           "cf_local",
+		Capabilities: []Capability{CapSystemOne},
+		Models: &BackendModels{
+			SystemOneAllowConfigured: true,
+			SystemOneAllow:           []string{"typesafe/jev", "typesafe/foo"},
+		},
+	}
+	if !b.IsSystemOneDownstream("typesafe/foo") {
+		t.Fatal("expected explicit systemone_allow entry")
+	}
+}
+
 func TestShouldSyncDefault(t *testing.T) {
 	var m *BackendModels
 	if !m.ShouldSync() {
