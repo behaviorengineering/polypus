@@ -25,6 +25,7 @@ type landingLink struct {
 type landingPageData struct {
 	ModelLinks []landingLink
 	OpsLinks   []landingLink
+	OTLPNote   string
 }
 
 const landingPageTmpl = `<!DOCTYPE html>
@@ -40,12 +41,14 @@ main { max-width: 56rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
 @media (max-width: 720px) { .layout { grid-template-columns: 1fr; } }
 .col { text-align: left; min-width: 0; }
 img.banner { display: block; max-width: min(100%, 28rem); height: auto; margin: 0 0 2rem; }
-nav h2 { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #888; margin: 0 0 0.75rem; }
+nav h2, section.notes h2 { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #888; margin: 0 0 0.75rem; }
 ul { list-style: none; padding: 0; margin: 0; }
 li { margin: 0 0 1.25rem; }
 a { color: #7eb8ff; text-decoration: none; font-weight: 600; }
 a:hover { text-decoration: underline; }
 p.desc { margin: 0.35rem 0 0; font-size: 0.9rem; color: #a8a8a8; line-height: 1.45; }
+section.notes { margin-top: 1.75rem; }
+pre.note { margin: 0; padding: 0.75rem; background: #111; border: 1px solid #333; font-size: 0.8rem; line-height: 1.5; overflow-x: auto; white-space: pre; color: #c8c8c8; }
 section.allow { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #333; }
 section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; text-transform: none; letter-spacing: normal; color: #e8e8e8; }
 #allow-form label { display: block; margin-bottom: 0.75rem; font-size: 0.9rem; }
@@ -67,6 +70,10 @@ section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; text-tra
 {{end}}
 </ul>
 </nav>
+{{if .OTLPNote}}<section class="notes" aria-label="OpenTelemetry endpoints">
+<h2>Notes</h2>
+<pre class="note">{{.OTLPNote}}</pre>
+</section>{{end}}
 </div>
 <div class="col col-models">
 <nav aria-label="Models and APIs">
@@ -123,7 +130,8 @@ var landingPageTemplate = template.Must(
 func landingPageDataForRequest(r *http.Request, cfg config.RouterConfig) landingPageData {
 	return landingPageData{
 		ModelLinks: landingModelLinks(cfg),
-		OpsLinks:   landingOpsLinks(cfg),
+		OpsLinks:   landingOpsLinks(r),
+		OTLPNote:   landingOTLPNote(r),
 	}
 }
 
@@ -150,7 +158,7 @@ func landingModelLinks(cfg config.RouterConfig) []landingLink {
 	return links
 }
 
-func landingOpsLinks(cfg config.RouterConfig) []landingLink {
+func landingOpsLinks(r *http.Request) []landingLink {
 	links := []landingLink{
 		{
 			Href:        "/health/backends",
@@ -163,33 +171,40 @@ func landingOpsLinks(cfg config.RouterConfig) []landingLink {
 			Description: "Circuit-breaker state without dialing leaf backends.",
 		},
 	}
-	return append(links, landingObservabilityUILinks(cfg)...)
+	return append(links, landingObservabilityUILinks(r)...)
 }
 
-func landingObservabilityUILinks(cfg config.RouterConfig) []landingLink {
-	if len(cfg.UIProxies) > 0 {
-		out := make([]landingLink, 0, len(cfg.UIProxies))
-		for _, p := range cfg.UIProxies {
-			out = append(out, landingLink{
-				Href:        p.Path + "/",
-				Title:       p.Title,
-				Description: p.Description,
-			})
-		}
-		return out
-	}
+func landingHostPortURL(r *http.Request, port string) string {
+	// Phoenix and HyperDX listen plaintext HTTP on these ports (Tailscale TCP forward).
+	return "http://" + requestHostname(r) + ":" + port
+}
+
+func landingOTLPEndpointURL(r *http.Request, port string) string {
+	// Homelab landing is HTTPS (Tailscale Serve); local make serve is HTTP.
+	return requestScheme(r) + "://" + requestHostname(r) + ":" + port
+}
+
+func landingObservabilityUILinks(r *http.Request) []landingLink {
 	return []landingLink{
 		{
-			Href:        "/phoenix/",
+			Href:        landingHostPortURL(r, "6006") + "/",
 			Title:       "Phoenix (Arize)",
 			Description: "OpenInference LLM traces for chat and router spans.",
 		},
 		{
-			Href:        "/hyperdx/",
+			Href:        landingHostPortURL(r, "8080") + "/",
 			Title:       "HyperDX (OpenTelemetry)",
-			Description: "APM traces and logs behind the gateway path proxy.",
+			Description: "APM traces and logs.",
 		},
 	}
+}
+
+func landingOTLPNote(r *http.Request) string {
+	grpc := landingOTLPEndpointURL(r, "4317")
+	httpURL := landingOTLPEndpointURL(r, "4318")
+	return "OTEL_EXPORTER_OTLP_ENDPOINT\n" +
+		"grpc: " + grpc + "\n" +
+		"http: " + httpURL
 }
 
 func requestScheme(r *http.Request) string {

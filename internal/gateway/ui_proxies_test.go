@@ -61,7 +61,7 @@ backends:
 	}
 }
 
-func TestLandingUsesUIProxyPaths(t *testing.T) {
+func TestLandingUsesHostPortsWhenUIProxiesConfigured(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 	content := `tts_backend:
@@ -101,11 +101,11 @@ backends:
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if strings.Contains(body, ":6006") || strings.Contains(body, ":8080") {
-		t.Fatalf("expected path links, body:\n%s", body)
+	if strings.Contains(body, `href="/phoenix/"`) || strings.Contains(body, `href="/hyperdx/"`) {
+		t.Fatalf("expected port links even with ui_proxies, body:\n%s", body)
 	}
-	if !strings.Contains(body, `href="/phoenix/"`) || !strings.Contains(body, `href="/hyperdx/"`) {
-		t.Fatalf("missing proxy hrefs, body:\n%s", body)
+	if !strings.Contains(body, `href="http://127.0.0.1:6006/"`) || !strings.Contains(body, `href="http://127.0.0.1:8080/"`) {
+		t.Fatalf("missing host-port hrefs, body:\n%s", body)
 	}
 }
 

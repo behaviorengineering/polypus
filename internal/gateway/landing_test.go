@@ -39,6 +39,9 @@ func TestLandingPageHTML(t *testing.T) {
 		t.Fatalf("content-type: %q", ct)
 	}
 	body := rec.Body.String()
+	if strings.Contains(body, `href="http://127.0.0.1:4317"`) || strings.Contains(body, `href="http://127.0.0.1:4318"`) {
+		t.Fatalf("OTLP endpoints must be notes, not links, body:\n%s", body)
+	}
 	for _, want := range []string{
 		`class="layout"`,
 		`class="col col-models"`,
@@ -47,13 +50,18 @@ func TestLandingPageHTML(t *testing.T) {
 		"/health/upstreams",
 		"/v1/apis",
 		"/v1/apis/openai/models",
-		`href="/phoenix/"`,
-		`href="/hyperdx/"`,
+		`href="http://127.0.0.1:6006/"`,
+		`href="http://127.0.0.1:8080/"`,
+		`class="notes"`,
+		"Notes",
 		"Probes each configured backend",
 		"Circuit-breaker state",
 		"Discovery index with model list URLs",
 		"OpenInference LLM traces for chat and router spans",
 		"APM traces and logs",
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"grpc: http://127.0.0.1:4317",
+		"http: http://127.0.0.1:4318",
 		bannerAssetPath,
 		`id="allow-form"`,
 		`name="backend"`,
@@ -115,7 +123,7 @@ func TestLandingWrongAssetPath(t *testing.T) {
 	}
 }
 
-func TestLandingObservabilityUsesPathProxies(t *testing.T) {
+func TestLandingObservabilityUsesHostPorts(t *testing.T) {
 	handler := newLandingTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -125,11 +133,20 @@ func TestLandingObservabilityUsesPathProxies(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	if strings.Contains(body, ":6006") || strings.Contains(body, ":8080") {
-		t.Fatalf("expected path-based observability links, body:\n%s", body)
+	if strings.Contains(body, `href="/phoenix/"`) || strings.Contains(body, `href="/hyperdx/"`) {
+		t.Fatalf("expected port-based observability links, body:\n%s", body)
 	}
-	if !strings.Contains(body, `href="/phoenix/"`) || !strings.Contains(body, `href="/hyperdx/"`) {
-		t.Fatalf("missing path proxy hrefs, body:\n%s", body)
+	if !strings.Contains(body, `href="http://polypus.example:6006/"`) || !strings.Contains(body, `href="http://polypus.example:8080/"`) {
+		t.Fatalf("missing host-port hrefs, body:\n%s", body)
+	}
+	if strings.Contains(body, `href="https://polypus.example:4317"`) || strings.Contains(body, `href="https://polypus.example:4318"`) {
+		t.Fatalf("OTLP endpoints must be notes, not links, body:\n%s", body)
+	}
+	if !strings.Contains(body, "grpc: https://polypus.example:4317") {
+		t.Fatalf("missing OTLP gRPC https scheme in note, body:\n%s", body)
+	}
+	if !strings.Contains(body, "http: https://polypus.example:4318") {
+		t.Fatalf("missing OTLP HTTP https scheme in note, body:\n%s", body)
 	}
 }
 

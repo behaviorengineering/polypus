@@ -15,7 +15,6 @@ services:
       - "${PHOENIX_OTLP_PORT:-4317}:4317"
     environment:
       PHOENIX_WORKING_DIR: /data
-      PHOENIX_HOST_ROOT_PATH: /phoenix
     volumes:
       - phoenix_data:/data
 
@@ -26,9 +25,6 @@ services:
     environment:
       HYPERDX_OTEL_EXPORTER_TABLES_TTL: ${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-1h}
       HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL: ${HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL:-false}
-      HYPERDX_BASE_PATH: /hyperdx
-      NEXT_PUBLIC_HYPERDX_BASE_PATH: /hyperdx
-      FRONTEND_URL: http://127.0.0.1:1320/hyperdx
     ports:
       - "${HYPERDX_PORT:-8080}:8080"
       - "${HYPERDX_OTLP_GRPC_PORT:-4319}:4317"
