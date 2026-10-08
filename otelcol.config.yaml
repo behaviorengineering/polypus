@@ -1,0 +1,60 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+connectors:
+  routing:
+    default_pipelines: [traces/hyperdx]
+    table:
+      - condition: span.attributes["openinference.span.kind"] != nil
+        action: copy
+        pipelines: [traces/phoenix]
+      - condition: span.attributes["gen_ai.system"] != nil
+        action: copy
+        pipelines: [traces/phoenix]
+      - condition: span.attributes["gen_ai.operation.name"] != nil
+        action: copy
+        pipelines: [traces/phoenix]
+
+exporters:
+  otlp/phoenix:
+    endpoint: phoenix:4317
+    tls:
+      insecure: true
+  otlp/hyperdx:
+    endpoint: hyperdx:4317
+    tls:
+      insecure: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [routing]
+    traces/phoenix:
+      receivers: [routing]
+      exporters: [otlp/phoenix]
+    traces/hyperdx:
+      receivers: [routing]
+      exporters: [otlp/hyperdx]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/hyperdx]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/hyperdx]

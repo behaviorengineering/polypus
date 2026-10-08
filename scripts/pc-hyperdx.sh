@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# HyperDX / ClickStack local container (OTLP host :4319/:4318, UI :8080).
-# Phoenix keeps OTLP :4317 for OpenInference; app traces use HyperDX ports.
+# HyperDX / ClickStack local container (UI :8080; OTLP internal only, ingest via otelcol on host :4317/:4318).
 set -euo pipefail
 
 POLYPUS_DIR="${POLYPUS_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"

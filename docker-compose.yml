@@ -1,7 +1,8 @@
-# Observability containers (process-compose via scripts/pc-phoenix.sh / pc-hyperdx.sh).
+# Observability containers (process-compose via scripts/pc-*.sh).
 # Host gateway: make serve (process-compose).
-# Phoenix: POLYPUS_PHOENIX=1 (default). HyperDX: POLYPUS_HYPERDX=1 (default).
-# OTLP: Phoenix keeps host :4317 (OpenInference). HyperDX uses :4319 (gRPC) and :4318 (HTTP).
+# Phoenix: POLYPUS_PHOENIX=1 (default). HyperDX: POLYPUS_HYPERDX=1 (default). OTel fan-out: otelcol.
+# OTLP ingest on host :4317 (gRPC) and :4318 (HTTP) via otelcol; routes all traces to HyperDX and
+# OpenInference / gen_ai.* spans to Phoenix. UIs: Phoenix :6006, HyperDX :8080.
 # HyperDX OTel table TTL: HYPERDX_OTEL_EXPORTER_TABLES_TTL (default 1h). ClickStack ignores
 # custom exporter overrides for the built-in clickhouse exporter; use the env var instead.
 # Set HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL=true once to rewrite existing table TTLs.
@@ -12,7 +13,6 @@ services:
     restart: "no"
     ports:
       - "${PHOENIX_PORT:-6006}:6006"
-      - "${PHOENIX_OTLP_PORT:-4317}:4317"
     environment:
       PHOENIX_WORKING_DIR: /data
     volumes:
@@ -27,13 +27,28 @@ services:
       HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL: ${HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL:-false}
     ports:
       - "${HYPERDX_PORT:-8080}:8080"
-      - "${HYPERDX_OTLP_GRPC_PORT:-4319}:4317"
-      - "${HYPERDX_OTLP_HTTP_PORT:-4318}:4318"
     volumes:
       - ./hyperdx.clickhouse.config.xml:/etc/clickhouse-server/config.d/99-polypus-system-log-retention.xml:ro
       - hyperdx_db:/data/db
       - hyperdx_ch_data:/var/lib/clickhouse
       - hyperdx_ch_logs:/var/log/clickhouse-server
+
+  otelcol:
+    image: ${OTELCOL_IMAGE:-otel/opentelemetry-collector-contrib:0.120.0}
+    container_name: polypus-otelcol
+    restart: "no"
+    command: ["--config=/etc/otelcol/config.yaml"]
+    ports:
+      - "${OTELCOL_OTLP_GRPC_PORT:-4317}:4317"
+      - "${OTELCOL_OTLP_HTTP_PORT:-4318}:4318"
+      - "${OTELCOL_HEALTH_PORT:-13133}:13133"
+    volumes:
+      - ./otelcol.config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      phoenix:
+        condition: service_started
+      hyperdx:
+        condition: service_started
 
 volumes:
   phoenix_data:

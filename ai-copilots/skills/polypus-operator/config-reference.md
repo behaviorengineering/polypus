@@ -20,8 +20,9 @@ CI: PRs run hermetic `go test -tags=integration` (temp config from `internal/smo
 | Switchyard | `127.0.0.1:4000` | Composed named routers (`stage_router`) |
 | MLX | `127.0.0.1:1322` | Local TTS/STT (Apple Silicon) |
 | LM Studio | `127.0.0.1:1234` | External; chat, vision, embed |
-| Phoenix UI | `127.0.0.1:6006` | Trace viewer |
-| Phoenix OTLP | `127.0.0.1:4317` | gRPC collector |
+| Phoenix UI | `127.0.0.1:6006` | Trace viewer (LLM / OpenInference spans) |
+| HyperDX UI | `127.0.0.1:8080` | APM traces and logs |
+| OTLP ingest | `127.0.0.1:4317` (gRPC), `127.0.0.1:4318` (HTTP) | `polypus-otelcol` fan-out to HyperDX and Phoenix |
 
 Cloudflare (`cf_local`) has no separate port; it runs in-process when configured with CF credentials. CF TTS/STT enter Bifrost; a PreLLMHook plugin short-circuits them onto `/ai/run` (Workers AI has no `/ai/v1/audio/*`).
 

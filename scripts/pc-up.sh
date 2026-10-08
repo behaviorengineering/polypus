@@ -51,10 +51,10 @@ export POLYPUS_SWITCHYARD_PORT="${POLYPUS_SWITCHYARD_PORT:-4000}"
 export POLYPUS_CONFIG="${POLYPUS_CONFIG:-}"
 export POLYPUS_BACKEND_URL="${POLYPUS_BACKEND_URL:-}"
 export PHOENIX_PORT="${PHOENIX_PORT:-6006}"
-export PHOENIX_OTLP_PORT="${PHOENIX_OTLP_PORT:-4317}"
 export HYPERDX_PORT="${HYPERDX_PORT:-8080}"
-export HYPERDX_OTLP_GRPC_PORT="${HYPERDX_OTLP_GRPC_PORT:-4319}"
-export HYPERDX_OTLP_HTTP_PORT="${HYPERDX_OTLP_HTTP_PORT:-4318}"
+export OTELCOL_OTLP_GRPC_PORT="${OTELCOL_OTLP_GRPC_PORT:-4317}"
+export OTELCOL_OTLP_HTTP_PORT="${OTELCOL_OTLP_HTTP_PORT:-4318}"
+export OTELCOL_HEALTH_PORT="${OTELCOL_HEALTH_PORT:-13133}"
 # ClickStack OTel table TTL (custom exporter yaml cannot override the built-in clickhouse exporter).
 export HYPERDX_OTEL_EXPORTER_TABLES_TTL="${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-1h}"
 # false by default; set true once to rewrite existing otel_* table TTL metadata.
@@ -222,6 +222,10 @@ if [[ "$ENABLE_PHOENIX" == "1" || "$ENABLE_HYPERDX" == "1" ]]; then
   if _polypus_docker_ok; then
     [[ "$ENABLE_PHOENIX" == "1" ]] && NAMESPACES+=(obs)
     [[ "$ENABLE_HYPERDX" == "1" ]] && NAMESPACES+=(hyperdx)
+    if [[ "$ENABLE_PHOENIX" == "1" && "$ENABLE_HYPERDX" == "1" ]]; then
+      NAMESPACES+=(otelcol)
+      export POLYPUS_OTLP_ENDPOINT="${POLYPUS_OTLP_ENDPOINT:-http://127.0.0.1:${OTELCOL_OTLP_GRPC_PORT}}"
+    fi
   else
     _polypus_confirm_continue_without_docker "$ENABLE_PHOENIX" "$ENABLE_HYPERDX"
     echo "Skipping observability containers this run." >&2
@@ -252,10 +256,13 @@ done
 
 echo "Polypus gateway: http://${POLYPUS_HOST}:${POLYPUS_PORT}/  namespaces: ${NAMESPACES[*]}"
 if [[ " ${NAMESPACES[*]} " == *" obs "* ]]; then
-  echo "Phoenix UI: http://127.0.0.1:${PHOENIX_PORT}/  OTLP gRPC: 127.0.0.1:${PHOENIX_OTLP_PORT} (OpenInference)"
+  echo "Phoenix UI: http://127.0.0.1:${PHOENIX_PORT}/ (OpenInference via otelcol fan-out)"
 fi
 if [[ " ${NAMESPACES[*]} " == *" hyperdx "* ]]; then
-  echo "HyperDX UI: http://127.0.0.1:${HYPERDX_PORT}/  OTLP gRPC: 127.0.0.1:${HYPERDX_OTLP_GRPC_PORT}  OTLP HTTP: 127.0.0.1:${HYPERDX_OTLP_HTTP_PORT} (app traces)"
+  echo "HyperDX UI: http://127.0.0.1:${HYPERDX_PORT}/ (all traces via otelcol fan-out)"
+fi
+if [[ " ${NAMESPACES[*]} " == *" otelcol "* ]]; then
+  echo "OTLP ingest: gRPC 127.0.0.1:${OTELCOL_OTLP_GRPC_PORT}  HTTP 127.0.0.1:${OTELCOL_OTLP_HTTP_PORT}"
 fi
 echo "process-compose TUI (this project only); 0 quit."
 

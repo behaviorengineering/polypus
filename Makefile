@@ -96,7 +96,7 @@ mlx-sync:
 	./backends/mlx/scripts/sync.sh
 
 serve: build
-	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-phoenix.sh scripts/pc-hyperdx.sh scripts/pc-switchyard.sh
+	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-phoenix.sh scripts/pc-hyperdx.sh scripts/pc-otelcol.sh scripts/pc-switchyard.sh
 	./scripts/pc-up.sh
 
 serve-down:
