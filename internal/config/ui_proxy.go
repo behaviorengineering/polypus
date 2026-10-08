@@ -13,6 +13,8 @@ type UIProxy struct {
 	URL         string
 	Title       string
 	Description string
+	// StripPrefix removes the public path before forwarding (default true; Phoenix).
+	StripPrefix bool
 }
 
 type uiProxyFile struct {
@@ -20,6 +22,7 @@ type uiProxyFile struct {
 	URL         string `yaml:"url"`
 	Title       string `yaml:"title"`
 	Description string `yaml:"description"`
+	StripPrefix *bool  `yaml:"strip_prefix"`
 }
 
 var reservedUIProxyPrefixes = []string{"/v1", "/health", "/debug", "/media"}
@@ -67,11 +70,16 @@ func ParseUIProxies(entries []uiProxyFile) ([]UIProxy, error) {
 		if desc == "" {
 			desc = defaultUIProxyDescription(path)
 		}
+		stripPrefix := true
+		if e.StripPrefix != nil {
+			stripPrefix = *e.StripPrefix
+		}
 		out = append(out, UIProxy{
 			Path:        path,
 			URL:         strings.TrimRight(u.String(), "/"),
 			Title:       title,
 			Description: desc,
+			StripPrefix: stripPrefix,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

@@ -109,6 +109,24 @@ backends:
 	}
 }
 
+func TestUIProxyPreservesPrefix(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/hyperdx/search" {
+			t.Fatalf("path: got %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	proxy := newUIReverseProxy("/hyperdx", mustParseURL(upstream.URL), false)
+	req := httptest.NewRequest(http.MethodGet, "/hyperdx/search", nil)
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+}
+
 func TestUIProxyForwardsUpgradeHeader(t *testing.T) {
 	var sawUpgrade bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +135,7 @@ func TestUIProxyForwardsUpgradeHeader(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	proxy := newUIReverseProxy("/phoenix", mustParseURL(upstream.URL))
+	proxy := newUIReverseProxy("/phoenix", mustParseURL(upstream.URL), true)
 	req := httptest.NewRequest(http.MethodGet, "/phoenix/ws", nil)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "websocket")

@@ -91,11 +91,14 @@ func TestPartitionModels(t *testing.T) {
 		{ID: "typesafe/jev", Object: "model"},
 		{ID: "router/alpha", Object: "model", OwnedBy: "polypus"},
 	}
-	openai := partitionModels(cfg, all, surfaceOpenAI)
+	openai := modelsForSurface(cfg, all, surfaceOpenAI)
 	for _, m := range openai {
 		if stringsContainsJEV(m.ID) {
 			t.Fatalf("openai surface leaked JEV: %q", m.ID)
 		}
+	}
+	if len(openai) != 2 {
+		t.Fatalf("openai deduped aliases: %#v", openai)
 	}
 	if !containsModelID(openai, "cf_local/@cf/a") {
 		t.Fatalf("openai missing chat model: %#v", openai)
@@ -103,13 +106,41 @@ func TestPartitionModels(t *testing.T) {
 	if !containsModelID(openai, "router/alpha") {
 		t.Fatalf("openai missing router: %#v", openai)
 	}
+	if containsModelID(openai, "@cf/a") {
+		t.Fatalf("openai should drop bare alias: %#v", openai)
+	}
 
-	sys := partitionModels(cfg, all, surfaceSystemOne)
-	if !containsModelID(sys, "cf_local/typesafe/jev") || !containsModelID(sys, "typesafe/jev") {
-		t.Fatalf("systemone missing jev: %#v", sys)
+	sys := modelsForSurface(cfg, all, surfaceSystemOne)
+	if len(sys) != 1 || sys[0].ID != "cf_local/typesafe/jev" {
+		t.Fatalf("systemone deduped jev: %#v", sys)
 	}
 	if containsModelID(sys, "cf_local/@cf/a") {
 		t.Fatalf("systemone leaked chat: %#v", sys)
+	}
+}
+
+func TestModelsForSurfaceDedupeSystemOneDualAllowIDs(t *testing.T) {
+	cfg := mixedSystemOneRouterConfig()
+	b := cfg.Backends["cf_local"]
+	b.Models.SystemOneAllowConfigured = true
+	b.Models.SystemOneAllow = []string{"typesafe/jev", "@cf/typesafe/jev"}
+	cfg.Backends["cf_local"] = b
+	all := []openaiModel{
+		{ID: "@cf/typesafe/jev", Object: "model", OwnedBy: "cf_local"},
+		{ID: "cf_local/@cf/typesafe/jev", Object: "model", OwnedBy: "cf_local"},
+		{ID: "typesafe/jev", Object: "model", OwnedBy: "cf_local"},
+		{ID: "cf_local/typesafe/jev", Object: "model", OwnedBy: "cf_local"},
+	}
+	sys := modelsForSurface(cfg, all, surfaceSystemOne)
+	if len(sys) != 2 {
+		t.Fatalf("expected two downstream ids, got %#v", sys)
+	}
+	ids := map[string]bool{}
+	for _, m := range sys {
+		ids[m.ID] = true
+	}
+	if !ids["cf_local/typesafe/jev"] || !ids["cf_local/@cf/typesafe/jev"] {
+		t.Fatalf("ids: %v", ids)
 	}
 }
 

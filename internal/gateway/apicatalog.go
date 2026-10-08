@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -172,7 +173,86 @@ func partitionModels(cfg config.RouterConfig, all []openaiModel, surface ModelSu
 }
 
 func modelsForSurface(cfg config.RouterConfig, all []openaiModel, surface ModelSurface) []openaiModel {
-	return partitionModels(cfg, all, surface)
+	part := partitionModels(cfg, all, surface)
+	return dedupeModelsByBackendDownstream(cfg, part)
+}
+
+// lookupModelForSurface finds a model by public id or an equivalent default-backend alias.
+func lookupModelForSurface(cfg config.RouterConfig, all []openaiModel, surface ModelSurface, id string) (openaiModel, bool) {
+	models := modelsForSurface(cfg, all, surface)
+	wantKey := catalogModelKey(cfg, id)
+	for _, m := range models {
+		if m.ID == id || catalogModelKey(cfg, m.ID) == wantKey {
+			return m, true
+		}
+	}
+	return openaiModel{}, false
+}
+
+// dedupeModelsByBackendDownstream keeps one public id per backend/downstream (drops default-backend bare aliases).
+func dedupeModelsByBackendDownstream(cfg config.RouterConfig, models []openaiModel) []openaiModel {
+	if len(models) < 2 {
+		return models
+	}
+	byKey := make(map[string]openaiModel, len(models))
+	for _, m := range models {
+		key := catalogModelKey(cfg, m.ID)
+		cur, ok := byKey[key]
+		if !ok || preferCatalogModelID(m.ID, cur.ID, catalogModelBackend(cfg, m.ID)) == m.ID {
+			byKey[key] = m
+		}
+	}
+	out := make([]openaiModel, 0, len(byKey))
+	for _, m := range byKey {
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func catalogModelBackend(cfg config.RouterConfig, publicID string) string {
+	backendID, _ := backendAndDownstreamForPublicID(cfg, publicID)
+	return backendID
+}
+
+func catalogModelKey(cfg config.RouterConfig, publicID string) string {
+	publicID = strings.TrimSpace(publicID)
+	if strings.HasPrefix(publicID, config.RouterIDPrefix) {
+		return publicID
+	}
+	backendID, down := backendAndDownstreamForPublicID(cfg, publicID)
+	backendID = strings.TrimSpace(backendID)
+	down = strings.TrimSpace(down)
+	if backendID == "" || down == "" {
+		return publicID
+	}
+	return backendID + "/" + down
+}
+
+func preferCatalogModelID(a, b, backendID string) string {
+	ra, rb := catalogModelIDRank(a, backendID), catalogModelIDRank(b, backendID)
+	if ra < rb {
+		return a
+	}
+	if rb < ra {
+		return b
+	}
+	if len(a) <= len(b) {
+		return a
+	}
+	return b
+}
+
+func catalogModelIDRank(id, backendID string) int {
+	id = strings.TrimSpace(id)
+	prefix := backendID + "/"
+	if strings.HasPrefix(id, prefix) {
+		return 0
+	}
+	if strings.Contains(id, "/") {
+		return 2
+	}
+	return 1
 }
 
 func systemOneAPIEnabled(cfg config.RouterConfig) bool {

@@ -214,16 +214,13 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface ModelSurface, pathPr
 	id = strings.TrimSpace(id)
 	asInventory := inventoryView(r)
 	all := h.collectModelsForRetrieve(r, asInventory, id)
-	models := modelsForSurface(cfg, all, surface)
-	for _, m := range models {
-		if m.ID == id {
-			if surface == surfaceOpenAI {
-				setOpenAIModelsCanonicalLink(w)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			encodeJSON(w, m)
-			return
+	if m, ok := lookupModelForSurface(cfg, all, surface, id); ok {
+		if surface == surfaceOpenAI {
+			setOpenAIModelsCanonicalLink(w)
 		}
+		w.Header().Set("Content-Type", "application/json")
+		encodeJSON(w, m)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotFound)

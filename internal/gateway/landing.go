@@ -122,28 +122,35 @@ var landingPageTemplate = template.Must(
 
 func landingPageDataForRequest(r *http.Request, cfg config.RouterConfig) landingPageData {
 	return landingPageData{
-		ModelLinks: []landingLink{
-			{
-				Href:        "/v1/apis",
-				Title:       "API catalog",
-				Description: "REST index of OpenAI and SystemOne APIs with links to model lists and schemas.",
-			},
-			{
-				Href:        "/v1/apis/openai/models",
-				Title:       "OpenAI models",
-				Description: "Chat, vision, embed, audio, and router models enabled on this gateway.",
-			},
-			{
-				Href:        "/v1/apis/systemone/models",
-				Title:       "SystemOne models",
-				Description: "TypeSafe / JEV decider models (POST /v1/systemone).",
-			},
-		},
-		OpsLinks: landingOpsLinks(r, cfg),
+		ModelLinks: landingModelLinks(cfg),
+		OpsLinks:   landingOpsLinks(cfg),
 	}
 }
 
-func landingOpsLinks(r *http.Request, cfg config.RouterConfig) []landingLink {
+func landingModelLinks(cfg config.RouterConfig) []landingLink {
+	links := []landingLink{
+		{
+			Href:        "/v1/apis",
+			Title:       "API catalog",
+			Description: "Discovery index with model list URLs for each API surface.",
+		},
+		{
+			Href:        "/v1/apis/openai/models",
+			Title:       "OpenAI models (enabled)",
+			Description: "Chat, vision, embed, audio, and router models allowed on this gateway.",
+		},
+	}
+	if cfg.EffectiveSystemOneBackend() != "" {
+		links = append(links, landingLink{
+			Href:        "/v1/apis/systemone/models",
+			Title:       "SystemOne models",
+			Description: "TypeSafe and JEV decider models (POST /v1/systemone).",
+		})
+	}
+	return links
+}
+
+func landingOpsLinks(cfg config.RouterConfig) []landingLink {
 	links := []landingLink{
 		{
 			Href:        "/health/backends",
@@ -156,37 +163,33 @@ func landingOpsLinks(r *http.Request, cfg config.RouterConfig) []landingLink {
 			Description: "Circuit-breaker state without dialing leaf backends.",
 		},
 	}
+	return append(links, landingObservabilityUILinks(cfg)...)
+}
+
+func landingObservabilityUILinks(cfg config.RouterConfig) []landingLink {
 	if len(cfg.UIProxies) > 0 {
+		out := make([]landingLink, 0, len(cfg.UIProxies))
 		for _, p := range cfg.UIProxies {
-			href := p.Path + "/"
-			links = append(links, landingLink{
-				Href:        href,
+			out = append(out, landingLink{
+				Href:        p.Path + "/",
 				Title:       p.Title,
 				Description: p.Description,
 			})
 		}
-		return links
+		return out
 	}
-	base := siblingUIBaseURL(r)
-	links = append(links,
-		landingLink{
-			Href:        base + ":6006/",
+	return []landingLink{
+		{
+			Href:        "/phoenix/",
 			Title:       "Phoenix (Arize)",
-			Description: "OpenInference LLM traces for chat and router spans (OTLP gRPC :4317).",
+			Description: "OpenInference LLM traces for chat and router spans.",
 		},
-		landingLink{
-			Href:        base + ":8080/",
+		{
+			Href:        "/hyperdx/",
 			Title:       "HyperDX (OpenTelemetry)",
-			Description: "App traces and logs (OTLP gRPC :4319, HTTP :4318).",
+			Description: "APM traces and logs behind the gateway path proxy.",
 		},
-	)
-	return links
-}
-
-func siblingUIBaseURL(r *http.Request) string {
-	scheme := requestScheme(r)
-	host := requestHostname(r)
-	return scheme + "://" + host
+	}
 }
 
 func requestScheme(r *http.Request) string {

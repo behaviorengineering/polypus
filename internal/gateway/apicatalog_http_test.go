@@ -95,7 +95,10 @@ backends:
 	_ = link
 
 	sysBody := getModelsList(t, handler, "/v1/apis/systemone/models")
-	if !strings.Contains(sysBody, "typesafe/jev") {
+	if strings.Contains(sysBody, `"id":"typesafe/jev"`) {
+		t.Fatalf("systemone should not list bare alias duplicate: %s", sysBody)
+	}
+	if !strings.Contains(sysBody, "cf_local/typesafe/jev") {
 		t.Fatalf("systemone missing JEV: %s", sysBody)
 	}
 

@@ -47,14 +47,13 @@ func TestLandingPageHTML(t *testing.T) {
 		"/health/upstreams",
 		"/v1/apis",
 		"/v1/apis/openai/models",
-		"/v1/apis/systemone/models",
-		"http://127.0.0.1:6006/",
-		"http://127.0.0.1:8080/",
+		`href="/phoenix/"`,
+		`href="/hyperdx/"`,
 		"Probes each configured backend",
 		"Circuit-breaker state",
-		"REST index of OpenAI and SystemOne APIs with links to model lists and schemas.",
+		"Discovery index with model list URLs",
 		"OpenInference LLM traces for chat and router spans",
-		"App traces and logs",
+		"APM traces and logs",
 		bannerAssetPath,
 		`id="allow-form"`,
 		`name="backend"`,
@@ -116,7 +115,7 @@ func TestLandingWrongAssetPath(t *testing.T) {
 	}
 }
 
-func TestLandingSiblingURLsRespectForwardedProto(t *testing.T) {
+func TestLandingObservabilityUsesPathProxies(t *testing.T) {
 	handler := newLandingTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -126,11 +125,11 @@ func TestLandingSiblingURLsRespectForwardedProto(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "https://polypus.example:6006/") {
-		t.Fatalf("expected https sibling phoenix link, body:\n%s", body)
+	if strings.Contains(body, ":6006") || strings.Contains(body, ":8080") {
+		t.Fatalf("expected path-based observability links, body:\n%s", body)
 	}
-	if !strings.Contains(body, "https://polypus.example:8080/") {
-		t.Fatalf("expected https sibling hyperdx link, body:\n%s", body)
+	if !strings.Contains(body, `href="/phoenix/"`) || !strings.Contains(body, `href="/hyperdx/"`) {
+		t.Fatalf("missing path proxy hrefs, body:\n%s", body)
 	}
 }
 

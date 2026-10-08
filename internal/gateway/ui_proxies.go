@@ -28,27 +28,31 @@ func buildUIMounts(proxies []config.UIProxy) ([]uiProxyMount, error) {
 		}
 		mounts = append(mounts, uiProxyMount{
 			prefix:  p.Path,
-			handler: newUIReverseProxy(p.Path, target),
+			handler: newUIReverseProxy(p.Path, target, p.StripPrefix),
 			meta:    p,
 		})
 	}
 	return mounts, nil
 }
 
-func newUIReverseProxy(prefix string, target *url.URL) http.Handler {
+func newUIReverseProxy(prefix string, target *url.URL, stripPrefix bool) http.Handler {
 	prefix = strings.TrimSuffix(prefix, "/")
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.Out.Host = target.Host
 			inPath := pr.In.URL.Path
-			suffix := strings.TrimPrefix(inPath, prefix)
-			if suffix == "" {
-				suffix = "/"
-			} else if !strings.HasPrefix(suffix, "/") {
-				suffix = "/" + suffix
+			outPath := inPath
+			if stripPrefix {
+				suffix := strings.TrimPrefix(inPath, prefix)
+				if suffix == "" {
+					suffix = "/"
+				} else if !strings.HasPrefix(suffix, "/") {
+					suffix = "/" + suffix
+				}
+				outPath = suffix
 			}
-			pr.Out.URL.Path = suffix
+			pr.Out.URL.Path = outPath
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 			if prefix != "" {
 				pr.Out.Header.Set("X-Forwarded-Prefix", prefix)
