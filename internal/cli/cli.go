@@ -9,9 +9,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// version is set by GoReleaser via -ldflags -X .../internal/cli.version=...
-var version = "dev"
-
 // Run dispatches polypus subcommands. Returns a process exit code.
 func Run(args []string) int {
 	root := newRoot()

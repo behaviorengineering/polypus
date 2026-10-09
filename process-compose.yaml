@@ -1,7 +1,7 @@
 # Polypus gateway + backends (standalone process-compose project).
 # Start: make serve  (or: scripts/pc-up.sh)
 # Stop:  make serve-down
-# Namespaces: pc-up.sh selects core plus mlx, obs (Phoenix), and hyperdx.
+# Namespaces: pc-up.sh selects core plus mlx, obs (Phoenix), hyperdx, and otelcol.
 
 version: "0.5"
 
@@ -22,10 +22,10 @@ environment:
   - "CF_AI_API_KEY=${CF_AI_API_KEY}"
   - "CF_ACCOUNT_ID=${CF_ACCOUNT_ID}"
   - "PHOENIX_PORT=${PHOENIX_PORT}"
-  - "PHOENIX_OTLP_PORT=${PHOENIX_OTLP_PORT}"
   - "HYPERDX_PORT=${HYPERDX_PORT}"
-  - "HYPERDX_OTLP_GRPC_PORT=${HYPERDX_OTLP_GRPC_PORT}"
-  - "HYPERDX_OTLP_HTTP_PORT=${HYPERDX_OTLP_HTTP_PORT}"
+  - "OTELCOL_OTLP_GRPC_PORT=${OTELCOL_OTLP_GRPC_PORT}"
+  - "OTELCOL_OTLP_HTTP_PORT=${OTELCOL_OTLP_HTTP_PORT}"
+  - "OTELCOL_HEALTH_PORT=${OTELCOL_HEALTH_PORT}"
   - "HYPERDX_OTEL_EXPORTER_TABLES_TTL=${HYPERDX_OTEL_EXPORTER_TABLES_TTL}"
   - "HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL=${HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL}"
   - "POLYPUS_OTEL=${POLYPUS_OTEL}"
@@ -90,6 +90,24 @@ processes:
     shutdown:
       signal: 15
       timeout_seconds: 60
+
+  otelcol:
+    namespace: otelcol
+    command: "${POLYPUS_DIR}/scripts/pc-otelcol.sh"
+    working_dir: "${POLYPUS_DIR}"
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 13133
+        path: /
+      period_seconds: 5
+      failure_threshold: 24
+    availability:
+      restart: on_failure
+      backoff_seconds: 5
+    shutdown:
+      signal: 15
+      timeout_seconds: 30
 
   gateway:
     namespace: core

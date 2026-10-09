@@ -18,6 +18,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 const (
@@ -229,7 +230,9 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, modelsTimeout)
+	defer cancel()
+	resp, err := outbound.Do(ctx, outbound.DepCloudflare, c.httpClient, req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("cloudflare models: fetch: %w", err)
 	}

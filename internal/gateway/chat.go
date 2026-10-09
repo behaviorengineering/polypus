@@ -14,6 +14,7 @@ import (
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 const (
@@ -186,7 +187,12 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 	} else if client == nil {
 		client = newChatProxyClient(0)
 	}
-	resp, err := client.Do(req)
+	var resp *http.Response
+	if streaming {
+		resp, err = client.Do(req)
+	} else {
+		resp, err = outbound.Do(ctx, outbound.DepGateway, client, req)
+	}
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "post").
 			With("target", target)

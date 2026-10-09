@@ -88,7 +88,7 @@ Default model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`
 
 Router smoke integration requires Switchyard routing metadata: response header `x-model-router-selected-model` (or body `model` = served leaf). `polypus.Smoke` Options `RequireSelectedModel` and `AllowedSelectedModels` enforce that leaf is present and in the configured capable/efficient set.
 
-**Tracing:** On composed router chat, the gateway `polypus.router` span sets `polypus.downstream_model` when Switchyard returns selected-model metadata. Switchyard child spans already record `gen_ai.request.model` on `libsy.client_call`. Phoenix (`POLYPUS_OTLP_ENDPOINT`, default `http://127.0.0.1:4317`) shows both.
+**Tracing:** On composed router chat, the gateway `polypus.router` span sets `polypus.downstream_model` when Switchyard returns selected-model metadata. Switchyard child spans already record `gen_ai.request.model` on `libsy.client_call`. Gateway and Switchyard export to `polypus-otelcol` (`POLYPUS_OTLP_ENDPOINT`, default `http://127.0.0.1:4317` when Phoenix and HyperDX containers run); the collector copies all traces to HyperDX and OpenInference / `gen_ai.*` spans to Phoenix.
 
 ### 3c. Smoke OpenAI batch facade
 
@@ -163,9 +163,10 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 ## Observability
 
 - Phoenix UI: http://127.0.0.1:6006 (LLM / OpenInference)
-- Phoenix OTLP gRPC: `:4317` (`openinference.endpoint` for clients)
 - HyperDX UI: http://127.0.0.1:8080 (app traces / logs)
-- HyperDX OTLP: gRPC `:4319`, HTTP `:4318` (point app `olly` / OTEL exporters here; keep Phoenix on `:4317`)
+- OTLP ingest (gateway, Switchyard, clients): gRPC `127.0.0.1:4317`, HTTP `127.0.0.1:4318` via `polypus-otelcol` (`otelcol.config.yaml` routing: all traces to HyperDX; OpenInference / `gen_ai.*` spans also copied to Phoenix)
+- OTel fan-out integration smoke: `POLYPUS_SMOKE_OTEL=1 make smoke-otel` (Docker `phoenix`, `hyperdx`, `otelcol`; matches `make serve` obs stack). Homelab host: `make smoke-collector` from `polypus-local` after deploy or serve.
+- `POLYPUS_OTLP_ENDPOINT` defaults to `http://127.0.0.1:4317` when both `POLYPUS_PHOENIX=1` and `POLYPUS_HYPERDX=1` (set by `pc-up.sh`); use `${POLYPUS_OTLP_ENDPOINT}` for `openinference.endpoint` in client configs
 - HyperDX OTel table TTL: `HYPERDX_OTEL_EXPORTER_TABLES_TTL` (default `1h`); set `HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL=true` once to rewrite existing `otel_*` table TTLs
 - HyperDX ClickHouse system-log TTL: 7 days via `hyperdx.clickhouse.config.xml` (separate from OTel retention)
 - Failure dumps: `logs/inference-failures/` via [olly](https://github.com/behaviorengineering/olly)

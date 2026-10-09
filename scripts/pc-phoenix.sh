@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Arize Phoenix container (OTLP :4317, UI :6006) for process-compose obs namespace.
+# Arize Phoenix container (UI :6006; OTLP internal only, ingest via otelcol on host :4317) for obs namespace.
 set -euo pipefail
 
 POLYPUS_DIR="${POLYPUS_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
