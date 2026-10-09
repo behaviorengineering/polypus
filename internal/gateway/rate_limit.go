@@ -33,8 +33,36 @@ func writeRateLimitError(w http.ResponseWriter, err error) bool {
 	if ray := derrors.Field(err, cloudflare.FieldCFRay); ray != "" {
 		w.Header().Set("Cf-Ray", ray)
 	}
+	setRateLimitExtraHeaders(w, err)
 	writeOpenAIJSON(w, http.StatusTooManyRequests, openaiErrorBody{Error: openaiRateLimitError(err)})
 	return true
+}
+
+func setRateLimitExtraHeaders(w http.ResponseWriter, err error) {
+	for e := err; e != nil; {
+		de, ok := e.(*derrors.Error)
+		if !ok || de == nil {
+			u, ok := e.(interface{ Unwrap() error })
+			if !ok {
+				break
+			}
+			e = u.Unwrap()
+			continue
+		}
+		for k, v := range de.Fields() {
+			if !strings.HasPrefix(k, cloudflare.FieldHeaderPrefix) {
+				continue
+			}
+			name := strings.TrimPrefix(k, cloudflare.FieldHeaderPrefix)
+			if name == "" {
+				continue
+			}
+			if v = strings.TrimSpace(v); v != "" {
+				w.Header().Set(name, v)
+			}
+		}
+		e = de.Unwrap()
+	}
 }
 
 func openaiRateLimitBody(status int, header http.Header, body []byte) ([]byte, bool) {

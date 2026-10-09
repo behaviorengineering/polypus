@@ -87,6 +87,7 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 			Concurrency: 8,
 			BufferSize:  32,
 		},
+		SendBackRawResponse: true,
 		CustomProviderConfig: &schemas.CustomProviderConfig{
 			BaseProviderType: schemas.OpenAI,
 			AllowedRequests:  allowedRequestsForBackend(b),

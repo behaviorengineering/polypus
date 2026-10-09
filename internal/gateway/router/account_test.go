@@ -47,6 +47,12 @@ func TestNewAccountRegistersCloudflareChatAndSpeech(t *testing.T) {
 	if ar.SpeechStream || ar.TranscriptionStream {
 		t.Fatalf("CF must not enable speech streams: %+v", ar)
 	}
+	if !pc.SendBackRawResponse {
+		t.Fatal("want SendBackRawResponse for upstream error diagnostics")
+	}
+	if pc.SendBackRawRequest {
+		t.Fatal("SendBackRawRequest must stay off")
+	}
 }
 
 func TestNewAccountRegistersSwitchyardWhenComposed(t *testing.T) {
@@ -99,6 +105,12 @@ func TestNewAccountRegistersSwitchyardWhenComposed(t *testing.T) {
 	}
 	if !pc.CustomProviderConfig.AllowedRequests.ChatCompletion {
 		t.Fatal("switchyard needs chat")
+	}
+	if !pc.SendBackRawResponse {
+		t.Fatal("want SendBackRawResponse for upstream error diagnostics")
+	}
+	if pc.SendBackRawRequest {
+		t.Fatal("SendBackRawRequest must stay off")
 	}
 }
 
