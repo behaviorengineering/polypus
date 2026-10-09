@@ -20,6 +20,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 // shared holds dependencies used by capability handlers.
@@ -430,12 +431,14 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 
 func probeSwitchyard(ctx context.Context, baseURL string) error {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, backendProbeTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/health", nil)
 	if err != nil {
 		return err
 	}
 	client := &http.Client{Timeout: backendProbeTimeout}
-	resp, err := client.Do(req)
+	resp, err := outbound.Do(ctx, outbound.DepHealth, client, req)
 	if err != nil {
 		return err
 	}

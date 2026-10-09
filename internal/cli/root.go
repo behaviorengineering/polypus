@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/behaviorengineering/polypus/internal/buildinfo"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +19,7 @@ func newRoot() *cobra.Command {
 		Short:         "OpenAI-compatible inference gateway (loopback)",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Version:       version,
+		Version:       buildinfo.Version,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				return &exitError{code: 2}
@@ -51,7 +52,7 @@ func newVersionCmd() *cobra.Command {
 		Short:   "Build identity",
 		GroupID: groupInspect,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "polypus %s\n", version)
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "polypus %s\n", buildinfo.Version)
 			return err
 		},
 	}

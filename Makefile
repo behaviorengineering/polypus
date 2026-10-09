@@ -1,4 +1,4 @@
-.PHONY: help build build-gateway build-smoke install init sync-config-example check-config-example test test-integration vet lint tidy ci mlx-sync serve serve-down smoke smoke-local smoke-chat smoke-router smoke-batch smoke-higgs smoke-stt smoke-stt-local smoke-systemone smoke-all smoke-landing switchyard-build docker-build
+.PHONY: help build test vet lint tidy ci serve serve-down init mlx-sync
 
 INTEGRATION_TEST := go test -tags=integration -count=1 -timeout 15m ./internal/smoke/integration
 
@@ -17,7 +17,6 @@ else
 BINARY := $(PARENT_ROOT)/bin/polypus
 endif
 
-# Nested as providers/polypus: optional parent monorepo is two levels up.
 PARENT_MONOREPO_ROOT :=
 ifneq ($(wildcard $(abspath $(CURDIR)/../..)/stack/.env.example),)
 PARENT_MONOREPO_ROOT := $(abspath $(CURDIR)/../..)
@@ -30,45 +29,58 @@ POLYPUS_BATCH_SMOKE_MODEL ?= cf_local/@cf/google/gemma-4-26b-a4b-it
 IMAGE_REPO ?= xynova/polypus
 IMAGE_TAG ?= latest
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -X github.com/behaviorengineering/polypus/internal/cli.version=$(VERSION)
-# Nested submodule checkouts (and broken gitdirs) make `go build` VCS stamping fail
-# with exit 128; version is already injected via LDFLAGS.
+LDFLAGS := -X github.com/behaviorengineering/polypus/internal/buildinfo.Version=$(VERSION)
 GO_BUILDFLAGS := -buildvcs=false
 
-help:
-	@echo "polypus — local OpenAI speech gateway (TTS/STT backends behind loopback)"
-	@echo ""
-	@echo "  make build              Build $(BINARY) + bin/switchyard-server"
-	@echo "  make build-gateway      Build the polypus gateway binary"
-	@echo "  make build-smoke        Build polypus-smoke (multi-channel L1 probes)"
-	@echo "  make switchyard-build   Build bin/switchyard-server (Rust; also part of make build)"
-	@echo "  make install            Install polypus into GOPATH/bin"
-	@echo "  make init               Write ~/.config/polypus/config.yaml from example (polypus init)"
-	@echo "  make sync-config-example  Copy config.yaml.example → internal/config/ (for go:embed)"
-	@echo "  make check-config-example Fail if embed copy diverges from repo-root example"
-	@echo "  make mlx-sync           uv sync for backends/mlx"
-	@echo "  make serve              process-compose TUI: gateway :$(POLYPUS_PORT) + backends + Phoenix :6006 + HyperDX :8080 (POLYPUS_PHOENIX=0 / POLYPUS_HYPERDX=0 to skip)"
-	@echo "  make serve-down         Stop this Polypus process-compose project only"
-	@echo "  make smoke              TTS L1 smoke (builds gateway + mock CF; no make serve)"
-	@echo "  make smoke-local        TTS integration smoke (mock MLX backend)"
-	@echo "  make smoke-chat         L1 chat integration smoke (granite-4.0-h-micro)"
-	@echo "  make smoke-router       Named router chat integration smoke (mock Switchyard)"
-	@echo "  make smoke-landing      GET / landing page + banner WebP (subprocess gateway)"
-	@echo "  make smoke-batch        L1 batch facade integration smoke (gemma-4 default)"
-	@echo "  make smoke-higgs        Higgs v2 TTS integration smoke (mock MLX)"
-	@echo "  make smoke-stt          TTS then STT round-trip (cf_local)"
-	@echo "  make smoke-stt-local    TTS+STT integration smoke (mock MLX)"
-	@echo "  make smoke-systemone    TypeSafe /v1/systemone integration smoke"
-	@echo "  make smoke-all          chat + TTS + STT + systemone integration smoke"
-	@echo "  make test-integration   go test -tags=integration ./internal/smoke/integration"
-	@echo "  make docker-build       Build $(IMAGE_REPO):$(IMAGE_TAG)"
-	@echo "  make test               go test ./... (unit; excludes integration tag)"
-	@echo "  make vet                go vet ./..."
-	@echo "  make lint               golangci-lint on ./cmd/... ./internal/... ./pkg/..."
-	@echo "  make tidy               go mod tidy"
-	@echo "  make ci                 tidy check + gofmt + vet + race tests + build"
+help: ## List local-dev make verbs
+	@grep -E '^[a-zA-Z0-9_.-]+:.*?## ' $(firstword $(MAKEFILE_LIST)) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  %-22s %s\n", $$1, $$2}'
+	@printf '\n  Integration smoke (subprocess gateway or Docker obs stack):\n'
+	@printf '    1. make smoke\n'
+	@printf '    2. make smoke-all\n'
+	@printf '    3. POLYPUS_SMOKE_OTEL=1 make smoke-otel\n'
+	@printf '  Long-running dev stack: make serve (process-compose; Phoenix, HyperDX, otelcol when Docker is up)\n'
 
-build: build-gateway switchyard-build
+build: ## Build gateway and switchyard-server binaries
+	@$(MAKE) --no-print-directory build-gateway switchyard-build
+
+serve: build ## process-compose TUI (gateway, backends, optional observability)
+	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-phoenix.sh scripts/pc-hyperdx.sh scripts/pc-otelcol.sh scripts/pc-switchyard.sh
+	./scripts/pc-up.sh
+
+serve-down: ## Stop this process-compose project only
+	chmod +x scripts/pc-down.sh
+	./scripts/pc-down.sh
+
+init: build-gateway ## Write XDG config from example via polypus init
+	$(BINARY) init
+
+mlx-sync: ## uv sync for MLX backends
+	chmod +x backends/mlx/scripts/sync.sh
+	./backends/mlx/scripts/sync.sh
+
+test: ## Unit tests (excludes integration tag)
+	go test ./...
+
+vet: ## Run go vet
+	go vet ./...
+
+lint: ## Run golangci-lint on cmd, internal, and pkg
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./cmd/... ./internal/... ./pkg/...
+
+tidy: ## Run go mod tidy
+	go mod tidy
+
+ci: ## Module CI checks (tidy, gofmt, vet, race tests, build)
+	@cp go.mod go.mod.bak && cp go.sum go.sum.bak
+	go mod tidy
+	@diff -u go.mod.bak go.mod && diff -u go.sum.bak go.sum
+	@rm -f go.mod.bak go.sum.bak
+	@$(MAKE) --no-print-directory check-config-example
+	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
+	go vet ./...
+	go test -race -count=1 ./...
+	go build $(GO_BUILDFLAGS) ./...
 
 sync-config-example:
 	@cp $(CONFIG_EXAMPLE_SRC) $(CONFIG_EXAMPLE_EMBED)
@@ -88,20 +100,18 @@ build-smoke:
 install:
 	go build $(GO_BUILDFLAGS) -ldflags "$(LDFLAGS)" -o $(shell go env GOPATH)/bin/polypus ./cmd/polypus
 
-init: build-gateway
-	$(BINARY) init
-
-mlx-sync:
-	chmod +x backends/mlx/scripts/sync.sh
-	./backends/mlx/scripts/sync.sh
-
-serve: build
-	chmod +x scripts/pc-up.sh scripts/pc-down.sh scripts/pc-gateway.sh scripts/pc-phoenix.sh scripts/pc-hyperdx.sh scripts/pc-otelcol.sh scripts/pc-switchyard.sh
-	./scripts/pc-up.sh
-
-serve-down:
-	chmod +x scripts/pc-down.sh
-	./scripts/pc-down.sh
+switchyard-build:
+	@test -f providers/switchyard/Cargo.toml || ( \
+		echo "switchyard-build: missing providers/switchyard (run: git submodule update --init providers/switchyard)" >&2; \
+		exit 1)
+	@command -v cargo >/dev/null 2>&1 || ( \
+		echo "switchyard-build: cargo not found; install a Rust toolchain" >&2; \
+		exit 1)
+	@mkdir -p bin
+	cargo install --locked --force --path providers/switchyard/crates/switchyard-server --root .
+	@test -x bin/switchyard-server || ( \
+		echo "switchyard-build: expected executable bin/switchyard-server after cargo install" >&2; \
+		exit 1)
 
 smoke:
 	$(INTEGRATION_TEST) -run TestSmokeTTS
@@ -121,19 +131,6 @@ smoke-landing:
 smoke-batch:
 	$(INTEGRATION_TEST) -run TestSmokeBatch
 
-switchyard-build:
-	@test -f providers/switchyard/Cargo.toml || ( \
-		echo "switchyard-build: missing providers/switchyard (run: git submodule update --init providers/switchyard)" >&2; \
-		exit 1)
-	@command -v cargo >/dev/null 2>&1 || ( \
-		echo "switchyard-build: cargo not found; install a Rust toolchain" >&2; \
-		exit 1)
-	@mkdir -p bin
-	cargo install --locked --force --path providers/switchyard/crates/switchyard-server --root .
-	@test -x bin/switchyard-server || ( \
-		echo "switchyard-build: expected executable bin/switchyard-server after cargo install" >&2; \
-		exit 1)
-
 smoke-higgs:
 	POLYPUS_SMOKE_OUT=/tmp/polypus-higgs-smoke.mp3 \
 	$(INTEGRATION_TEST) -run '^TestSmokeHiggs$$'
@@ -150,31 +147,11 @@ smoke-systemone:
 smoke-all:
 	$(INTEGRATION_TEST) -run TestSmokeAll
 
+smoke-otel:
+	POLYPUS_SMOKE_OTEL=1 $(INTEGRATION_TEST) -run TestSmokeOtelFanout
+
 test-integration:
 	$(INTEGRATION_TEST)
 
 docker-build:
 	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
-
-test:
-	go test ./...
-
-vet:
-	go vet ./...
-
-lint:
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./cmd/... ./internal/... ./pkg/...
-
-tidy:
-	go mod tidy
-
-ci:
-	@cp go.mod go.mod.bak && cp go.sum go.sum.bak
-	go mod tidy
-	@diff -u go.mod.bak go.mod && diff -u go.sum.bak go.sum
-	@rm -f go.mod.bak go.sum.bak
-	@$(MAKE) check-config-example
-	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
-	go vet ./...
-	go test -race -count=1 ./...
-	go build $(GO_BUILDFLAGS) ./...

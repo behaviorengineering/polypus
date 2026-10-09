@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/buildinfo"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +21,7 @@ AGENT OPERATING GUIDE
   Listening requires explicit polypus serve (never bare polypus).
 
 COMMANDS BY RISK & LIFECYCLE
-`, version)
+`, buildinfo.Version)
 	appendGuideGroup(&b, root, groupInspect, "Inspect & Validate")
 	appendGuideGroup(&b, root, groupSetup, "Setup & secrets")
 	appendGuideGroup(&b, root, groupMutate, "Execute & Mutate")

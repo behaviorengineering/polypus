@@ -67,6 +67,8 @@ func TestLandingPageHTML(t *testing.T) {
 		`name="backend"`,
 		`name="model"`,
 		"/v1/admin/models/allow",
+		`class="version-footer"`,
+		"Polypus dev",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)

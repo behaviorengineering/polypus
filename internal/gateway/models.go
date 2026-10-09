@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 const (
@@ -401,6 +402,8 @@ func (h modelsHandler) fetchBackendModelsProtected(r *http.Request, b config.Bac
 func fetchBackendModelsErr(r *http.Request, b config.BackendDef) ([]openaiModel, error) {
 	target := openAIModelsURL(b.BaseURL)
 	ctx := r.Context()
+	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, modelsListTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
@@ -412,7 +415,7 @@ func fetchBackendModelsErr(r *http.Request, b config.BackendDef) ([]openaiModel,
 		req.Header.Set("Authorization", auth)
 	}
 	client := &http.Client{Timeout: modelsListTimeout}
-	resp, err := client.Do(req)
+	resp, err := outbound.Do(ctx, outbound.DepGateway, client, req)
 	if err != nil {
 		return nil, err
 	}

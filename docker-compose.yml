@@ -19,7 +19,7 @@ services:
       - phoenix_data:/data
 
   hyperdx:
-    image: ${HYPERDX_IMAGE:-clickhouse/clickstack-local:latest}
+    image: ${HYPERDX_IMAGE:-clickhouse/clickstack-local:2.10.0}
     container_name: polypus-hyperdx
     restart: "no"
     environment:

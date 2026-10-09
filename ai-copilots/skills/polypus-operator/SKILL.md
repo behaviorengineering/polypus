@@ -165,6 +165,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 - Phoenix UI: http://127.0.0.1:6006 (LLM / OpenInference)
 - HyperDX UI: http://127.0.0.1:8080 (app traces / logs)
 - OTLP ingest (gateway, Switchyard, clients): gRPC `127.0.0.1:4317`, HTTP `127.0.0.1:4318` via `polypus-otelcol` (`otelcol.config.yaml` routing: all traces to HyperDX; OpenInference / `gen_ai.*` spans also copied to Phoenix)
+- OTel fan-out integration smoke: `POLYPUS_SMOKE_OTEL=1 make smoke-otel` (Docker `phoenix`, `hyperdx`, `otelcol`; matches `make serve` obs stack). Homelab host: `make smoke-collector` from `polypus-local` after deploy or serve.
 - `POLYPUS_OTLP_ENDPOINT` defaults to `http://127.0.0.1:4317` when both `POLYPUS_PHOENIX=1` and `POLYPUS_HYPERDX=1` (set by `pc-up.sh`); use `${POLYPUS_OTLP_ENDPOINT}` for `openinference.endpoint` in client configs
 - HyperDX OTel table TTL: `HYPERDX_OTEL_EXPORTER_TABLES_TTL` (default `1h`); set `HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL=true` once to rewrite existing `otel_*` table TTLs
 - HyperDX ClickHouse system-log TTL: 7 days via `hyperdx.clickhouse.config.xml` (separate from OTel retention)

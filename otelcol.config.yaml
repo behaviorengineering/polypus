@@ -8,30 +8,25 @@ receivers:
 
 processors:
   batch:
+    timeout: 1s
+    send_batch_size: 1024
 
 connectors:
   routing:
+    # otelcol 0.120.x routing table does not support action: copy; fan out with two pipelines per row.
     default_pipelines: [traces/hyperdx]
     table:
-      - condition: span.attributes["openinference.span.kind"] != nil
-        action: copy
-        pipelines: [traces/phoenix]
-      - condition: span.attributes["gen_ai.system"] != nil
-        action: copy
-        pipelines: [traces/phoenix]
-      - condition: span.attributes["gen_ai.operation.name"] != nil
-        action: copy
-        pipelines: [traces/phoenix]
+      - context: span
+        condition: attributes["openinference.span.kind"] != nil or attributes["gen_ai.system"] != nil or attributes["gen_ai.operation.name"] != nil
+        pipelines: [traces/phoenix, traces/hyperdx]
 
 exporters:
   otlp/phoenix:
     endpoint: phoenix:4317
     tls:
       insecure: true
-  otlp/hyperdx:
-    endpoint: hyperdx:4317
-    tls:
-      insecure: true
+  otlphttp/hyperdx:
+    endpoint: http://hyperdx:4318
 
 extensions:
   health_check:
@@ -49,12 +44,12 @@ service:
       exporters: [otlp/phoenix]
     traces/hyperdx:
       receivers: [routing]
-      exporters: [otlp/hyperdx]
+      exporters: [otlphttp/hyperdx]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlp/hyperdx]
+      exporters: [otlphttp/hyperdx]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlp/hyperdx]
+      exporters: [otlphttp/hyperdx]

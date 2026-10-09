@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/buildinfo"
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/media"
 )
@@ -26,6 +27,7 @@ type landingPageData struct {
 	ModelLinks []landingLink
 	OpsLinks   []landingLink
 	OTLPNote   string
+	Version    string
 }
 
 const landingPageTmpl = `<!DOCTYPE html>
@@ -56,6 +58,7 @@ section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; text-tra
 #allow-form button { margin-top: 0.5rem; padding: 0.5rem 1rem; background: #1a3a5c; color: #e8e8e8; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; }
 #allow-form button:hover { background: #254a70; }
 #allow-result { margin-top: 1rem; padding: 0.75rem; background: #111; border: 1px solid #333; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; color: #c8c8c8; min-height: 2rem; }
+footer.version-footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid #333; font-size: 0.8rem; color: #666; text-align: center; }
 </style>
 </head>
 <body>
@@ -94,6 +97,7 @@ section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; text-tra
 </section>
 </div>
 </div>
+<footer class="version-footer" aria-label="Gateway version">Polypus {{.Version}}</footer>
 </main>
 <script>
 (function () {
@@ -132,6 +136,7 @@ func landingPageDataForRequest(r *http.Request, cfg config.RouterConfig) landing
 		ModelLinks: landingModelLinks(cfg),
 		OpsLinks:   landingOpsLinks(r),
 		OTLPNote:   landingOTLPNote(r),
+		Version:    buildinfo.Version,
 	}
 }
 
