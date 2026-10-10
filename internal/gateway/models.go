@@ -295,6 +295,12 @@ func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openai
 
 func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef) []openaiModel {
 	modelsCfg := b.Models
+	if b.IsGeminiExtension() {
+		if modelsCfg != nil && modelsCfg.HasAllowGate() {
+			return syntheticModels(b.ID, modelsCfg.Allow)
+		}
+		return nil
+	}
 	if b.IsCloudflareExtension() && (modelsCfg == nil || modelsCfg.ShouldSync()) {
 		if live := h.cloudflareInventory(r, b); len(live) > 0 {
 			if modelsCfg != nil && modelsCfg.HasAllowGate() {

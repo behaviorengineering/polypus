@@ -51,7 +51,7 @@ func ListenAndServe(opts config.ServeOptions) error {
 
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), backendProbeTimeout)
 	defer probeCancel()
-	if err := probeCloudflareCredentials(probeCtx, g.router.Registry().Config(), g.cfGet); err != nil {
+	if err := probeRemoteCredentials(probeCtx, g.router.Registry().Config(), g.cfGet); err != nil {
 		return fmt.Errorf("gateway: %w", err)
 	}
 

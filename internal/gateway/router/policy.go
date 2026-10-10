@@ -19,6 +19,9 @@ var defaultAllowedHosts = map[string]struct{}{
 
 // ValidateBackend validates a backend definition against router policy.
 func ValidateBackend(b config.BackendDef, policy config.RouterPolicy) error {
+	if b.IsGeminiExtension() {
+		return validateGeminiBackendURL(b.BaseURL)
+	}
 	raw := strings.TrimSpace(b.BaseURL)
 	if raw == "" {
 		return fmt.Errorf("backend url required")
@@ -27,6 +30,22 @@ func ValidateBackend(b config.BackendDef, policy config.RouterPolicy) error {
 		return validateRemoteBackendURL(raw)
 	}
 	return validateLocalBackendURL(raw, policy.RejectNonLoopbackBackends)
+}
+
+func validateGeminiBackendURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := parseBackendURL(raw)
+	if err != nil {
+		return err
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	if host != "generativelanguage.googleapis.com" && !strings.HasSuffix(host, ".generativelanguage.googleapis.com") {
+		return fmt.Errorf("backend host %q is not allowed for gemini extension", host)
+	}
+	return nil
 }
 
 // validateBackendURL rejects cloud or non-loopback hosts for local routing (case-mode default).

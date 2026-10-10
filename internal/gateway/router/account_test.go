@@ -114,6 +114,74 @@ func TestNewAccountRegistersSwitchyardWhenComposed(t *testing.T) {
 	}
 }
 
+func TestNewAccountRegistersGeminiChat(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "secret-key-at-least-twenty-ch")
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	cfg := config.RouterConfig{
+		Timeouts: config.DefaultTimeouts(),
+		Backends: map[string]config.BackendDef{
+			"gemini_studio": {
+				ID:        "gemini_studio",
+				Remote:    true,
+				Extension: config.ExtensionGemini,
+				Auth:      config.BackendAuth{BearerEnv: "GEMINI_API_KEY"},
+				Capabilities: []config.Capability{
+					config.CapChat,
+				},
+			},
+		},
+	}
+	acct := NewAccount(cfg)
+	pc, err := acct.GetConfigForProvider("gemini_studio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pc.CustomProviderConfig.BaseProviderType != schemas.Gemini {
+		t.Fatalf("base type: got %q want gemini", pc.CustomProviderConfig.BaseProviderType)
+	}
+	if pc.NetworkConfig.BaseURL != "" {
+		t.Fatalf("empty yaml base_url should leave NetworkConfig.BaseURL empty for Bifrost default, got %q", pc.NetworkConfig.BaseURL)
+	}
+	ar := pc.CustomProviderConfig.AllowedRequests
+	if ar == nil || !ar.ChatCompletion || !ar.ChatCompletionStream {
+		t.Fatalf("want chat + stream: %+v", ar)
+	}
+	if ar.Speech || ar.Transcription {
+		t.Fatalf("gemini chat backend should not enable speech: %+v", ar)
+	}
+}
+
+func TestNewAccountCopiesExtraHeaders(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "secret-key-at-least-twenty-ch")
+	cfg := config.RouterConfig{
+		Timeouts: config.DefaultTimeouts(),
+		Backends: map[string]config.BackendDef{
+			"openrouter": {
+				ID:      "openrouter",
+				Remote:  true,
+				BaseURL: "https://openrouter.ai/api/v1",
+				Auth:    config.BackendAuth{BearerEnv: "OPENROUTER_API_KEY"},
+				ExtraHeaders: map[string]string{
+					"HTTP-Referer": "https://example.com",
+					"X-Title":      "Polypus",
+				},
+				Capabilities: []config.Capability{config.CapChat},
+			},
+		},
+	}
+	acct := NewAccount(cfg)
+	pc, err := acct.GetConfigForProvider("openrouter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pc.NetworkConfig.ExtraHeaders["HTTP-Referer"] != "https://example.com" {
+		t.Fatalf("referer: %+v", pc.NetworkConfig.ExtraHeaders)
+	}
+	if pc.NetworkConfig.ExtraHeaders["X-Title"] != "Polypus" {
+		t.Fatalf("title: %+v", pc.NetworkConfig.ExtraHeaders)
+	}
+}
+
 func TestUsesBifrostSwitchyardAndLeaf(t *testing.T) {
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
 	cfg := config.RouterConfig{

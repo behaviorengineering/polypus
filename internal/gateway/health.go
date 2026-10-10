@@ -134,11 +134,11 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// probeCloudflareCredentials pings each remote Cloudflare extension backend before serve accepts traffic.
-func probeCloudflareCredentials(ctx context.Context, cfg config.RouterConfig, getCF CloudflareClientGet) error {
+// probeRemoteCredentials validates each remote backend before serve accepts traffic.
+func probeRemoteCredentials(ctx context.Context, cfg config.RouterConfig, getCF CloudflareClientGet) error {
 	for _, id := range cfg.BackendIDs() {
 		b := cfg.Backends[id]
-		if !b.Remote || !b.IsCloudflareExtension() {
+		if !b.Remote {
 			continue
 		}
 		if err := probeBackend(ctx, b, getCF); err != nil {

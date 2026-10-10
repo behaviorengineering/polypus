@@ -64,6 +64,16 @@ func TestMergeBackendInventoriesAllowList(t *testing.T) {
 	}
 }
 
+func TestGeminiInventorySyntheticAllow(t *testing.T) {
+	got := syntheticModels("gemini_studio", []string{"gemma-4-26b-a4b-it"})
+	if len(got) != 1 {
+		t.Fatalf("len=%d", len(got))
+	}
+	if got[0].ID != "gemini_studio/gemma-4-26b-a4b-it" {
+		t.Fatalf("id=%q", got[0].ID)
+	}
+}
+
 func TestMergeAllowSyntheticMissing(t *testing.T) {
 	live := []openaiModel{{ID: "cf_local/@cf/a", Object: "model", OwnedBy: "cf_local"}}
 	got := mergeAllowSyntheticMissing("cf_local", live, []string{"@cf/a", "typesafe/jev"})

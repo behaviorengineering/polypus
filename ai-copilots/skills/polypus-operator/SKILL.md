@@ -141,7 +141,12 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 - Probe: `curl -sS 'http://127.0.0.1:1320/v1/apis/openai/models?view=inventory' | jq '.data | length'`
 - Needs: `cf_local` in `config.yaml`, `secrets:` listing `CF_AI_API_KEY` and `CF_ACCOUNT_ID`, and those values in the process environment **or** OS keyring (`polypus secret set`). Env and `stack/.env` still win. Compose / GitLab inject env only (no keyring in the container).
 
-### 9. lm_studio down
+### 9. gemini_studio down
+
+- Probe inventory: `curl -sS 'http://127.0.0.1:1320/v1/apis/openai/models?view=inventory' | jq '.data[] | select(.id | startswith("gemini_studio/"))'`
+- Needs: `extension: gemini` backend, `GEMINI_API_KEY` in env or keyring (`polypus secret set GEMINI_API_KEY` when listed under `secrets:`). Serve fail-closes on startup when the gemini remote backend is configured but the bearer env is missing (same pattern as other remotes).
+
+### 10. lm_studio down
 
 - LM Studio is external; user starts it on `:1234`.
 - Probe: `curl -sf http://127.0.0.1:1234/v1/models | jq .`
@@ -157,7 +162,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
   `secret set` refuses names that are not listed under `secrets:` in the live config. Omit `secrets:` for MLX-only so the keyring is never queried. Docker Compose / Windows GitLab: put `CF_*` in the container env (SOPS); do not use the host keyring inside Linux containers.
 - After YAML `backends`, `routers:`, or secrets change: restart gateway in process-compose TUI (or `make serve-down && make serve`). Runtime allow via `GET /` form or `POST /v1/admin/models/allow` does **not** require restart.
 - Gateway access keys (optional): `polypus admin-key generate --name ops --yes`. When at least one key exists, the whole gateway (except `GET /health*`) requires `Authorization: Bearer ppk...`, `X-Api-Key`, or HTTP Basic (password = the key). Empty key store = open. Allow POST is inventory-gated only (no per-route key).
-- With `cf_local` configured, serve fail-closes on startup if Cloudflare Model Search ping fails (fix `secret set` / env; MLX-only configs skip this probe).
+- With `cf_local` configured, serve fail-closes on startup if Cloudflare Model Search ping fails (fix `secret set` / env; MLX-only configs skip this probe). Remote backends (including `extension: gemini` and OpenRouter) must resolve `auth.bearer_env` at startup.
 - **MUST NOT** add non-loopback backend URLs when `reject_non_loopback_backends` applies.
 
 ## Observability

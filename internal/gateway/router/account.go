@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -77,11 +78,26 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 	if !ok {
 		return nil, fmt.Errorf("provider %s not supported", provider)
 	}
+	baseURL := openAIBaseURL(b.BaseURL)
+	baseType := schemas.OpenAI
+	if b.IsGeminiExtension() {
+		baseType = schemas.Gemini
+		if strings.TrimSpace(b.BaseURL) == "" {
+			baseURL = ""
+		} else {
+			baseURL = strings.TrimRight(strings.TrimSpace(b.BaseURL), "/")
+		}
+	}
+	var extraHeaders map[string]string
+	if len(b.ExtraHeaders) > 0 {
+		extraHeaders = b.ExtraHeaders
+	}
 	return &schemas.ProviderConfig{
 		NetworkConfig: schemas.NetworkConfig{
-			BaseURL:                        openAIBaseURL(b.BaseURL),
+			BaseURL:                        baseURL,
 			DefaultRequestTimeoutInSeconds: a.timeouts.ProviderSeconds(),
 			AllowPrivateNetwork:            true,
+			ExtraHeaders:                   extraHeaders,
 		},
 		ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
 			Concurrency: 8,
@@ -89,7 +105,7 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 		},
 		SendBackRawResponse: true,
 		CustomProviderConfig: &schemas.CustomProviderConfig{
-			BaseProviderType: schemas.OpenAI,
+			BaseProviderType: baseType,
 			AllowedRequests:  allowedRequestsForBackend(b),
 		},
 	}, nil
