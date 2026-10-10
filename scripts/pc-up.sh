@@ -39,6 +39,13 @@ fi
 # shellcheck source=/dev/null
 source "$POLYPUS_DIR/ports.env"
 
+if [[ -f "$POLYPUS_DIR/images.env" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$POLYPUS_DIR/images.env"
+  set +a
+fi
+
 export POLYPUS_DIR
 export POLYPUS_ROOT="$POLYPUS_DIR"
 export PARENT_MONOREPO_ROOT

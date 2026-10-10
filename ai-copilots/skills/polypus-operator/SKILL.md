@@ -167,6 +167,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 
 ## Observability
 
+- Container image pins (Phoenix, HyperDX, otelcol): `images.env` at repo root (`PHOENIX_IMAGE`, `HYPERDX_IMAGE`, `OTELCOL_IMAGE`). **MUST NOT** use `:latest`. `scripts/pc-up.sh` sources this file before `docker compose`; keep the same tags in your deploy `images.env` when you maintain both trees.
 - Phoenix UI: http://127.0.0.1:6006 (LLM / OpenInference)
 - HyperDX UI: http://127.0.0.1:8080 (app traces / logs)
 - OTLP ingest (gateway, Switchyard, clients): gRPC `127.0.0.1:4317`, HTTP `127.0.0.1:4318` via `polypus-otelcol` (`otelcol.config.yaml` routing: all traces to HyperDX; OpenInference / `gen_ai.*` spans also copied to Phoenix)

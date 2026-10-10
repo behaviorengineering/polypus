@@ -1,6 +1,6 @@
 version: "3"
 
-dotenv: ["ports.env"]
+dotenv: ["ports.env", "images.env"]
 
 vars:
   VERSION: '{{.VERSION | default "dev"}}'
