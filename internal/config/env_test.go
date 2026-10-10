@@ -34,6 +34,70 @@ func TestBackendAuthResolveBearerToken(t *testing.T) {
 	}
 }
 
+func TestLoadRouterGeminiExtensionOmitsBaseURL(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "secret-key-at-least-twenty-ch")
+
+	dir := t.TempDir()
+	path := dir + "/config.yaml"
+	content := `
+chat_backend:
+  enabled: true
+  default: gemini_studio
+backends:
+  gemini_studio:
+    remote: true
+    extension: gemini
+    auth:
+      bearer_env: GEMINI_API_KEY
+    capabilities: [chat]
+    models:
+      allow:
+        - gemma-4-26b-a4b-it
+`
+	if err := writeTestFile(path, content); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+
+	cfg, err := LoadRouterConfig(ServeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := cfg.Backends["gemini_studio"]
+	if !b.Remote || !b.IsGeminiExtension() {
+		t.Fatalf("backend: %+v", b)
+	}
+	if b.BaseURL != "" {
+		t.Fatalf("gemini base_url should stay empty for Bifrost default, got %q", b.BaseURL)
+	}
+}
+
+func TestLoadRouterRemoteRequiresBaseURL(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "secret-key-at-least-twenty-ch")
+
+	dir := t.TempDir()
+	path := dir + "/config.yaml"
+	content := `
+chat_backend:
+  enabled: true
+  default: openrouter
+backends:
+  openrouter:
+    remote: true
+    auth:
+      bearer_env: OPENROUTER_API_KEY
+    capabilities: [chat]
+`
+	if err := writeTestFile(path, content); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+
+	if _, err := LoadRouterConfig(ServeOptions{}); err == nil {
+		t.Fatal("expected base_url required for non-gemini remote")
+	}
+}
+
 func TestLoadRouterConfigRemoteFields(t *testing.T) {
 	t.Setenv("CF_AI_API_KEY", "secret")
 	t.Setenv("CF_ACCOUNT_ID", "acct")

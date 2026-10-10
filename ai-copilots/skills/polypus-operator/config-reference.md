@@ -124,7 +124,7 @@ backends:
       allow: [...]
 ```
 
-`extension: gemini` uses Bifrost native `generateContent` (Google AI Studio). `base_url` is optional (defaults to the Developer API). Generic remote OpenAI backends cannot point at `generativelanguage.googleapis.com`; only `extension: gemini` may.
+`extension: gemini` uses Bifrost native `generateContent` (Google AI Studio). Omit `base_url` so Bifrost uses the Developer API default. Setting `https://generativelanguage.googleapis.com/v1beta` makes Bifrost send OpenAI chat JSON to the native API (502: unknown `messages` / `max_tokens`). Generic remote OpenAI backends cannot point at `generativelanguage.googleapis.com`; only `extension: gemini` may.
 
 
 Capability defaults use `*_backend` blocks (`enabled` + `default`): `chat_backend`, `vision_backend`, `embed_backend`, `tts_backend`, `stt_backend`, `proxy_backend`, `systemone_backend`, `batch_backend`. Set `enabled: false` (or omit) to skip a capability. Remote backends (`remote: true`) load when listed in config and their `auth.bearer_env` is set in the environment (possibly filled from the OS keyring for names in `secrets:`). `proxy_backend` covers voices and may inherit `tts_backend.default` when enabled with an empty default. `systemone_backend` fronts `POST /v1/systemone` (TypeSafe/Decider wire; Cloudflare `typesafe/jev` via `/ai/run`). `batch_backend` fronts OpenAI `/v1/files` and `/v1/batches` mapped to Cloudflare Workers AI async batch (`batch` capability on `extension: cloudflare` backends; JSONL under `POLYPUS_BATCH_DIR` or `~/.local/state/polypus/batch`). `POST /v1/batches/{id}/cancel` returns HTTP 501 because Workers AI has no cancel API.

@@ -71,7 +71,8 @@ backends:
 #       - "@cf/zai-org/glm-4.7-flash"
 # Use config.cloud.yaml.example for cloud-default routing.
 
-# Optional Google AI Studio Gemini / Gemma (native generateContent via extension gemini):
+# Optional Google AI Studio Gemini / Gemma (native generateContent via extension gemini).
+# Omit base_url (Bifrost Developer API default). Do not set generativelanguage.googleapis.com.
 # gemini_studio:
 #   remote: true
 #   extension: gemini
