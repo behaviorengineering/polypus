@@ -16,12 +16,13 @@ const (
 	WorkersCapacityCode = "3040"
 	EdgeBlockCode       = "1015"
 
-	FieldStatus     = "status"
-	FieldCFCode     = "cf_code"
-	FieldRetryAfter = "retry_after"
-	FieldRateLimit  = "ratelimit"
-	FieldCFRay      = "cf_ray"
-	FieldKind       = "limit_kind"
+	FieldStatus       = "status"
+	FieldCFCode       = "cf_code"
+	FieldRetryAfter   = "retry_after"
+	FieldRateLimit    = "ratelimit"
+	FieldCFRay        = "cf_ray"
+	FieldKind         = "limit_kind"
+	FieldHeaderPrefix = "hdr:"
 
 	KindQuota    = "quota"
 	KindCapacity = "capacity"
@@ -101,8 +102,26 @@ func ClassifyRateLimit(op string, status int, header http.Header, body []byte, h
 		if v := strings.TrimSpace(header.Get("Cf-Ray")); v != "" {
 			err = err.With(FieldCFRay, v)
 		}
+		for name, vals := range header {
+			lower := strings.ToLower(strings.TrimSpace(name))
+			if !strings.HasPrefix(lower, "x-ratelimit-") {
+				continue
+			}
+			if v := strings.TrimSpace(firstHeaderValue(vals)); v != "" {
+				err = err.With(FieldHeaderPrefix+lower, v)
+			}
+		}
 	}
 	return err
+}
+
+func firstHeaderValue(vals []string) string {
+	for _, v := range vals {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func workersCodeFromEnvelope(body []byte) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -140,7 +141,7 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string,
 		RawRequestBody: body,
 	})
 	if berr != nil {
-		return nil, bifrostErr(berr)
+		return nil, bifrostErr(berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.ChatCompletionRaw", "empty chat response from backend").
@@ -181,7 +182,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 		RawRequestBody: body,
 	})
 	if berr != nil {
-		return nil, nil, bifrostErr(berr)
+		return nil, nil, bifrostErr(berr, bifrostProviderHeader(bctx))
 	}
 	out := make(chan []byte, 16)
 	errCh := make(chan error, 1)
@@ -193,7 +194,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 				continue
 			}
 			if chunk.BifrostError != nil {
-				errCh <- bifrostErr(chunk.BifrostError)
+				errCh <- bifrostErr(chunk.BifrostError, bifrostProviderHeader(bctx))
 				return
 			}
 			if chunk.BifrostChatResponse == nil {
@@ -232,7 +233,7 @@ func (c *Client) EmbeddingRaw(ctx context.Context, backendID, model string, body
 		RawRequestBody: body,
 	})
 	if berr != nil {
-		return nil, bifrostErr(berr)
+		return nil, bifrostErr(berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.EmbeddingRaw", "empty embedding response from backend").
@@ -328,7 +329,7 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 		Params:   params,
 	})
 	if berr != nil {
-		return nil, bifrostErr(berr)
+		return nil, bifrostErr(berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil || len(resp.Audio) == 0 {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.Synthesize", "empty speech audio from backend")
@@ -386,7 +387,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 		Params: params,
 	})
 	if berr != nil {
-		return nil, "", bifrostErr(berr)
+		return nil, "", bifrostErr(berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil {
 		return nil, "", derrors.New(derrors.CodeUnavailable, "router.Transcribe", "empty transcription from backend")
@@ -406,7 +407,25 @@ func ensureSpeechDeadline(ctx context.Context, timeouts config.Timeouts) (contex
 	return context.WithTimeout(ctx, d)
 }
 
-func bifrostErr(berr *schemas.BifrostError) error {
+func bifrostProviderHeader(bctx *schemas.BifrostContext) http.Header {
+	if bctx == nil {
+		return nil
+	}
+	raw, ok := bctx.Value(schemas.BifrostContextKeyProviderResponseHeaders).(map[string]string)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	h := make(http.Header, len(raw))
+	for k, v := range raw {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		h.Add(k, v)
+	}
+	return h
+}
+
+func bifrostErr(berr *schemas.BifrostError, header http.Header) error {
 	if berr == nil {
 		return derrors.New(derrors.CodeInternal, "router.bifrost", "bifrost error")
 	}
@@ -422,7 +441,7 @@ func bifrostErr(berr *schemas.BifrostError) error {
 	if berr.Error != nil && berr.Error.Code != nil {
 		hints = append(hints, strings.TrimSpace(*berr.Error.Code))
 	}
-	if rl := cloudflare.ClassifyRateLimit("cloudflare.workers", status, nil, bifrostRawBody(berr), hints...); rl != nil {
+	if rl := cloudflare.ClassifyRateLimit("cloudflare.workers", status, header, bifrostRawBody(berr), hints...); rl != nil {
 		return derrors.Wrap(rl, derrors.CodeRateLimited, "router.bifrost", "provider rate limited")
 	}
 	if berr.Error != nil && berr.Error.Error != nil {

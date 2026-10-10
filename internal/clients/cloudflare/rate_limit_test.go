@@ -74,6 +74,22 @@ func TestClassifyRateLimitGeneric429(t *testing.T) {
 	}
 }
 
+func TestClassifyRateLimitXRateLimitHeaders(t *testing.T) {
+	header := http.Header{}
+	header.Set("X-RateLimit-Limit", "100")
+	header.Set("X-RateLimit-Remaining", "0")
+	err := ClassifyRateLimit("cloudflare.workers", http.StatusTooManyRequests, header, nil)
+	if err == nil {
+		t.Fatal("expected rate limit error")
+	}
+	if got := err.Fields()[FieldHeaderPrefix+"x-ratelimit-limit"]; got != "100" {
+		t.Fatalf("limit=%q", got)
+	}
+	if got := err.Fields()[FieldHeaderPrefix+"x-ratelimit-remaining"]; got != "0" {
+		t.Fatalf("remaining=%q", got)
+	}
+}
+
 func TestClassifyRateLimitNotThrottle(t *testing.T) {
 	err := ClassifyRateLimit("cloudflare.workers", http.StatusBadGateway, nil, []byte(`{"success":false,"errors":[{"code":10000,"message":"auth"}]}`))
 	if err != nil {
