@@ -71,6 +71,35 @@ backends:
 #       - "@cf/zai-org/glm-4.7-flash"
 # Use config.cloud.yaml.example for cloud-default routing.
 
+# Optional Google AI Studio Gemini / Gemma (native generateContent via extension gemini).
+# Omit base_url (Bifrost Developer API default). Do not set generativelanguage.googleapis.com.
+# gemini_studio:
+#   remote: true
+#   extension: gemini
+#   auth:
+#     bearer_env: GEMINI_API_KEY
+#   capabilities: [chat]
+#   models:
+#     sync: true
+#     allow:
+#       - gemma-4-26b-a4b-it
+#       - gemma-4-31b-it
+
+# Optional OpenRouter (OpenAI-compat remote; optional extra_headers for attribution):
+# openrouter:
+#   remote: true
+#   base_url: https://openrouter.ai/api/v1
+#   auth:
+#     bearer_env: OPENROUTER_API_KEY
+#   extra_headers:
+#     HTTP-Referer: https://example.com
+#     X-Title: Polypus
+#   capabilities: [chat]
+#   models:
+#     sync: true
+#     allow:
+#       - google/gemma-3-27b-it:free
+
 # Case-mode breach guardrails (defaults match omission of this block).
 # policy:
 #   reject_non_loopback_backends: true

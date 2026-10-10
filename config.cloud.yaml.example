@@ -58,7 +58,8 @@ backends:
         - "@cf/deepgram/nova-3"
         - "typesafe/jev"
 
-  # Optional Google AI Studio (extension gemini; GEMINI_API_KEY in env or keyring):
+  # Optional Google AI Studio (extension gemini; GEMINI_API_KEY in env or keyring).
+  # Omit base_url (Bifrost Developer API default).
   # gemini_studio:
   #   remote: true
   #   extension: gemini

@@ -426,7 +426,7 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 		if b.ID == "" {
 			b.ID = id
 		}
-		if b.BaseURL == "" {
+		if b.BaseURL == "" && !b.IsGeminiExtension() {
 			return fmt.Errorf("router: backends.%s.base_url required", id)
 		}
 		if b.Remote {

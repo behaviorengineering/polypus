@@ -315,3 +315,20 @@ backends:
 		t.Fatalf("proxy: %+v", cfg.Proxy)
 	}
 }
+
+func TestLoadRouterConfigFromPOLYPUS_CONFIG(t *testing.T) {
+	path := strings.TrimSpace(os.Getenv("POLYPUS_CONFIG"))
+	if path == "" {
+		t.Skip("POLYPUS_CONFIG unset")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("POLYPUS_CONFIG stat %q: %v", path, err)
+	}
+	cfg, err := LoadRouterConfig(ServeOptions{})
+	if err != nil {
+		t.Fatalf("LoadRouterConfig: %v", err)
+	}
+	if len(cfg.Backends) == 0 {
+		t.Fatal("expected backends from POLYPUS_CONFIG")
+	}
+}
