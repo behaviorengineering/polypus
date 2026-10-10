@@ -127,7 +127,8 @@ const (
 )
 
 func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
-	return proxyChatCompletionsOpts(w, r, backendURL, body, client, hopTimeout, backendAuth, true, false)
+	model, _ := extractChatModel(body)
+	return proxyChatCompletionsOpts(w, r, backendURL, body, client, hopTimeout, backendAuth, true, "", model, false)
 }
 
 // extractRouterSelectedModel reads Switchyard routing metadata from response headers or JSON body.
@@ -146,9 +147,9 @@ func extractRouterSelectedModel(hdr http.Header, body []byte) string {
 	return strings.TrimSpace(root.Model)
 }
 
-func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string, patchThinking bool, recordRouterSelectedModel bool) error {
+func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string, patchThinking bool, thinkingExtension string, thinkingModel string, recordRouterSelectedModel bool) error {
 	if patchThinking {
-		if patched, ok := disableChatThinkingInRequest(body); ok {
+		if patched, ok := applyChatThinking(body, thinkingExtension, thinkingModel); ok {
 			body = patched
 		}
 	}
@@ -283,51 +284,27 @@ func copyChatResponseHeaders(w http.ResponseWriter, header http.Header) {
 	}
 }
 
-// disableChatThinkingInRequest asks CF/OpenAI-compat backends not to burn tokens on reasoning
-// unless the client explicitly enabled thinking.
-func disableChatThinkingInRequest(body []byte) ([]byte, bool) {
+// applyChatThinking maps inbound OpenAI reasoning to backend-specific outbound fields.
+func applyChatThinking(body []byte, extension string, model string) ([]byte, bool) {
 	var root map[string]any
 	if err := json.Unmarshal(body, &root); err != nil {
 		return body, false
 	}
-	if chatMapWantsThinking(root) {
-		return body, false
+	wants := chatMapWantsThinking(root)
+	model = strings.ToLower(strings.TrimSpace(model))
+	if model == "" {
+		model = strings.ToLower(strings.TrimSpace(fmt.Sprint(root["model"])))
 	}
-	model := strings.ToLower(strings.TrimSpace(fmt.Sprint(root["model"])))
-	if strings.Contains(model, "deepseek") {
-		if _, ok := root["reasoning_effort"]; ok {
-			return body, false
-		}
-		root["reasoning_effort"] = "none"
-		out, err := json.Marshal(root)
-		if err != nil {
-			return body, false
-		}
-		return out, true
-	}
-	needs := strings.Contains(model, "gemma") ||
-		strings.Contains(model, "glm") ||
-		strings.Contains(model, "zai-org")
-	if !needs {
-		return body, false
-	}
-	changed := false
-	if _, ok := root["chat_template_kwargs"]; !ok {
-		root["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
-		changed = true
-	} else if kwargs, ok := root["chat_template_kwargs"].(map[string]any); ok {
-		if v, exists := kwargs["enable_thinking"]; !exists || v != false {
-			kwargs["enable_thinking"] = false
-			changed = true
-		}
-	}
-	if _, ok := root["reasoning_effort"]; !ok {
-		root["reasoning_effort"] = nil
-		changed = true
-	}
-	if _, ok := root["enable_thinking"]; !ok {
-		root["enable_thinking"] = false
-		changed = true
+	ext := strings.ToLower(strings.TrimSpace(extension))
+	var changed bool
+	switch ext {
+	case config.ExtensionGemini:
+		changed = stripCloudflareThinkingFields(root)
+		changed = applyGeminiThinkingEmit(root, model, wants) || changed
+	case config.ExtensionCloudflare:
+		changed = applyCloudflareThinkingEmit(root, model, wants)
+	default:
+		changed = stripCloudflareThinkingFields(root)
 	}
 	if !changed {
 		return body, false
@@ -337,6 +314,141 @@ func disableChatThinkingInRequest(body []byte) ([]byte, bool) {
 		return body, false
 	}
 	return out, true
+}
+
+func stripCloudflareThinkingFields(root map[string]any) bool {
+	changed := false
+	if _, ok := root["chat_template_kwargs"]; ok {
+		delete(root, "chat_template_kwargs")
+		changed = true
+	}
+	if _, ok := root["enable_thinking"]; ok {
+		delete(root, "enable_thinking")
+		changed = true
+	}
+	return changed
+}
+
+func applyGeminiThinkingEmit(root map[string]any, model string, wants bool) bool {
+	changed := false
+	switch {
+	case strings.Contains(model, "gemma-4"):
+		effort := "minimal"
+		if wants {
+			effort = "high"
+		}
+		changed = setNestedReasoningEffort(root, effort) || changed
+		changed = deleteNestedReasoningField(root, "max_tokens") || changed
+	case strings.Contains(model, "gemini-2.5"):
+		tokens := 0
+		if wants {
+			tokens = -1
+		}
+		changed = setNestedReasoningMaxTokens(root, tokens) || changed
+		changed = deleteNestedReasoningField(root, "effort") || changed
+	case strings.Contains(model, "gemini-3"):
+		effort := "minimal"
+		if wants {
+			effort = strings.ToLower(strings.TrimSpace(chatMapReasoningEffort(root)))
+			if effort == "" || chatReasoningEffortIsOff(effort) {
+				effort = "high"
+			}
+		}
+		changed = setNestedReasoningEffort(root, effort) || changed
+	default:
+		if wants {
+			return false
+		}
+	}
+	return changed
+}
+
+func applyCloudflareThinkingEmit(root map[string]any, model string, wants bool) bool {
+	if strings.Contains(model, "deepseek") {
+		if wants {
+			return false
+		}
+		if _, ok := root["reasoning_effort"]; ok {
+			return false
+		}
+		root["reasoning_effort"] = "none"
+		return true
+	}
+	if !strings.Contains(model, "gemma") && !strings.Contains(model, "glm") && !strings.Contains(model, "zai-org") {
+		return false
+	}
+	changed := false
+	kwargs, ok := root["chat_template_kwargs"].(map[string]any)
+	if !ok {
+		kwargs = map[string]any{}
+		root["chat_template_kwargs"] = kwargs
+		changed = true
+	}
+	if v, exists := kwargs["enable_thinking"]; !exists || v != wants {
+		kwargs["enable_thinking"] = wants
+		changed = true
+	}
+	if wants {
+		if v, exists := root["enable_thinking"]; !exists || v != true {
+			root["enable_thinking"] = true
+			changed = true
+		}
+	} else if v, exists := root["enable_thinking"]; !exists || v != false {
+		root["enable_thinking"] = false
+		changed = true
+	}
+	return changed
+}
+
+func setNestedReasoningEffort(root map[string]any, effort string) bool {
+	reasoning, _ := root["reasoning"].(map[string]any)
+	if reasoning == nil {
+		reasoning = map[string]any{}
+		root["reasoning"] = reasoning
+	}
+	if cur, ok := reasoning["effort"]; ok && strings.EqualFold(strings.TrimSpace(fmt.Sprint(cur)), effort) {
+		return false
+	}
+	reasoning["effort"] = effort
+	return true
+}
+
+func setNestedReasoningMaxTokens(root map[string]any, tokens int) bool {
+	reasoning, _ := root["reasoning"].(map[string]any)
+	if reasoning == nil {
+		reasoning = map[string]any{}
+		root["reasoning"] = reasoning
+	}
+	cur, ok := reasoning["max_tokens"]
+	if ok {
+		switch n := cur.(type) {
+		case float64:
+			if int(n) == tokens {
+				return false
+			}
+		case int:
+			if n == tokens {
+				return false
+			}
+		}
+	}
+	reasoning["max_tokens"] = tokens
+	return true
+}
+
+func deleteNestedReasoningField(root map[string]any, field string) bool {
+	reasoning, ok := root["reasoning"].(map[string]any)
+	if !ok {
+		return false
+	}
+	if _, exists := reasoning[field]; !exists {
+		return false
+	}
+	delete(reasoning, field)
+	if len(reasoning) == 0 {
+		delete(root, "reasoning")
+	}
+	return true
 }
 
 func mergeReasoningIntoContent(body []byte) ([]byte, bool) {
@@ -458,37 +570,30 @@ func chatBodyWantsThinking(body []byte) bool {
 	return chatMapWantsThinking(root)
 }
 
-func chatMapWantsThinking(root map[string]any) bool {
-	if boolishTrue(root["enable_thinking"]) {
-		return true
+func chatMapReasoningEffort(root map[string]any) string {
+	if reasoning, ok := root["reasoning"].(map[string]any); ok {
+		if v, ok := reasoning["effort"]; ok {
+			s := strings.TrimSpace(fmt.Sprint(v))
+			if s != "" && s != "<nil>" && s != "nil" {
+				return s
+			}
+		}
 	}
-	if kwargs, ok := root["chat_template_kwargs"].(map[string]any); ok && boolishTrue(kwargs["enable_thinking"]) {
-		return true
+	if v, ok := root["reasoning_effort"]; ok {
+		return strings.TrimSpace(fmt.Sprint(v))
 	}
-	effort := strings.ToLower(strings.TrimSpace(fmt.Sprint(root["reasoning_effort"])))
-	switch effort {
-	case "", "<nil>", "nil", "none", "off", "false", "0":
-		return false
+	return ""
+}
+
+func chatReasoningEffortIsOff(effort string) bool {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "", "<nil>", "nil", "none", "off", "false", "0", "minimal":
+		return true
 	default:
-		return true
+		return false
 	}
 }
 
-func boolishTrue(v any) bool {
-	switch t := v.(type) {
-	case bool:
-		return t
-	case string:
-		s := strings.ToLower(strings.TrimSpace(t))
-		return s == "true" || s == "1" || s == "yes"
-	case float64:
-		return t != 0
-	case json.Number:
-		n, err := t.Float64()
-		return err == nil && n != 0
-	case int:
-		return t != 0
-	default:
-		return false
-	}
+func chatMapWantsThinking(root map[string]any) bool {
+	return !chatReasoningEffortIsOff(chatMapReasoningEffort(root))
 }
