@@ -8,7 +8,7 @@
 | 2 | `~/.config/polypus/config.yaml` (`$XDG_CONFIG_HOME/polypus/config.yaml` when set) |
 | 3 | `$POLYPUS_ROOT/config.yaml` or cwd `config.yaml` (dev fallback) |
 
-Bootstrap: `polypus init` or `make init` (writes `~/.config/polypus/config.yaml` at mode `0600` when missing). Declare `secrets:` in config (env var names only); Polypus loads those from the OS keyring when unset. `polypus secret set` stores a value only if that name is already in `secrets:`. Env and `.env` still win at runtime. Omit `secrets:` for local-only stacks to avoid keyring access. Docker Compose deploy (`config.deploy.yaml.example`) omits `secrets:`; inject `CF_*` via compose env (runner `export-env` / SOPS), not the container keyring.
+Bootstrap: `polypus init` or `go tool task init` (writes `~/.config/polypus/config.yaml` at mode `0600` when missing). Declare `secrets:` in config (env var names only); Polypus loads those from the OS keyring when unset. `polypus secret set` stores a value only if that name is already in `secrets:`. Env and `.env` still win at runtime. Omit `secrets:` for local-only stacks to avoid keyring access. Docker Compose deploy (`config.deploy.yaml.example`) omits `secrets:`; inject `CF_*` via compose env (runner `export-env` / SOPS), not the container keyring.
 
 CI: PRs run hermetic `go test -tags=integration` (temp config from `internal/smoke/integration`). Push to **main** runs live integration with `POLYPUS_SMOKE_LIVE=1` and `CF_AI_API_KEY` / `CF_ACCOUNT_ID` secrets.
 
@@ -36,14 +36,14 @@ POLYPUS_MLX_HOST=127.0.0.1
 POLYPUS_MLX_PORT=1322
 POLYPUS_PHOENIX=1
 POLYPUS_OTEL=1
-POLYPUS_SWITCHYARD=1          # 0 skips Switchyard process in make serve
+POLYPUS_SWITCHYARD=1          # 0 skips Switchyard process in go tool task serve
 POLYPUS_SWITCHYARD_BASE_URL=  # override Switchyard probe/render target (tests/ops)
 POLYPUS_SWITCHYARD_CONFIG=    # override generated routes.toml path
 CF_AI_API_KEY=...
 CF_ACCOUNT_ID=...
 ```
 
-Speech smoke: cf_local via `make smoke` / `make smoke-stt`; MLX paths via `make smoke-local` / `make smoke-stt-local` / `make smoke-higgs` (hermetic mock MLX in integration tests). Override with `POLYPUS_DEFAULT_MODEL`, `POLYPUS_DEFAULT_STT_MODEL`, `POLYPUS_DEFAULT_VOICE`, or `POLYPUS_SMOKE_OUT` for TTS file output.
+Speech smoke: cf_local via `go tool task smoke` / `go tool task smoke-stt`; MLX paths via `go tool task smoke-local` / `go tool task smoke-stt-local` / `go tool task smoke-higgs` (hermetic mock MLX in integration tests). Override with `POLYPUS_DEFAULT_MODEL`, `POLYPUS_DEFAULT_STT_MODEL`, `POLYPUS_DEFAULT_VOICE`, or `POLYPUS_SMOKE_OUT` for TTS file output.
 
 ## config.yaml structure
 
@@ -173,7 +173,7 @@ routers:
 
 Backend id `router` is reserved. Composed routers return **503** when Switchyard is down (no fallback).
 
-Build Switchyard: `make switchyard-build` (Rust toolchain per `providers/switchyard/rust-toolchain.toml`).
+Build Switchyard: `go tool task build` (Rust toolchain per `providers/switchyard/rust-toolchain.toml`).
 
 ## API discovery and model catalogs
 

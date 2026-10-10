@@ -19,8 +19,8 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| Connection refused on `:1320` | Gateway not running | `make serve` |
-| process-compose shows gateway crash | Config error, port in use | Read TUI logs; check `POLYPUS_PORT`; `make serve-down` then retry |
+| Connection refused on `:1320` | Gateway not running | `go tool task serve` |
+| process-compose shows gateway crash | Config error, port in use | Read TUI logs; check `POLYPUS_PORT`; `go tool task serve-down` then retry |
 | `model_not_allowed` on POST | Id not in `models.allow` | Add to `~/.config/polypus/config.yaml` or use correct `backend_id/` prefix |
 | Model in host job config but smoke fails | Allow-list drift | Align Polypus `models.allow` with host job model ids |
 | Empty `message.content`, job XML fail | Thinking on; text in `reasoning_content` | [thinking-policy.md](thinking-policy.md); host L2 harness if available |
@@ -32,9 +32,9 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 | Timeout mid-request | Hop shorter than thinking | Raise `timeouts.chat_thinking` or send `X-Polypus-Timeout` within max |
 | Smoke passes, host job fails | L3 fixture or different model | Run host L3 harness for that model when available |
 | TTS works, STT fails | STT model not allowed or wrong backend | Check `stt_backend.default` and allow list |
-| `router/…` returns 503 | Switchyard down or not ready | `/health/backends` → `switchyard`; `make serve-down && make serve`; `make smoke-router` |
+| `router/…` returns 503 | Switchyard down or not ready | `/health/backends` → `switchyard`; `go tool task serve-down && go tool task serve`; `go tool task smoke-router` |
 | Leaf or Switchyard dial returns 503 after recent 5xx | Upstream circuit breaker open (`internal/gateway/upstream.Board`) | Wait for the open window (~30s) or fix the upstream; clients MAY budget-retry 503, MUST NOT expect Polypus to sleep-retry chat (see SKILL.md resilience ownership) |
-| Smoke chat/TTS/STT fail in ~1–3 ms with `circuit breaker is open` on `cf_local` | Breaker still open in a long-lived gateway after earlier CF/auth failures | Fix credentials (`polypus secret set` / env), then `make serve-down && make serve` (breaker state is in-process only). `/health/backends` no longer trips the production breaker. Compare `/health/upstreams` (`state=open`) vs Cloudflare throttle in dump (`polypus.failure.layer=cloudflare`). |
+| Smoke chat/TTS/STT fail in ~1–3 ms with `circuit breaker is open` on `cf_local` | Breaker still open in a long-lived gateway after earlier CF/auth failures | Fix credentials (`polypus secret set` / env), then `go tool task serve-down && go tool task serve` (breaker state is in-process only). `/health/backends` no longer trips the production breaker. Compare `/health/upstreams` (`state=open`) vs Cloudflare throttle in dump (`polypus.failure.layer=cloudflare`). |
 | `POST /v1/chat/completions` returns **429** JSON (`error.type=rate_limit_error`) | Cloudflare Workers AI throttled the account or model (quota 3036, capacity 3040, edge 1015) | Use `curl -i` on the failing request: honor `Retry-After`, `Cf-Ray`, and any `x-ratelimit-*` on the **HTTP response** (not only success `extra_fields`). `error.code` may be `3036`/`3040`/`1015` when Workers JSON survived classification; otherwise `rate_limited`. Do not treat as Polypus breaker. |
 | Same path returns **503** JSON (`error.code=polypus_breaker`, `polypus.failure.layer=polypus_breaker`) | Polypus `gobreaker` refused the dial (open or half-open limit) | Polypus will not dial until the open window ends; honor `Retry-After: 30`. `/health/upstreams` is a live snapshot only, not the response body. |
 | `router/…` returns 502 | Switchyard up but chat hop failed | Check Switchyard logs; upstream leaf error (distinct from 503 unavailable) |
@@ -63,7 +63,7 @@ Agent decision order when a job fails:
 
 1. Edit `~/.config/polypus/config.yaml` (allow-list, defaults, timeouts).
 2. In process-compose TUI: restart `gateway`.
-3. Or: `make serve-down` then `make serve`.
+3. Or: `go tool task serve-down` then `go tool task serve`.
 
 ## Client reminders
 

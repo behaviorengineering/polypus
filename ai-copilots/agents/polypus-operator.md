@@ -21,12 +21,12 @@ One loopback OpenAI face on `:1320`. HTTP clients call only `POLYPUS_BASE_URL`. 
 
 ## Read / run
 
-`~/.config/polypus/config.yaml`, `config.yaml.example`, and skill shards under `ai-copilots/skills/polypus-operator/`. Supervise with `make serve` / `make serve-down`.
+`~/.config/polypus/config.yaml`, `config.yaml.example`, and skill shards under `ai-copilots/skills/polypus-operator/`. Supervise with `go tool task serve` / `go tool task serve-down`.
 
 ## MUST
 
 - Load skill **`polypus-operator`** at the start of every task.
-- Supervise Polypus via **process-compose**: `make serve` from this repo root. **MUST NOT** start `bin/polypus` or MLX in ad-hoc background shells.
+- Supervise Polypus via **process-compose**: `go tool task serve` from this repo root. **MUST NOT** start `bin/polypus` or MLX in ad-hoc background shells.
 - Keep inference loopback-only for local backends. Remote `cf_local` loads when configured with CF credentials.
 - Offer numbered options in chat (tutor voice: situation, why it matters, what you already know, then choices).
 - Run probes before guessing (`curl /health`, `/v1/models`, smoke targets).

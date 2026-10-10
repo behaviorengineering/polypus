@@ -1,0 +1,238 @@
+version: "3"
+
+dotenv: ["ports.env"]
+
+vars:
+  VERSION: '{{.VERSION | default "dev"}}'
+  BINARY: bin/polypus{{exeExt}}
+  SMOKE_BIN: bin/polypus-smoke{{exeExt}}
+  GO_BUILDFLAGS: "-buildvcs=false"
+  LDFLAGS: "-X github.com/behaviorengineering/polypus/internal/buildinfo.Version={{.VERSION}}"
+  INTEGRATION_PKG: ./internal/smoke/integration
+  IMAGE_REPO: xynova/polypus
+  IMAGE_TAG: latest
+  THEME_ACCENT: '{{.OPERATOR_CLI_THEME_ACCENT | default "42"}}'
+  THEME_MARK: '{{.OPERATOR_CLI_THEME_MARK | default "214"}}'
+
+env:
+  FORCE_COLOR: "1"
+  TASK_COLOR: "true"
+  TASK_COLOR_GREEN: "38;5;{{.THEME_ACCENT}}"
+  TASK_COLOR_YELLOW: "38;5;{{.THEME_MARK}}"
+  TASK_COLOR_CYAN: "38;5;{{.THEME_MARK}}"
+
+tasks:
+  default:
+    desc: List local-dev tasks
+    silent: true
+    cmds:
+      - go tool task --list
+      - |
+        echo ""
+        echo "Next steps:"
+        echo "  1. go tool task init"
+        echo "  2. go tool task serve"
+        echo "  3. go tool task smoke-all"
+        echo "  4. POLYPUS_SMOKE_OTEL=1 go tool task smoke-otel"
+        echo ""
+        echo "Long-running stack is process-compose. CLI catalog: bin/polypus help"
+
+  build:
+    desc: Build gateway and switchyard-server binaries
+    deps: [build-gateway, switchyard-build]
+
+  serve:
+    desc: process-compose TUI (gateway, backends, optional observability)
+    deps: [build]
+    cmds:
+      - ./scripts/pc-up.sh
+
+  serve-down:
+    desc: Stop this process-compose project only
+    cmds:
+      - ./scripts/pc-down.sh
+
+  init:
+    desc: Write XDG config from example via polypus init
+    deps: [build-gateway]
+    cmds:
+      - '{{.BINARY}} init'
+
+  test:
+    desc: Unit tests (excludes integration tag)
+    cmds:
+      - go test ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: Run golangci-lint on cmd, internal, and pkg
+    cmds:
+      - go tool golangci-lint run --timeout 5m ./cmd/... ./internal/... ./pkg/...
+
+  format:
+    desc: Format Go sources with gofumpt
+    cmds:
+      - go tool gofumpt -w ./cmd ./internal ./pkg
+
+  tidy:
+    desc: Run go mod tidy
+    cmds:
+      - go mod tidy
+
+  ci:
+    desc: Module CI checks (tidy, gofmt, vet, race tests, build)
+    cmds:
+      - go mod tidy -diff
+      - task: check-config-example
+      - |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "gofmt needed:"
+          echo "$unformatted"
+          exit 1
+        fi
+      - go vet ./...
+      - go test -race -count=1 ./...
+      - go build {{.GO_BUILDFLAGS}} ./...
+
+  mlx-sync:
+    desc: uv sync for MLX backends
+    cmds:
+      - ./backends/mlx/scripts/sync.sh
+
+  build-smoke:
+    desc: Build polypus-smoke CLI
+    deps: [build-smoke-bin]
+
+  docker-build:
+    desc: Build gateway Docker image
+    cmds:
+      - docker build -t {{.IMAGE_REPO}}:{{.IMAGE_TAG}} .
+
+  smoke:
+    desc: Integration smoke TTS
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeTTS
+
+  smoke-local:
+    desc: Integration smoke TTS (MLX local)
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeTTSLocal$'
+
+  smoke-chat:
+    desc: Integration smoke chat
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeChat
+
+  smoke-router:
+    desc: Integration smoke router
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeRouter$'
+
+  smoke-landing:
+    desc: Integration smoke gateway landing
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestGatewayLanding$'
+
+  smoke-batch:
+    desc: Integration smoke batch
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeBatch
+
+  smoke-higgs:
+    desc: Integration smoke Higgs TTS
+    env:
+      POLYPUS_SMOKE_OUT: /tmp/polypus-higgs-smoke.mp3
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeHiggs$'
+
+  smoke-stt:
+    desc: Integration smoke STT
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeSTT
+
+  smoke-stt-local:
+    desc: Integration smoke STT (MLX local)
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeSTTLocal$'
+
+  smoke-systemone:
+    desc: Integration smoke systemone
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeSystemOne
+
+  smoke-all:
+    desc: Run all integration smokes
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeAll
+
+  smoke-otel:
+    desc: Integration smoke OTLP fan-out
+    env:
+      POLYPUS_SMOKE_OTEL: "1"
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeOtelFanout
+
+  sync-config-example:
+    internal: true
+    cmds:
+      - cp config.yaml.example internal/config/config.yaml.example
+
+  check-config-example:
+    internal: true
+    cmds:
+      - |
+        if [ ! -f internal/config/config.yaml.example ]; then
+          echo "missing internal/config/config.yaml.example; run: go tool task sync-config-example" >&2
+          exit 1
+        fi
+        if ! cmp -s config.yaml.example internal/config/config.yaml.example; then
+          echo "config example drift: edit config.yaml.example then go tool task sync-config-example" >&2
+          exit 1
+        fi
+
+  build-gateway:
+    internal: true
+    deps: [sync-config-example]
+    cmds:
+      - go build {{.GO_BUILDFLAGS}} -ldflags "{{.LDFLAGS}}" -o {{.BINARY}} ./cmd/polypus
+
+  build-smoke-bin:
+    internal: true
+    cmds:
+      - go build {{.GO_BUILDFLAGS}} -o {{.SMOKE_BIN}} ./cmd/polypus-smoke
+
+  switchyard-build:
+    internal: true
+    cmds:
+      - |
+        if [ ! -f providers/switchyard/Cargo.toml ]; then
+          echo "switchyard-build: missing providers/switchyard (run: git submodule update --init providers/switchyard)" >&2
+          exit 1
+        fi
+        if ! command -v cargo >/dev/null 2>&1; then
+          echo "switchyard-build: cargo not found; install a Rust toolchain" >&2
+          exit 1
+        fi
+        cargo install --locked --force --path providers/switchyard/crates/switchyard-server --root .
+        if [ ! -x bin/switchyard-server ]; then
+          echo "switchyard-build: expected executable bin/switchyard-server after cargo install" >&2
+          exit 1
+        fi
+
+  install:
+    internal: true
+    cmds:
+      - go build {{.GO_BUILDFLAGS}} -ldflags "{{.LDFLAGS}}" -o {{.GOPATH}}/bin/polypus{{exeExt}} ./cmd/polypus
+    vars:
+      GOPATH:
+        sh: go env GOPATH
+
+  test-integration:
+    internal: true
+    cmds:
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}}

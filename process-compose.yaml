@@ -1,6 +1,6 @@
 # Polypus gateway + backends (standalone process-compose project).
-# Start: make serve  (or: scripts/pc-up.sh)
-# Stop:  make serve-down
+# Start: go tool task serve  (or: scripts/pc-up.sh)
+# Stop:  go tool task serve-down
 # Namespaces: pc-up.sh selects core plus mlx, obs (Phoenix), hyperdx, and otelcol.
 
 version: "0.5"

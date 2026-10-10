@@ -88,7 +88,7 @@ elif [[ -n "$PARENT_MONOREPO_ROOT" && -x "$PARENT_MONOREPO_ROOT/bin/polypus" ]];
   POLYPUS_BIN="$PARENT_MONOREPO_ROOT/bin/polypus"
 fi
 if [[ -z "$POLYPUS_BIN" ]]; then
-  echo "missing polypus binary; run: make build" >&2
+  echo "missing polypus binary; run: go tool task build" >&2
   exit 1
 fi
 export POLYPUS_BIN
@@ -118,7 +118,7 @@ fi
 
 if [[ "$ENABLE_MLX" == "1" ]]; then
   if [[ ! -d "$POLYPUS_DIR/backends/mlx/.venv" ]]; then
-    echo "missing MLX venv; run: make mlx-sync" >&2
+    echo "missing MLX venv; run: go tool task mlx-sync" >&2
     exit 1
   fi
   NAMESPACES+=(mlx)
@@ -210,7 +210,7 @@ _polypus_confirm_continue_without_docker() {
       return 0
       ;;
     *)
-      echo "Aborted. Start Docker Desktop, then rerun make serve." >&2
+      echo "Aborted. Start Docker Desktop, then rerun go tool task serve." >&2
       exit 1
       ;;
   esac

@@ -22,7 +22,7 @@ TEXT="${TTS_SMOKE_TEXT:-Here is what the file shows for this episode.}"
 URL="http://${HOST}:${PORT}/v1/audio/speech"
 
 if ! curl -sf --max-time 2 "http://${HOST}:${PORT}/" >/dev/null 2>&1; then
-  echo "TTS not reachable at ${HOST}:${PORT} — run: make tts-serve" >&2
+  echo "TTS not reachable at ${HOST}:${PORT} — run: go tool task serve" >&2
   exit 1
 fi
 
