@@ -13,22 +13,25 @@ import (
 // proxyOrBifrostChat sends leaf chat via Bifrost when the backend is registered;
 // otherwise falls back to the OpenAI HTTP proxy.
 func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, backendID, downstream, backendURL string, body []byte, hop time.Duration, backendAuth string, patchThinking bool) error {
+	thinkingExtension := ""
+	if patchThinking {
+		if b, ok := h.router.Registry().Backend(backendID); ok {
+			thinkingExtension = b.Extension
+		}
+		if patched, ok := applyChatThinking(body, thinkingExtension, downstream); ok {
+			body = patched
+		}
+	}
 	return h.upstreams.Execute(backendID, func() error {
 		if !h.router.UsesBifrost(backendID) {
-			return proxyChatCompletionsOpts(w, r, backendURL, body, h.client, hop, backendAuth, patchThinking, false)
+			return proxyChatCompletionsOpts(w, r, backendURL, body, h.client, hop, backendAuth, false, "", downstream, false)
 		}
-		return h.bifrostChatResponse(w, r, backendID, downstream, body, hop, patchThinking)
+		return h.bifrostChatResponse(w, r, backendID, downstream, body, hop)
 	})
 }
 
 // bifrostChatResponse dials chat through Bifrost (stream or non-stream).
-// patchThinking matches leaf OpenAI-compat behavior; Switchyard hops pass false.
-func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request, backendID, model string, body []byte, hop time.Duration, patchThinking bool) error {
-	if patchThinking {
-		if patched, ok := disableChatThinkingInRequest(body); ok {
-			body = patched
-		}
-	}
+func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request, backendID, model string, body []byte, hop time.Duration) error {
 	if chatBodyIsStream(body) {
 		chunks, errCh, err := h.router.ChatCompletionStreamRaw(r.Context(), backendID, model, body, hop)
 		if err != nil {

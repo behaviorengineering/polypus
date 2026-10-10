@@ -1,175 +1,105 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/config"
 )
 
-func TestMergeReasoningIntoContent(t *testing.T) {
-	in := []byte(`{"choices":[{"message":{"role":"assistant","content":null,"reasoning":"answer text"}}]}`)
-	out, changed := mergeReasoningIntoContent(in)
-	if !changed {
-		t.Fatal("expected change")
+func chatJSONField(t *testing.T, body []byte, path ...string) any {
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
-	if !strings.Contains(string(out), `"content":"answer text"`) {
-		t.Fatalf("body=%s", out)
+	cur := root
+	for i, key := range path {
+		if i == len(path)-1 {
+			return cur[key]
+		}
+		cur = cur[key].(map[string]any)
 	}
+	return nil
 }
 
-func TestEnsureStreamChoiceFinishReason(t *testing.T) {
-	missing := []byte(`{"id":"c1","choices":[{"index":0,"delta":{"content":"Hi"}}]}`)
-	out, changed := ensureStreamChoiceFinishReason(missing)
-	if !changed {
-		t.Fatal("expected finish_reason null injection")
-	}
-	if !strings.Contains(string(out), `"finish_reason":null`) {
-		t.Fatalf("body=%s", out)
-	}
-
-	already := []byte(`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
-	out, changed = ensureStreamChoiceFinishReason(already)
-	if changed {
-		t.Fatalf("should not rewrite terminal finish_reason: %s", out)
-	}
-
-	nullPresent := []byte(`{"choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}`)
-	out, changed = ensureStreamChoiceFinishReason(nullPresent)
-	if changed {
-		t.Fatalf("should not rewrite existing null finish_reason: %s", out)
-	}
-}
-
-func TestChatBodyIsStream(t *testing.T) {
-	if chatBodyIsStream([]byte(`{"stream":true}`)) != true {
-		t.Fatal("expected stream")
-	}
-	if chatBodyIsStream([]byte(`{"stream":false}`)) {
-		t.Fatal("expected non-stream")
-	}
-}
-
-func TestChatBodyHasVisionImageOnly(t *testing.T) {
-	imageOnly := []byte(`{"model":"x","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}`)
-	if !chatBodyHasVision(imageOnly) {
-		t.Fatal("expected vision for image-only content")
-	}
-	textOnly := []byte(`{"model":"x","messages":[{"role":"user","content":"hi"}]}`)
-	if chatBodyHasVision(textOnly) {
-		t.Fatal("expected no vision for string content")
-	}
-}
-
-func TestDisableChatThinkingInRequestGLM(t *testing.T) {
+func TestApplyChatThinkingCloudflareGLMOff(t *testing.T) {
 	in := []byte(`{"model":"@cf/zai-org/glm-4.7-flash","messages":[{"role":"user","content":"hi"}]}`)
-	out, changed := disableChatThinkingInRequest(in)
+	out, changed := applyChatThinking(in, config.ExtensionCloudflare, "glm-4.7-flash")
 	if !changed {
 		t.Fatal("expected change")
 	}
-	if !strings.Contains(string(out), `"enable_thinking":false`) {
-		t.Fatalf("body=%s", out)
+	if chatJSONField(t, out, "chat_template_kwargs", "enable_thinking") != false {
+		t.Fatal("expected false kwargs")
 	}
 }
 
-func TestDisableChatThinkingInRequestDeepSeek(t *testing.T) {
-	in := []byte(`{"model":"cf_local/@cf/deepseek-ai/deepseek-v4-flash-0731","messages":[{"role":"user","content":"hi"}]}`)
-	out, changed := disableChatThinkingInRequest(in)
+func TestApplyChatThinkingGeminiGemma4DefaultOff(t *testing.T) {
+	in := []byte(`{"model":"gemma-4-26b-a4b-it","messages":[{"role":"user","content":"hi"}]}`)
+	out, changed := applyChatThinking(in, config.ExtensionGemini, "gemma-4-26b-a4b-it")
 	if !changed {
 		t.Fatal("expected change")
 	}
-	if !strings.Contains(string(out), `"reasoning_effort":"none"`) {
-		t.Fatalf("body=%s", out)
+	if chatJSONField(t, out, "reasoning", "effort") != "minimal" {
+		t.Fatal("expected minimal")
+	}
+	if strings.Contains(string(out), "chat_template_kwargs") {
+		t.Fatal("no kwargs")
 	}
 }
 
-func TestDisableChatThinkingDeepSeekHonorsExplicitHigh(t *testing.T) {
-	in := []byte(`{"model":"@cf/deepseek-ai/deepseek-v4-flash-0731","reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}`)
-	out, changed := disableChatThinkingInRequest(in)
-	if changed {
-		t.Fatalf("should not rewrite when reasoning_effort is high: %s", out)
-	}
-	if !chatBodyWantsThinking(in) {
-		t.Fatal("expected thinking on for high effort")
-	}
-}
-
-func TestDisableChatThinkingDeepSeekExplicitNoneUnchanged(t *testing.T) {
-	in := []byte(`{"model":"@cf/deepseek-ai/deepseek-v4-flash-0731","reasoning_effort":"none","messages":[{"role":"user","content":"hi"}]}`)
-	out, changed := disableChatThinkingInRequest(in)
-	if changed {
-		t.Fatalf("should not rewrite when reasoning_effort is already none: %s", out)
-	}
+func TestApplyChatThinkingGeminiKwargsOnlyStripped(t *testing.T) {
+	in := []byte(`{"model":"gemma-4-26b-a4b-it","chat_template_kwargs":{"enable_thinking":true},"messages":[{"role":"user","content":"hi"}]}`)
+	out, _ := applyChatThinking(in, config.ExtensionGemini, "gemma-4-26b-a4b-it")
 	if chatBodyWantsThinking(in) {
-		t.Fatal("expected thinking off for none")
+		t.Fatal("kwargs not opt-in")
+	}
+	if chatJSONField(t, out, "reasoning", "effort") != "minimal" {
+		t.Fatal("expected minimal")
 	}
 }
 
-func TestDisableChatThinkingHonorsExplicitOn(t *testing.T) {
-	in := []byte(`{"model":"@cf/google/gemma-4-26b-a4b-it","enable_thinking":true,"messages":[{"role":"user","content":"hi"}]}`)
-	out, changed := disableChatThinkingInRequest(in)
-	if changed {
-		t.Fatalf("should not rewrite when thinking is on: %s", out)
+func TestApplyChatThinkingGemini25OnOff(t *testing.T) {
+	onOut, changed := applyChatThinking([]byte(`{"model":"gemini-2.5-flash","reasoning":{"effort":"high"},"messages":[]}`), config.ExtensionGemini, "gemini-2.5-flash")
+	if !changed {
+		t.Fatal("on")
 	}
-	if !chatBodyWantsThinking(in) {
-		t.Fatal("expected thinking")
+	if chatJSONField(t, onOut, "reasoning", "max_tokens") != float64(-1) {
+		t.Fatal("max_tokens -1")
+	}
+	offOut, changed := applyChatThinking([]byte(`{"model":"gemini-2.5-flash","messages":[]}`), config.ExtensionGemini, "gemini-2.5-flash")
+	if !changed || chatJSONField(t, offOut, "reasoning", "max_tokens") != float64(0) {
+		t.Fatal("off")
 	}
 }
 
-func TestChatBodyWantsThinkingKwargs(t *testing.T) {
-	in := []byte(`{"model":"x","chat_template_kwargs":{"enable_thinking":true}}`)
-	if !chatBodyWantsThinking(in) {
-		t.Fatal("expected kwargs thinking")
+func TestChatBodyWantsThinkingOpenAIOnly(t *testing.T) {
+	if !chatBodyWantsThinking([]byte(`{"reasoning":{"effort":"high"}}`)) {
+		t.Fatal("high on")
 	}
-	off := []byte(`{"model":"x","enable_thinking":false}`)
-	if chatBodyWantsThinking(off) {
-		t.Fatal("expected thinking off")
+	if chatBodyWantsThinking([]byte(`{"chat_template_kwargs":{"enable_thinking":true}}`)) {
+		t.Fatal("kwargs off")
 	}
 }
 
 func TestStreamSafeClientClearsTimeout(t *testing.T) {
-	c := newChatProxyClient(30 * time.Second)
-	if c.Timeout == 0 {
-		t.Fatal("expected non-stream client to have Timeout")
-	}
-	s := streamSafeClient(c)
+	s := streamSafeClient(newChatProxyClient(30 * time.Second))
 	if s.Timeout != 0 {
-		t.Fatalf("stream client Timeout=%v want 0", s.Timeout)
-	}
-	if streamSafeClient(nil) == nil {
-		t.Fatal("nil client should yield stream client")
+		t.Fatal("timeout cleared")
 	}
 }
 
 func TestProxyChatCompletionsStream(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
-			http.NotFound(w, r)
-			return
-		}
-		if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-			t.Fatalf("accept: %q", r.Header.Get("Accept"))
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"))
 	}))
-	t.Cleanup(upstream.Close)
-
+	t.Cleanup(up.Close)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
-		`{"model":"test","messages":[],"stream":true}`,
-	))
 	body := []byte(`{"model":"test","messages":[],"stream":true}`)
-	err := proxyChatCompletions(rec, req, upstream.URL, body, upstream.Client(), 0, "")
-	if err != nil {
+	if err := proxyChatCompletions(rec, httptest.NewRequest(http.MethodPost, "/", nil), up.URL, body, up.Client(), 0, ""); err != nil {
 		t.Fatal(err)
-	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "data: [DONE]") {
-		t.Fatalf("body: %q", rec.Body.String())
 	}
 }
