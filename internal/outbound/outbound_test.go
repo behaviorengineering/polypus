@@ -17,7 +17,8 @@ func TestRunMissingDeadline(t *testing.T) {
 }
 
 func TestRunNilContext(t *testing.T) {
-	err := Run(nil, DepGitHub, func() error { return nil })
+	var ctx context.Context // nil on purpose
+	err := Run(ctx, DepGitHub, func() error { return nil })
 	if err == nil || err.Error() != "outbound: context required" {
 		t.Fatalf("got %v", err)
 	}
@@ -44,7 +45,7 @@ func TestDoRetries503(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
@@ -71,7 +72,7 @@ func TestDoAbort404(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status %d", resp.StatusCode)
 	}

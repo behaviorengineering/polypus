@@ -26,13 +26,14 @@ const (
 
 // BackendDef is one OpenAI-compatible inference worker.
 type BackendDef struct {
-	ID           string         `yaml:"-"`
-	Remote       bool           `yaml:"remote"`
-	Extension    string         `yaml:"extension"`
-	BaseURL      string         `yaml:"base_url"`
-	Auth         BackendAuth    `yaml:"auth"`
-	Capabilities []Capability   `yaml:"capabilities"`
-	Models       *BackendModels `yaml:"models"`
+	ID           string            `yaml:"-"`
+	Remote       bool              `yaml:"remote"`
+	Extension    string            `yaml:"extension"`
+	BaseURL      string            `yaml:"base_url"`
+	Auth         BackendAuth       `yaml:"auth"`
+	ExtraHeaders map[string]string `yaml:"extra_headers"`
+	Capabilities []Capability      `yaml:"capabilities"`
+	Models       *BackendModels    `yaml:"models"`
 }
 
 // HasExtension reports whether the backend uses a named extension module.
@@ -43,6 +44,11 @@ func (b BackendDef) HasExtension(name string) bool {
 // IsCloudflareExtension reports whether the backend uses the Cloudflare extension.
 func (b BackendDef) IsCloudflareExtension() bool {
 	return b.HasExtension(ExtensionCloudflare)
+}
+
+// IsGeminiExtension reports whether the backend uses the Google Gemini Developer API extension.
+func (b BackendDef) IsGeminiExtension() bool {
+	return b.HasExtension(ExtensionGemini)
 }
 
 // CapabilityBackend is an optional capability default (chat, vision, embed, TTS, STT, proxy, systemone).

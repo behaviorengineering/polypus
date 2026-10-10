@@ -8,7 +8,10 @@ import (
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
-const ExtensionCloudflare = "cloudflare"
+const (
+	ExtensionCloudflare = "cloudflare"
+	ExtensionGemini     = "gemini"
+)
 
 // ExpandEnv replaces ${VAR} placeholders in s from the process environment.
 // Substituted values are trimmed so pasted line endings do not reach URLs or headers.

@@ -99,7 +99,33 @@ backends:
     models:
       sync: true
       allow: [...]
+  gemini_studio:
+    remote: true
+    extension: gemini
+    auth:
+      bearer_env: GEMINI_API_KEY
+    capabilities: [chat]
+    models:
+      sync: true
+      allow:
+        - gemma-4-26b-a4b-it
+        - gemma-4-31b-it
+  openrouter:
+    remote: true
+    base_url: https://openrouter.ai/api/v1
+    auth:
+      bearer_env: OPENROUTER_API_KEY
+    extra_headers:
+      HTTP-Referer: https://example.com
+      X-Title: Polypus
+    capabilities: [chat]
+    models:
+      sync: true
+      allow: [...]
 ```
+
+`extension: gemini` uses Bifrost native `generateContent` (Google AI Studio). `base_url` is optional (defaults to the Developer API). Generic remote OpenAI backends cannot point at `generativelanguage.googleapis.com`; only `extension: gemini` may.
+
 
 Capability defaults use `*_backend` blocks (`enabled` + `default`): `chat_backend`, `vision_backend`, `embed_backend`, `tts_backend`, `stt_backend`, `proxy_backend`, `systemone_backend`, `batch_backend`. Set `enabled: false` (or omit) to skip a capability. Remote backends (`remote: true`) load when listed in config and their `auth.bearer_env` is set in the environment (possibly filled from the OS keyring for names in `secrets:`). `proxy_backend` covers voices and may inherit `tts_backend.default` when enabled with an empty default. `systemone_backend` fronts `POST /v1/systemone` (TypeSafe/Decider wire; Cloudflare `typesafe/jev` via `/ai/run`). `batch_backend` fronts OpenAI `/v1/files` and `/v1/batches` mapped to Cloudflare Workers AI async batch (`batch` capability on `extension: cloudflare` backends; JSONL under `POLYPUS_BATCH_DIR` or `~/.local/state/polypus/batch`). `POST /v1/batches/{id}/cancel` returns HTTP 501 because Workers AI has no cancel API.
 
@@ -108,7 +134,7 @@ Client header `X-Polypus-Timeout` (duration or seconds) clamps to `timeouts.min`
 ## Model ids
 
 - Gateway rewrites ids as `backend_id/downstream-model`.
-- Examples: `cf_local/@cf/google/gemma-4-26b-a4b-it`, `lm_studio/allenai/olmocr-2-7b`, `cf_local/typesafe/jev`.
+- Examples: `cf_local/@cf/google/gemma-4-26b-a4b-it`, `gemini_studio/gemma-4-26b-a4b-it`, `openrouter/google/gemma-3-27b-it:free`, `lm_studio/allenai/olmocr-2-7b`, `cf_local/typesafe/jev`.
 - Named routers: `router/<name>` (e.g. `router/investigator`, `router/scribe`).
 - No prefix → capability default backend applies.
 

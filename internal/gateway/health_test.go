@@ -202,11 +202,33 @@ func TestProbeCloudflareCredentialsSkipsLocal(t *testing.T) {
 		calls++
 		return nil, nil
 	}
-	if err := probeCloudflareCredentials(context.Background(), cfg, getCF); err != nil {
+	if err := probeRemoteCredentials(context.Background(), cfg, getCF); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 {
 		t.Fatalf("cfGet calls=%d", calls)
+	}
+}
+
+func TestProbeRemoteCredentialsFailsOnMissingGeminiKey(t *testing.T) {
+	cfg := config.RouterConfig{
+		Backends: map[string]config.BackendDef{
+			"gemini_studio": {
+				ID:           "gemini_studio",
+				Remote:       true,
+				Extension:    config.ExtensionGemini,
+				Auth:         config.BackendAuth{BearerEnv: "GEMINI_API_KEY"},
+				Capabilities: []config.Capability{config.CapChat},
+			},
+		},
+	}
+	t.Setenv("GEMINI_API_KEY", "")
+	err := probeRemoteCredentials(context.Background(), cfg, nil)
+	if err == nil {
+		t.Fatal("expected missing key error")
+	}
+	if !strings.Contains(err.Error(), "gemini_studio") {
+		t.Fatalf("error %v", err)
 	}
 }
 
@@ -237,7 +259,7 @@ func TestProbeCloudflareCredentialsFailsOnPing401(t *testing.T) {
 	getCF := func(def config.BackendDef) (*cloudflare.Client, error) {
 		return cloudflare.NewClient(def)
 	}
-	err := probeCloudflareCredentials(context.Background(), cfg, getCF)
+	err := probeRemoteCredentials(context.Background(), cfg, getCF)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -269,7 +291,7 @@ func TestProbeCloudflareCredentialsFailsOnGetError(t *testing.T) {
 	getCF := func(def config.BackendDef) (*cloudflare.Client, error) {
 		return nil, fmt.Errorf("bad creds")
 	}
-	err := probeCloudflareCredentials(context.Background(), cfg, getCF)
+	err := probeRemoteCredentials(context.Background(), cfg, getCF)
 	if err == nil {
 		t.Fatal("expected error")
 	}

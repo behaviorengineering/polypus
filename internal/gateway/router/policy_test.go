@@ -46,6 +46,47 @@ func TestValidateLocalBackendAllowsLANWhenPolicyOff(t *testing.T) {
 	}
 }
 
+func TestValidateGeminiBackendEmptyURL(t *testing.T) {
+	b := config.BackendDef{
+		Remote:    true,
+		Extension: config.ExtensionGemini,
+		Auth:      config.BackendAuth{BearerEnv: "GEMINI_API_KEY"},
+	}
+	if err := ValidateBackend(b, config.DefaultRouterPolicy()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateGeminiBackendGoogleHost(t *testing.T) {
+	b := config.BackendDef{
+		Remote:    true,
+		Extension: config.ExtensionGemini,
+		BaseURL:   "https://generativelanguage.googleapis.com/v1beta",
+		Auth:      config.BackendAuth{BearerEnv: "GEMINI_API_KEY"},
+	}
+	if err := ValidateBackend(b, config.DefaultRouterPolicy()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateRemoteRejectsGoogleHostWithoutGeminiExtension(t *testing.T) {
+	b := config.BackendDef{
+		Remote:  true,
+		BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+		Auth:    config.BackendAuth{BearerEnv: "GEMINI_API_KEY"},
+	}
+	if err := ValidateBackend(b, config.DefaultRouterPolicy()); err == nil {
+		t.Fatal("expected blocked google host for generic remote")
+	}
+}
+
+func TestIsGeminiExtension(t *testing.T) {
+	b := config.BackendDef{Extension: config.ExtensionGemini}
+	if !b.IsGeminiExtension() {
+		t.Fatal("expected gemini extension")
+	}
+}
+
 func TestOpenAIBaseURL(t *testing.T) {
 	if got := openAIBaseURL("http://127.0.0.1:1322/"); got != "http://127.0.0.1:1322" {
 		t.Fatalf("got %q", got)

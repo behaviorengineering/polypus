@@ -58,6 +58,19 @@ backends:
         - "@cf/deepgram/nova-3"
         - "typesafe/jev"
 
+  # Optional Google AI Studio (extension gemini; GEMINI_API_KEY in env or keyring):
+  # gemini_studio:
+  #   remote: true
+  #   extension: gemini
+  #   auth:
+  #     bearer_env: GEMINI_API_KEY
+  #   capabilities: [chat]
+  #   models:
+  #     sync: true
+  #     allow:
+  #       - gemma-4-26b-a4b-it
+  #       - gemma-4-31b-it
+
 # Optional named routers (public ids: router/<name>). Majordomo tower code tasks use the
 # DeepSeek model id directly; router/code is for ad-hoc local consults (cf_local/... or router/code).
 # routers:
