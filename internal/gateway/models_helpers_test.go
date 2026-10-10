@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 
@@ -182,5 +183,93 @@ func TestClassifyNamedRouterRoute(t *testing.T) {
 	}
 	if classifyNamedRouterRoute("nope") != dispatchUnknown {
 		t.Fatal("unknown")
+	}
+}
+
+func TestOpenAIModelsListURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		base    string
+		wantSub string
+		wantNot string
+	}{
+		{
+			name:    "openrouter",
+			base:    "https://openrouter.ai/api/v1",
+			wantSub: "output_modalities=all",
+		},
+		{
+			name:    "openrouter_trailing",
+			base:    "https://openrouter.ai/api/v1/",
+			wantSub: "output_modalities=all",
+		},
+		{
+			name:    "openrouter_www",
+			base:    "https://www.openrouter.ai/api/v1",
+			wantSub: "output_modalities=all",
+		},
+		{
+			name:    "openrouter_mixed_case_host",
+			base:    "https://OpenRouter.ai/api/v1",
+			wantSub: "output_modalities=all",
+		},
+		{
+			name:    "cloudflare",
+			base:    "https://api.cloudflare.com/client/v4/accounts/x/ai/v1",
+			wantNot: "output_modalities",
+		},
+		{
+			name:    "lm_studio",
+			base:    "http://127.0.0.1:1234/v1",
+			wantNot: "output_modalities",
+		},
+		{
+			name:    "evil_host",
+			base:    "https://evilopenrouter.ai/api/v1",
+			wantNot: "output_modalities",
+		},
+		{
+			name:    "empty",
+			base:    "",
+			wantNot: "output_modalities",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := openAIModelsListURL(tc.base)
+			if tc.wantSub != "" && !strings.Contains(got, tc.wantSub) {
+				t.Fatalf("url=%q want substring %q", got, tc.wantSub)
+			}
+			if tc.wantNot != "" && strings.Contains(got, tc.wantNot) {
+				t.Fatalf("url=%q must not contain %q", got, tc.wantNot)
+			}
+		})
+	}
+}
+
+func TestOpenAIModelsListURLPreservesExistingModality(t *testing.T) {
+	target := openAIModelsURL("https://openrouter.ai/api/v1")
+	u, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("output_modalities", "text")
+	u.RawQuery = q.Encode()
+	got := openAIModelsListURL("https://openrouter.ai/api/v1")
+	if strings.Contains(got, "output_modalities=text") {
+		t.Fatalf("fresh base should request all modalities: %s", got)
+	}
+	if !strings.Contains(got, "output_modalities=all") {
+		t.Fatalf("url=%q", got)
+	}
+	// Merge policy on a target that already has a modality param.
+	u2, err := url.Parse(u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q2 := u2.Query()
+	if q2.Get("output_modalities") != "text" {
+		t.Fatal("parsed target keeps text modality")
 	}
 }

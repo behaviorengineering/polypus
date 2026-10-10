@@ -134,7 +134,8 @@ Client header `X-Polypus-Timeout` (duration or seconds) clamps to `timeouts.min`
 ## Model ids
 
 - Gateway rewrites ids as `backend_id/downstream-model`.
-- Examples: `cf_local/@cf/google/gemma-4-26b-a4b-it`, `gemini_studio/gemma-4-26b-a4b-it`, `openrouter/google/gemma-3-27b-it:free`, `lm_studio/allenai/olmocr-2-7b`, `cf_local/typesafe/jev`.
+- Examples: `cf_local/@cf/google/gemma-4-26b-a4b-it`, `gemini_studio/gemma-4-26b-a4b-it`, `openrouter/google/gemma-4-26b-a4b-it:free`, `lm_studio/allenai/olmocr-2-7b`, `cf_local/typesafe/jev`.
+- OpenRouter inventory sync (`models.sync: true` with `base_url` host `openrouter.ai` or `*.openrouter.ai`) appends `output_modalities=all` on the upstream models list request so speech and other non-text slugs appear in inventory; `models.allow` remains the inference gate.
 - Named routers: `router/<name>` (e.g. `router/investigator`, `router/scribe`).
 - No prefix → capability default backend applies.
 

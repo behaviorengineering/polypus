@@ -406,7 +406,7 @@ func (h modelsHandler) fetchBackendModelsProtected(r *http.Request, b config.Bac
 }
 
 func fetchBackendModelsErr(r *http.Request, b config.BackendDef) ([]openaiModel, error) {
-	target := openAIModelsURL(b.BaseURL)
+	target := openAIModelsListURL(b.BaseURL)
 	ctx := r.Context()
 	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, modelsListTimeout)
 	defer cancel()
@@ -482,6 +482,41 @@ func openAIModelsURL(base string) string {
 		return base + "/models"
 	}
 	return base + "/v1/models"
+}
+
+// isOpenRouterHost reports whether base URL targets OpenRouter's API host.
+func isOpenRouterHost(base string) bool {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return false
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	return host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai")
+}
+
+// openAIModelsListURL is the upstream models list URL, including OpenRouter modality query.
+func openAIModelsListURL(base string) string {
+	target := openAIModelsURL(base)
+	if !isOpenRouterHost(base) {
+		return target
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	q := u.Query()
+	if q.Get("output_modalities") == "" {
+		q.Set("output_modalities", "all")
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }
 
 func prefixModelID(backendID, modelID string) string {
