@@ -17,4 +17,4 @@ fi
 uv sync "$@"
 
 echo "MLX venv: ${MLX_DIR}/.venv"
-echo "Start full stack: make -C polypus serve"
+echo "Start full stack: go tool task serve"

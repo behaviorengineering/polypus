@@ -22,8 +22,8 @@ description: >-
 
 | Action | Command |
 |--------|---------|
-| Start | `make serve` |
-| Stop | `make serve-down` |
+| Start | `go tool task serve` |
+| Stop | `go tool task serve-down` |
 | Detached | `./scripts/pc-up.sh -D` |
 
 **MUST NOT** start `bin/polypus` or MLX in ad-hoc Cursor shells.
@@ -38,7 +38,7 @@ Offer numbered options. One probe per turn when possible.
 curl -sf http://127.0.0.1:1320/health | jq .
 ```
 
-- Fail → offer `make serve`.
+- Fail → offer `go tool task serve`.
 - OK but backend red → open [troubleshooting.md](troubleshooting.md) for that backend.
 
 ### 2. Which models are enabled?
@@ -54,10 +54,10 @@ Compare to `config.yaml` `backends.*.models.allow`. OpenAI surface = chat/embed/
 
 ### 3. Smoke all Cloudflare channels
 
-Hermetic L1 smoke builds `cmd/polypus`, starts a temp gateway with a mock Cloudflare backend, and runs probes (no `make serve`):
+Hermetic L1 smoke builds `cmd/polypus`, starts a temp gateway with a mock Cloudflare backend, and runs probes (no `go tool task serve`):
 
 ```bash
-make smoke-all
+go tool task smoke-all
 # or: go test -tags=integration -count=1 ./internal/smoke/integration
 ```
 
@@ -66,7 +66,7 @@ Runs chat (granite-4.0-h-micro), TTS (aura), STT (nova), and systemone (`typesaf
 ### 3a. Smoke chat only (L1 transport)
 
 ```bash
-make smoke-chat
+go tool task smoke-chat
 ```
 
 Default model: `cf_local/@cf/ibm-granite/granite-4.0-h-micro` (override with `POLYPUS_CHAT_SMOKE_MODEL`).
@@ -76,13 +76,13 @@ Default model: `cf_local/@cf/ibm-granite/granite-4.0-h-micro` (override with `PO
 Run after step 3a when `/v1/models` lists `router/…` ids or `~/.config/polypus/config.yaml` has `routers:` with a composed (`stage_router`) entry:
 
 ```bash
-make smoke-router
+go tool task smoke-router
 ```
 
 Default model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`).
 
-- **503 / switchyard unavailable** → check `/health/backends` for `"id":"switchyard"`; ensure Switchyard is in the stack (`POLYPUS_SWITCHYARD=1`, default). Restart with `make serve-down && make serve`.
-- **Passthrough only** (e.g. `router/scribe`) → `POLYPUS_ROUTER_SMOKE_MODEL=router/scribe make smoke-router`; Switchyard not required (`POLYPUS_SWITCHYARD=0` OK).
+- **503 / switchyard unavailable** → check `/health/backends` for `"id":"switchyard"`; ensure Switchyard is in the stack (`POLYPUS_SWITCHYARD=1`, default). Restart with `go tool task serve-down && go tool task serve`.
+- **Passthrough only** (e.g. `router/scribe`) → `POLYPUS_ROUTER_SMOKE_MODEL=router/scribe go tool task smoke-router`; Switchyard not required (`POLYPUS_SWITCHYARD=0` OK).
 
 `/health/backends` probing Switchyard is **not** a substitute for this smoke; it only checks `:4000/health`.
 
@@ -92,10 +92,10 @@ Router smoke integration requires Switchyard routing metadata: response header `
 
 ### 3c. Smoke OpenAI batch facade
 
-Requires `batch_backend` enabled, `batch` capability on a Cloudflare extension backend, and a Workers AI batch-capable model on the allow list. Not part of `make smoke-all` (async poll can take minutes).
+Requires `batch_backend` enabled, `batch` capability on a Cloudflare extension backend, and a Workers AI batch-capable model on the allow list. Not part of `go tool task smoke-all` (async poll can take minutes).
 
 ```bash
-make smoke-batch
+go tool task smoke-batch
 ```
 
 Default model: `cf_local/@cf/google/gemma-4-26b-a4b-it`. Integration test `TestSmokeBatch` probes upload JSONL (`POST /v1/files`), create a batch (`POST /v1/batches`), poll until terminal, then check output file content for the smoke `custom_id`.
@@ -105,21 +105,21 @@ Default model: `cf_local/@cf/google/gemma-4-26b-a4b-it`. Integration test `TestS
 Requires `systemone_backend` enabled and `typesafe/jev` on the allow list. The CLI dials the gateway; Cloudflare credentials come from config `secrets:` plus keyring or process env on **serve**, not from the smoke shell:
 
 ```bash
-make smoke-systemone
+go tool task smoke-systemone
 ```
 
 Clients speak TypeSafe wire format at `POST /v1/systemone` (point `TYPESAFE_BASE_URL` at `:1320`).
 
 ### 4. Smoke audio
 
-Default path is **cf_local** (`make smoke` / `make smoke-stt` use hermetic mock Cloudflare). MLX model ids (`make smoke-local`, `make smoke-stt-local`, `make smoke-higgs`) use hermetic mock MLX in integration tests (no `make serve`):
+Default path is **cf_local** (`go tool task smoke` / `go tool task smoke-stt` use hermetic mock Cloudflare). MLX model ids (`go tool task smoke-local`, `go tool task smoke-stt-local`, `go tool task smoke-higgs`) use hermetic mock MLX in integration tests (no `go tool task serve`):
 
 ```bash
-make smoke
-make smoke-stt
-make smoke-local
-make smoke-stt-local
-make smoke-higgs
+go tool task smoke
+go tool task smoke-stt
+go tool task smoke-local
+go tool task smoke-stt-local
+go tool task smoke-higgs
 ```
 
 ### 5. Full model matrix
@@ -153,14 +153,14 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 
 ## Config edits
 
-- Bootstrap: `make init` or `polypus init` (writes `~/.config/polypus/config.yaml` if missing). **MUST NOT** treat a manual `cp config.yaml.example` as the default setup.
+- Bootstrap: `go tool task init` or `polypus init` (writes `~/.config/polypus/config.yaml` if missing). **MUST NOT** treat a manual `cp config.yaml.example` as the default setup.
 - Cloudflare (local machine): uncomment `secrets:` (`CF_AI_API_KEY`, `CF_ACCOUNT_ID`) and the `cf_local` backend in that file, then:
   ```bash
   polypus secret set CF_AI_API_KEY
   polypus secret set CF_ACCOUNT_ID
   ```
   `secret set` refuses names that are not listed under `secrets:` in the live config. Omit `secrets:` for MLX-only so the keyring is never queried. Docker Compose / Windows GitLab: put `CF_*` in the container env (SOPS); do not use the host keyring inside Linux containers.
-- After YAML `backends`, `routers:`, or secrets change: restart gateway in process-compose TUI (or `make serve-down && make serve`). Runtime allow via `GET /` form or `POST /v1/admin/models/allow` does **not** require restart.
+- After YAML `backends`, `routers:`, or secrets change: restart gateway in process-compose TUI (or `go tool task serve-down && go tool task serve`). Runtime allow via `GET /` form or `POST /v1/admin/models/allow` does **not** require restart.
 - Gateway access keys (optional): `polypus admin-key generate --name ops --yes`. When at least one key exists, the whole gateway (except `GET /health*`) requires `Authorization: Bearer ppk...`, `X-Api-Key`, or HTTP Basic (password = the key). Empty key store = open. Allow POST is inventory-gated only (no per-route key).
 - With `cf_local` configured, serve fail-closes on startup if Cloudflare Model Search ping fails (fix `secret set` / env; MLX-only configs skip this probe). Remote backends (including `extension: gemini` and OpenRouter) must resolve `auth.bearer_env` at startup.
 - **MUST NOT** add non-loopback backend URLs when `reject_non_loopback_backends` applies.
@@ -170,7 +170,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 - Phoenix UI: http://127.0.0.1:6006 (LLM / OpenInference)
 - HyperDX UI: http://127.0.0.1:8080 (app traces / logs)
 - OTLP ingest (gateway, Switchyard, clients): gRPC `127.0.0.1:4317`, HTTP `127.0.0.1:4318` via `polypus-otelcol` (`otelcol.config.yaml` routing: all traces to HyperDX; OpenInference / `gen_ai.*` spans also copied to Phoenix)
-- OTel fan-out integration smoke: `POLYPUS_SMOKE_OTEL=1 make smoke-otel` (Docker `phoenix`, `hyperdx`, `otelcol`; matches `make serve` obs stack). Homelab host: `make smoke-collector` from `polypus-local` after deploy or serve.
+- OTel fan-out integration smoke: `POLYPUS_SMOKE_OTEL=1 go tool task smoke-otel` (Docker `phoenix`, `hyperdx`, `otelcol`; matches `go tool task serve` obs stack). Homelab host: `make smoke-collector` from `polypus-local` after deploy or serve.
 - `POLYPUS_OTLP_ENDPOINT` defaults to `http://127.0.0.1:4317` when both `POLYPUS_PHOENIX=1` and `POLYPUS_HYPERDX=1` (set by `pc-up.sh`); use `${POLYPUS_OTLP_ENDPOINT}` for `openinference.endpoint` in client configs
 - HyperDX OTel table TTL: `HYPERDX_OTEL_EXPORTER_TABLES_TTL` (default `1h`); set `HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL=true` once to rewrite existing `otel_*` table TTLs
 - HyperDX ClickHouse system-log TTL: 7 days via `hyperdx.clickhouse.config.xml` (separate from OTel retention)
@@ -179,7 +179,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 - Skip containers: `POLYPUS_PHOENIX=0`, `POLYPUS_HYPERDX=0`
 - Docker probe timeout (default 3s): `POLYPUS_DOCKER_PROBE_TIMEOUT`
 - Skip Docker confirm when daemon is down: `POLYPUS_DOCKER_CONTINUE=1`
-- `make serve-down` stops processes only; named Phoenix/HyperDX volumes are kept (pack skill `process-compose-docker`)
+- `go tool task serve-down` stops processes only; named Phoenix/HyperDX volumes are kept (pack skill `process-compose-docker`)
 - Shared practice: skill `process-compose-docker` (cursor-packs)
 
 ## Client contract

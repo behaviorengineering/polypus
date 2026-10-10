@@ -1,5 +1,5 @@
 # Observability containers (process-compose via scripts/pc-*.sh).
-# Host gateway: make serve (process-compose).
+# Host gateway: go tool task serve (process-compose).
 # Phoenix: POLYPUS_PHOENIX=1 (default). HyperDX: POLYPUS_HYPERDX=1 (default). OTel fan-out: otelcol.
 # OTLP ingest on host :4317 (gRPC) and :4318 (HTTP) via otelcol; routes all traces to HyperDX and
 # OpenInference / gen_ai.* spans to Phoenix. UIs: Phoenix :6006, HyperDX :8080.

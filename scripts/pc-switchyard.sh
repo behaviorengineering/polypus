@@ -27,7 +27,7 @@ fi
 
 MANIFEST="${POLYPUS_DIR}/providers/switchyard/Cargo.toml"
 if ! command -v cargo >/dev/null 2>&1; then
-  echo "switchyard-server not found in bin/ and cargo unavailable; run: make switchyard-build" >&2
+  echo "switchyard-server not found in bin/ and cargo unavailable; run: go tool task build" >&2
   exit 1
 fi
 

@@ -1,0 +1,39 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - errorlint
+    - exhaustive
+    - gocognit
+    - goconst
+    - godot
+    - gosec
+    - govet
+    - staticcheck
+    - unused
+  settings:
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    exhaustive:
+      default-signifies-exhaustive: false
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+      ignore-tests: true
+    gocognit:
+      min-complexity: 30
+    godot:
+      scope: all
+  exclusions:
+    generated: lax
+
+formatters:
+  enable:
+    - gofumpt

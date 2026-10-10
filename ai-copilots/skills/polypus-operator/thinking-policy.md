@@ -36,7 +36,7 @@ Use when chat returns empty `message.content`, DSPy XML parse fails, or Gemma/GL
 
 ## Debug steps
 
-1. Run L1 smoke: `make smoke-chat`
+1. Run L1 smoke: `go tool task smoke-chat`
 2. Run host L2 harness if XML jobs fail.
 3. Inspect Phoenix trace for request body and response fields.
 4. Read failure dump: `logs/inference-failures/<trace_id>.json`

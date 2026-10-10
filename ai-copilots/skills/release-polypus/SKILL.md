@@ -60,4 +60,4 @@ goreleaser check   # local config validation only
 
 ## Install note for users
 
-Download the `polypus` archive for your OS/arch from the GitHub Release matching the tag. Contributors build locally with `make build` or `go run ./cmd/polypus`.
+Download the `polypus` archive for your OS/arch from the GitHub Release matching the tag. Contributors build locally with `go tool task build` or `go run ./cmd/polypus`.

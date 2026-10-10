@@ -1,6 +1,6 @@
 # Homelab GitLab Compose deploy (Windows and Mac)
 
-Operator path for **Docker Compose** on a home runner (not Mac `make serve` / MLX).
+Operator path for **Docker Compose** on a home runner (not Mac `go tool task serve` / MLX).
 
 ## Where
 

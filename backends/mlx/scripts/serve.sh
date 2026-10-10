@@ -19,7 +19,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 if [[ ! -d "$MLX_DIR/.venv" ]]; then
-  echo "Missing .venv — run: make -C polypus mlx-sync" >&2
+  echo "Missing .venv — run: go tool task mlx-sync" >&2
   exit 1
 fi
 
