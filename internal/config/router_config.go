@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
@@ -51,7 +52,7 @@ func (b BackendDef) IsGeminiExtension() bool {
 	return b.HasExtension(ExtensionGemini)
 }
 
-// CapabilityBackend is an optional capability default (chat, vision, embed, TTS, STT, proxy, systemone).
+// CapabilityBackend is an optional capability default (chat, vision, embed, TTS, STT, proxy, systemone, batch).
 type CapabilityBackend struct {
 	Enabled bool
 	Default string
@@ -59,20 +60,21 @@ type CapabilityBackend struct {
 
 // RouterConfig holds multi-backend routing for the Polypus gateway.
 type RouterConfig struct {
-	Chat       CapabilityBackend     `yaml:"-"`
-	Vision     CapabilityBackend     `yaml:"-"`
-	Embed      CapabilityBackend     `yaml:"-"`
-	TTS        CapabilityBackend     `yaml:"-"`
-	STT        CapabilityBackend     `yaml:"-"`
-	Proxy      CapabilityBackend     `yaml:"-"`
-	SystemOne  CapabilityBackend     `yaml:"-"`
-	Batch      CapabilityBackend     `yaml:"-"`
-	Timeouts   Timeouts              `yaml:"-"`
-	Policy     RouterPolicy          `yaml:"policy"`
-	Backends   map[string]BackendDef `yaml:"backends"`
-	Routers    map[string]NamedRouter
-	Switchyard SwitchyardConfig
-	UIProxies  []UIProxy
+	Chat           CapabilityBackend     `yaml:"-"`
+	Vision         CapabilityBackend     `yaml:"-"`
+	Embed          CapabilityBackend     `yaml:"-"`
+	TTS            CapabilityBackend     `yaml:"-"`
+	STT            CapabilityBackend     `yaml:"-"`
+	Proxy          CapabilityBackend     `yaml:"-"`
+	SystemOne      CapabilityBackend     `yaml:"-"`
+	Batch          CapabilityBackend     `yaml:"-"`
+	Timeouts       Timeouts              `yaml:"-"`
+	Policy         RouterPolicy          `yaml:"policy"`
+	Backends       map[string]BackendDef `yaml:"backends"`
+	Routers        map[string]NamedRouter
+	Switchyard     SwitchyardConfig
+	UIProxies      []UIProxy
+	batchSpecified bool
 }
 
 // EffectiveChatBackend returns the chat default when chat is enabled; otherwise empty.
@@ -265,6 +267,9 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 		Switchyard: mergeSwitchyardFile(file.Switchyard),
 		UIProxies:  uiProxies,
 	}
+	if file.BatchBackend.Enabled != nil {
+		cfg.batchSpecified = true
+	}
 	for id, entry := range file.Backends {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -338,6 +343,7 @@ func applyRouterEnvOverrides(cfg *RouterConfig, opts ServeOptions) {
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_BATCH_BACKEND")); v != "" {
 		cfg.Batch.Default = v
 		cfg.Batch.Enabled = true
+		cfg.batchSpecified = true
 	}
 	// CLI --backend overrides mlx_local URL when present.
 	if opts.BackendURL != "" {
@@ -369,6 +375,58 @@ func SwitchyardEnabled() bool {
 	default:
 		return true
 	}
+}
+
+// fillDefaultBatchBackend turns Cloudflare batch on when YAML omitted batch_backend.
+func fillDefaultBatchBackend(cfg *RouterConfig) {
+	id := strings.TrimSpace(cfg.Batch.Default)
+	if id == "" {
+		id = firstCloudflareBackendID(cfg)
+	}
+	if id == "" {
+		return
+	}
+	b, ok := cfg.Backends[id]
+	if !ok || !b.IsCloudflareExtension() {
+		return
+	}
+	if !cfg.batchSpecified {
+		cfg.Batch.Enabled = true
+		if strings.TrimSpace(cfg.Batch.Default) == "" {
+			cfg.Batch.Default = id
+		}
+	}
+	if cfg.Batch.Enabled {
+		ensureCapability(cfg, id, CapBatch)
+	}
+}
+
+func firstCloudflareBackendID(cfg *RouterConfig) string {
+	if id := strings.TrimSpace(cfg.Chat.Default); id != "" {
+		if b, ok := cfg.Backends[id]; ok && b.IsCloudflareExtension() {
+			return id
+		}
+	}
+	ids := make([]string, 0, len(cfg.Backends))
+	for id, b := range cfg.Backends {
+		if b.IsCloudflareExtension() {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	sort.Strings(ids)
+	return ids[0]
+}
+
+func ensureCapability(cfg *RouterConfig, id string, cap Capability) {
+	b, ok := cfg.Backends[id]
+	if !ok || b.HasCapability(cap) {
+		return
+	}
+	b.Capabilities = append(b.Capabilities, cap)
+	cfg.Backends[id] = b
 }
 
 func normalizeCapabilityBackend(cfg *RouterConfig, cap *CapabilityBackend, field string, allowMLXFill bool) error {
@@ -419,6 +477,7 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 	if err := normalizeCapabilityBackend(cfg, &cfg.SystemOne, "systemone_backend", false); err != nil {
 		return err
 	}
+	fillDefaultBatchBackend(cfg)
 	if err := normalizeCapabilityBackend(cfg, &cfg.Batch, "batch_backend", false); err != nil {
 		return err
 	}

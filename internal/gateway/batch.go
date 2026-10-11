@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -23,8 +24,8 @@ type createBatchRequest struct {
 }
 
 type batchListResponse struct {
-	Object string            `json:"object"`
-	Data   []batch.BatchMeta `json:"data"`
+	Object string              `json:"object"`
+	Data   []batch.PublicBatch `json:"data"`
 }
 
 func (h batchesHandler) serveBatches(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +195,7 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		writeHandlerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, meta)
+	writeJSON(w, http.StatusOK, meta.Public())
 }
 
 func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Request, id string) {
@@ -204,7 +205,7 @@ func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if meta.Status == batch.BatchStatusCancelled || meta.Status == batch.BatchStatusCompleted || meta.Status == batch.BatchStatusFailed || meta.Status == batch.BatchStatusExpired {
-		writeJSON(w, http.StatusOK, meta)
+		writeJSON(w, http.StatusOK, meta.Public())
 		return
 	}
 	meta, expired, err := h.applyBatchExpiry(meta)
@@ -213,15 +214,20 @@ func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if expired {
-		writeJSON(w, http.StatusOK, meta)
+		writeJSON(w, http.StatusOK, meta.Public())
 		return
 	}
 	meta, err = h.refreshBatchFromCloudflare(r, meta)
 	if err != nil {
+		if isBatchRefreshMiss(err) {
+			slog.Warn("polypus: batch refresh failed; returning last-known", "batch_id", meta.ID, "err", err)
+			writeJSON(w, http.StatusOK, meta.Public())
+			return
+		}
 		writeHandlerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, meta)
+	writeJSON(w, http.StatusOK, meta.Public())
 }
 
 func (h batchesHandler) applyBatchExpiry(meta batch.BatchMeta) (batch.BatchMeta, bool, error) {
@@ -337,7 +343,11 @@ func (h batchesHandler) serveBatchList(w http.ResponseWriter, r *http.Request) {
 		writeHandlerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, batchListResponse{Object: "list", Data: items})
+	pub := make([]batch.PublicBatch, 0, len(items))
+	for _, m := range items {
+		pub = append(pub, m.Public())
+	}
+	writeJSON(w, http.StatusOK, batchListResponse{Object: "list", Data: pub})
 }
 
 func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request, id string) {

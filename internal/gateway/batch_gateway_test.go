@@ -122,7 +122,7 @@ backends:
 	if rec.Code != http.StatusOK {
 		t.Fatalf("create batch: %d %s", rec.Code, rec.Body.String())
 	}
-	var batchObj batch.BatchMeta
+	var batchObj batch.PublicBatch
 	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestBatchCancelNotSupported(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("create: %d", rec.Code)
 	}
-	var batchObj batch.BatchMeta
+	var batchObj batch.PublicBatch
 	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestBatchFailedLineErrorMessage(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/batches", strings.NewReader(createBody))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	var batchObj batch.BatchMeta
+	var batchObj batch.PublicBatch
 	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestBatchConcurrentFinalize(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/batches", strings.NewReader(createBody))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	var batchObj batch.BatchMeta
+	var batchObj batch.PublicBatch
 	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestBatchConcurrentFinalize(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/v1/batches/"+batchObj.ID, nil)
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
-			var got batch.BatchMeta
+			var got batch.PublicBatch
 			_ = json.Unmarshal(rec.Body.Bytes(), &got)
 			outputs[idx] = got.OutputFileID
 		}(i)
@@ -320,6 +320,108 @@ func TestBatchConcurrentFinalize(t *testing.T) {
 	if outputs[0] == "" || outputs[0] != outputs[1] {
 		t.Fatalf("output ids: %v", outputs)
 	}
+}
+
+func TestBatchRetrieveUnknownID(t *testing.T) {
+	h := newBatchGatewayHandler(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/batches/batch_missing", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status: %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBatchRetrievePollUnavailableKeepsInProgress(t *testing.T) {
+	cf := func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(raw), "request_id") {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"success":false}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"result": map[string]interface{}{
+				"status":     "queued",
+				"request_id": "cf-1",
+			},
+		})
+	}
+	h := newBatchGatewayHandler(t, cf)
+	batchObj := createTestBatch(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/v1/batches/"+batchObj.ID, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get batch: %d %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "cf_request_id") || strings.Contains(body, "cf_model") {
+		t.Fatalf("leaked cf fields: %s", body)
+	}
+	var got batch.PublicBatch
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != batch.BatchStatusInProgress {
+		t.Fatalf("status: %s", got.Status)
+	}
+	if got.OutputFileID != "" || got.RequestCounts.Completed != 0 {
+		t.Fatalf("unexpected progress: %+v", got)
+	}
+}
+
+func TestBatchRetrieveEmptyPollJSONKeepsInProgress(t *testing.T) {
+	cf := func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(raw), "request_id") {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"result":  map[string]interface{}{},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"result": map[string]interface{}{
+				"status":     "queued",
+				"request_id": "cf-1",
+			},
+		})
+	}
+	h := newBatchGatewayHandler(t, cf)
+	batchObj := createTestBatch(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/v1/batches/"+batchObj.ID, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get batch: %d %s", rec.Code, rec.Body.String())
+	}
+	var got batch.PublicBatch
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != batch.BatchStatusInProgress {
+		t.Fatalf("status: %s", got.Status)
+	}
+}
+
+func createTestBatch(t *testing.T, h http.Handler) batch.PublicBatch {
+	line := `{"custom_id":"job-1","method":"POST","url":"/v1/chat/completions","body":{"model":"cf_local/@cf/meta/llama-3.3-70b-instruct-fp8-fast","messages":[{"role":"user","content":"hi"}]}}`
+	fileID := uploadBatchFile(t, h, line)
+	createBody := `{"input_file_id":"` + fileID + `","endpoint":"/v1/chat/completions","completion_window":"24h"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/batches", strings.NewReader(createBody))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var batchObj batch.PublicBatch
+	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
+		t.Fatal(err)
+	}
+	return batchObj
 }
 
 func newBatchGatewayHandler(t *testing.T, cfHandler http.HandlerFunc) *Gateway {
