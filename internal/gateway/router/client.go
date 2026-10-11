@@ -109,14 +109,79 @@ func (c *Client) UsesBifrost(backendID string) bool {
 	return ok
 }
 
-func bifrostRawContext(parent context.Context, timeout time.Duration) *schemas.BifrostContext {
+func bifrostRawContext(parent context.Context, timeout time.Duration, useRaw bool) *schemas.BifrostContext {
 	deadline := schemas.NoDeadline
 	if timeout > 0 {
 		deadline = time.Now().Add(timeout)
 	}
 	bctx := schemas.NewBifrostContext(parent, deadline)
-	bctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, true)
+	if useRaw {
+		bctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, true)
+	}
 	return bctx
+}
+
+func (c *Client) bifrostUseRawChatBody(backendID string) bool {
+	if c == nil || c.reg == nil {
+		return true
+	}
+	b, ok := c.reg.Backend(backendID)
+	if !ok {
+		return true
+	}
+	return !b.IsGeminiExtension()
+}
+
+func bifrostChatRequest(backendID, model string, messages []schemas.ChatMessage, body []byte, useRaw bool) (*schemas.BifrostChatRequest, error) {
+	req := &schemas.BifrostChatRequest{
+		Provider: schemas.ModelProvider(backendID),
+		Model:    model,
+		Input:    messages,
+	}
+	if useRaw {
+		req.RawRequestBody = body
+		return req, nil
+	}
+	params, err := chatParamsFromOpenAIBody(body)
+	if err != nil {
+		return nil, err
+	}
+	req.Params = params
+	return req, nil
+}
+
+func chatParamsFromOpenAIBody(body []byte) (*schemas.ChatParameters, error) {
+	var root struct {
+		MaxTokens int `json:"max_tokens"`
+		Reasoning struct {
+			Effort    string `json:"effort"`
+			MaxTokens *int   `json:"max_tokens"`
+		} `json:"reasoning"`
+	}
+	if err := json.Unmarshal(body, &root); err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "router.chatParamsFromOpenAIBody", "parse chat params")
+	}
+	params := &schemas.ChatParameters{}
+	set := false
+	if root.MaxTokens > 0 {
+		n := root.MaxTokens
+		params.MaxCompletionTokens = &n
+		set = true
+	}
+	if root.Reasoning.Effort != "" || root.Reasoning.MaxTokens != nil {
+		reasoning := &schemas.ChatReasoning{}
+		if root.Reasoning.Effort != "" {
+			effort := root.Reasoning.Effort
+			reasoning.Effort = &effort
+		}
+		reasoning.MaxTokens = root.Reasoning.MaxTokens
+		params.Reasoning = reasoning
+		set = true
+	}
+	if !set {
+		return nil, nil
+	}
+	return params, nil
 }
 
 // ChatCompletionRaw sends an OpenAI-shaped chat body via Bifrost (non-streaming).
@@ -133,13 +198,13 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string,
 	if len(envelope.Messages) == 0 {
 		return nil, derrors.New(derrors.CodeInvalid, "router.ChatCompletionRaw", "messages required")
 	}
-	bctx := bifrostRawContext(ctx, timeout)
-	resp, berr := c.bf.ChatCompletionRequest(bctx, &schemas.BifrostChatRequest{
-		Provider:       schemas.ModelProvider(backendID),
-		Model:          model,
-		Input:          envelope.Messages,
-		RawRequestBody: body,
-	})
+	useRaw := c.bifrostUseRawChatBody(backendID)
+	bctx := bifrostRawContext(ctx, timeout, useRaw)
+	chatReq, err := bifrostChatRequest(backendID, model, envelope.Messages, body, useRaw)
+	if err != nil {
+		return nil, err
+	}
+	resp, berr := c.bf.ChatCompletionRequest(bctx, chatReq)
 	if berr != nil {
 		return nil, bifrostErr(berr, bifrostProviderHeader(bctx))
 	}
@@ -174,13 +239,13 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 	// Streams use client cancel only (no Bifrost wall-clock deadline), matching hop
 	// timeout rules on the HTTP proxy path. The timeout arg is reserved for API symmetry.
 	_ = timeout
-	bctx := bifrostRawContext(ctx, 0)
-	stream, berr := c.bf.ChatCompletionStreamRequest(bctx, &schemas.BifrostChatRequest{
-		Provider:       schemas.ModelProvider(backendID),
-		Model:          model,
-		Input:          envelope.Messages,
-		RawRequestBody: body,
-	})
+	useRaw := c.bifrostUseRawChatBody(backendID)
+	bctx := bifrostRawContext(ctx, 0, useRaw)
+	chatReq, err := bifrostChatRequest(backendID, model, envelope.Messages, body, useRaw)
+	if err != nil {
+		return nil, nil, err
+	}
+	stream, berr := c.bf.ChatCompletionStreamRequest(bctx, chatReq)
 	if berr != nil {
 		return nil, nil, bifrostErr(berr, bifrostProviderHeader(bctx))
 	}
@@ -225,7 +290,7 @@ func (c *Client) EmbeddingRaw(ctx context.Context, backendID, model string, body
 	if err != nil {
 		return nil, err
 	}
-	bctx := bifrostRawContext(ctx, timeout)
+	bctx := bifrostRawContext(ctx, timeout, true)
 	resp, berr := c.bf.EmbeddingRequest(bctx, &schemas.BifrostEmbeddingRequest{
 		Provider:       schemas.ModelProvider(backendID),
 		Model:          model,
