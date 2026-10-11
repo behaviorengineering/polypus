@@ -35,6 +35,8 @@ type CollectorOptions struct {
 	HyperDXContainer string
 	PollInterval     time.Duration
 	AllowHyperDXCH   bool
+	// SkipHyperDXVerify skips HyperDX routing checks (for example tailnet laptops without /api/v2 or Docker).
+	SkipHyperDXVerify bool
 }
 
 // DefaultCollectorPollInterval is the delay between backend polls.
@@ -97,19 +99,27 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 
 		genPhoenix, errGenPhoenix := phoenixSpanCount(ctx, opts, genAITrace)
 		plainPhoenix, errPlainPhoenix := phoenixSpanCount(ctx, opts, plainTrace)
-		genHyper, errGenHyper := hyperdxTraceCount(ctx, opts, genAITrace)
-		plainHyper, errPlainHyper := hyperdxTraceCount(ctx, opts, plainTrace)
+		var genHyper, plainHyper int
+		var errGenHyper, errPlainHyper error
+		if !opts.SkipHyperDXVerify {
+			genHyper, errGenHyper = hyperdxTraceCount(ctx, opts, genAITrace)
+			plainHyper, errPlainHyper = hyperdxTraceCount(ctx, opts, plainTrace)
+		}
 
 		fmt.Printf("collector smoke: probe counts gen_ai phoenix=%d hyperdx=%d plain phoenix=%d hyperdx=%d\n",
 			genPhoenix, genHyper, plainPhoenix, plainHyper)
 
 		okGenPhoenix := errGenPhoenix == nil && genPhoenix > 0
 		okPlainAbsentPhoenix := errPlainPhoenix == nil && plainPhoenix == 0
-		okGenHyper := errGenHyper == nil && genHyper > 0
-		okPlainHyper := errPlainHyper == nil && plainHyper > 0
+		okGenHyper := opts.SkipHyperDXVerify || (errGenHyper == nil && genHyper > 0)
+		okPlainHyper := opts.SkipHyperDXVerify || (errPlainHyper == nil && plainHyper > 0)
 
 		if okGenPhoenix && okPlainAbsentPhoenix && okGenHyper && okPlainHyper {
-			fmt.Println("collector smoke: routing ok (gen_ai -> Phoenix+HyperDX, plain -> HyperDX only)")
+			if opts.SkipHyperDXVerify {
+				fmt.Println("collector smoke: routing ok (gen_ai -> Phoenix; HyperDX verify skipped)")
+			} else {
+				fmt.Println("collector smoke: routing ok (gen_ai -> Phoenix+HyperDX, plain -> HyperDX only)")
+			}
 			return nil
 		}
 
