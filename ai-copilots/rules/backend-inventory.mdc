@@ -1,0 +1,27 @@
+---
+description: >-
+  Polypus backend model inventory must fetch upstream catalogs when models.sync
+  is true. Triggers: inventoryForBackend, models.allow, extension gemini,
+  Allow model, ListModels, warmModelsInventory.
+alwaysApply: false
+globs:
+  - "**/internal/gateway/models*.go"
+  - "**/internal/clients/**/*.go"
+  - "**/internal/config/env.go"
+  - "**/internal/config/models.go"
+---
+
+# Backend inventory
+
+**Skill:** `ai-copilots/skills/polypus-backend-inventory/SKILL.md` (MUST Read when this rule loads).
+
+## MUST
+
+- Fetch upstream model lists when `models.sync` is true (serve warmup, allow POST, refresh loop).
+- Keep `models.allow` as the inference gate, not the sole inventory source while sync is on.
+- Put list HTTP in `internal/clients/<extension>`; use `WithGeminiClientGet` (or equivalent) in gateway tests instead of loopback `base_url` on Gemini backends.
+
+## MUST NOT
+
+- Return only `syntheticModels(allow)` for a syncing extension (Gemini early return anti-pattern).
+- Set Gemini chat `base_url` to Google for inventory; use the gemini catalog client list URL.

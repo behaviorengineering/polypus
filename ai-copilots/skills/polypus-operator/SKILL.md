@@ -126,10 +126,12 @@ go tool task smoke-higgs
 
 See [harness.md](harness.md). L1 runs in this repo; L2/L3 may require host tooling.
 
-### 6. model_not_allowed
+### 6. model_not_allowed / model_not_in_inventory
 
-- POST returns 400 `model_not_allowed`.
-- Fix: add model to `models.allow` or use prefixed id (`cf_local/...`, `lm_studio/...`).
+- POST inference returns 400 `model_not_allowed` when the slug is not in `models.allow`.
+- Landing **Allow model (inventory check)** returns 400 `model_not_in_inventory` when the slug is not in upstream inventory for that backend (503 if inventory fetch failed empty).
+- Fix allow: add to `models.allow`, use prefixed id (`cf_local/...`, `gemini_studio/...`), or POST allow after inventory lists the slug.
+- When adding backends or inventory code, load [polypus-backend-inventory/SKILL.md](../polypus-backend-inventory/SKILL.md).
 - If a host job cites a model id that the allow-list blocks, align host config with Polypus `config.yaml`.
 
 ### 7. Empty content / XML parse fail
@@ -144,6 +146,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 ### 9. gemini_studio down
 
 - Probe inventory: `curl -sS 'http://127.0.0.1:1320/v1/apis/openai/models?view=inventory' | jq '.data[] | select(.id | startswith("gemini_studio/"))'`
+- Gemini inventory syncs `GET .../v1beta/openai/models` (Bearer); omit chat `base_url`. Catalog refreshes on serve warmup and `POLYPUS_MODELS_REFRESH_INTERVAL` (default 30m). See [config-reference.md](config-reference.md) and [polypus-backend-inventory/SKILL.md](../polypus-backend-inventory/SKILL.md).
 - Needs: `extension: gemini` backend, `GEMINI_API_KEY` in env or keyring (`polypus secret set GEMINI_API_KEY` when listed under `secrets:`). Serve fail-closes on startup when the gemini remote backend is configured but the bearer env is missing (same pattern as other remotes).
 
 ### 10. lm_studio down

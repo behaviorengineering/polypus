@@ -55,11 +55,15 @@ func ListenAndServe(opts config.ServeOptions) error {
 		return fmt.Errorf("gateway: %w", err)
 	}
 
+	refreshCtx, refreshCancel := context.WithCancel(context.Background())
+	defer refreshCancel()
+
 	if modelsWarmupEnabled() {
 		cfg := g.router.Registry().Config()
 		warmCtx, warmCancel := context.WithTimeout(context.Background(), modelsWarmupTimeout(cfg))
 		defer warmCancel()
 		modelsHandler{g.shared}.warmModelsInventory(warmCtx)
+		modelsHandler{g.shared}.startModelsRefreshLoop(refreshCtx, cfg)
 	}
 
 	server := &http.Server{
@@ -80,6 +84,7 @@ func ListenAndServe(opts config.ServeOptions) error {
 		}
 		return err
 	case <-sigCh:
+		refreshCancel()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {

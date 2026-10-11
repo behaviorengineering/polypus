@@ -15,6 +15,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/admin/keys"
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
+	"github.com/behaviorengineering/polypus/internal/clients/gemini"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
@@ -34,6 +35,7 @@ type shared struct {
 	client      *http.Client
 	upstreams   *upstream.Board
 	cfGet       CloudflareClientGet
+	geminiGet   GeminiClientGet
 	batchStore  *batch.DiskStore
 	batchNow    func() time.Time
 	overlayPath string
@@ -58,6 +60,13 @@ func (s *shared) cloudflareClient(b config.BackendDef) (*cloudflare.Client, erro
 		return s.cfGet(b)
 	}
 	return cloudflare.GetClient(b)
+}
+
+func (s *shared) geminiClient(b config.BackendDef) (*gemini.Client, error) {
+	if s != nil && s.geminiGet != nil {
+		return s.geminiGet(b)
+	}
+	return gemini.GetClient(b)
 }
 
 // NewHandler returns the public Polypus HTTP handler (*Gateway).
@@ -91,6 +100,10 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 	cfGet := ho.cfGet
 	if cfGet == nil {
 		cfGet = cloudflare.GetClient
+	}
+	geminiGet := ho.geminiGet
+	if geminiGet == nil {
+		geminiGet = gemini.GetClient
 	}
 
 	var rc Router
@@ -166,6 +179,7 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 		client:      newChatProxyClient(timeouts.Max),
 		upstreams:   upstream.NewBoard(),
 		cfGet:       cfGet,
+		geminiGet:   geminiGet,
 		batchStore:  batchStore,
 		batchNow:    jobClock,
 		overlayPath: overlayPath,
