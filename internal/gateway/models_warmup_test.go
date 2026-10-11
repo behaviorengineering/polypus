@@ -1,35 +1,56 @@
 package gateway
 
 import (
-	"fmt"
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/behaviorengineering/polypus/internal/config"
 )
 
-func TestModelsWarmupTimeout(t *testing.T) {
-	small := config.RouterConfig{Backends: map[string]config.BackendDef{"a": {ID: "a"}}}
-	if modelsWarmupTimeout(small) != 15*time.Second {
-		t.Fatalf("min: got %v", modelsWarmupTimeout(small))
-	}
-	big := config.RouterConfig{Backends: make(map[string]config.BackendDef)}
-	for i := 0; i < 20; i++ {
-		id := fmt.Sprintf("b%d", i)
-		big.Backends[id] = config.BackendDef{ID: id}
-	}
-	if modelsWarmupTimeout(big) != 60*time.Second {
-		t.Fatalf("max: got %v", modelsWarmupTimeout(big))
+func TestModelsRefreshIntervalDefault(t *testing.T) {
+	t.Setenv("POLYPUS_MODELS_REFRESH_INTERVAL", "")
+	if modelsRefreshInterval() != defaultModelsRefreshInterval {
+		t.Fatalf("got %v", modelsRefreshInterval())
 	}
 }
 
-func TestModelsWarmupEnabled(t *testing.T) {
-	t.Setenv("POLYPUS_MODELS_WARMUP", "off")
-	if modelsWarmupEnabled() {
-		t.Fatal("expected off")
+func TestModelsRefreshDisabled(t *testing.T) {
+	for _, v := range []string{"off", "0", "false"} {
+		t.Setenv("POLYPUS_MODELS_REFRESH_INTERVAL", v)
+		if modelsRefreshInterval() != 0 {
+			t.Fatalf("value %q: got %v", v, modelsRefreshInterval())
+		}
 	}
-	t.Setenv("POLYPUS_MODELS_WARMUP", "")
-	if !modelsWarmupEnabled() {
-		t.Fatal("expected default on")
+	t.Setenv("POLYPUS_MODELS_WARMUP", "off")
+	t.Setenv("POLYPUS_MODELS_REFRESH_INTERVAL", "30m")
+	if modelsRefreshEnabled() {
+		t.Fatal("warmup off should disable refresh loop")
+	}
+}
+
+func TestModelsRefreshLoopCancels(t *testing.T) {
+	tick := make(chan time.Time)
+	factory := func(time.Duration) (<-chan time.Time, func()) {
+		return tick, func() {}
+	}
+	var calls atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runModelsRefreshLoop(ctx, time.Minute, factory, func(context.Context) {
+			calls.Add(1)
+		})
+		close(done)
+	}()
+	tick <- time.Now()
+	tick <- time.Now()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop did not exit after cancel")
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected 2 warm calls, got %d", calls.Load())
 	}
 }

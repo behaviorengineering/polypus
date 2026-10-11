@@ -296,6 +296,26 @@ func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openai
 func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef) []openaiModel {
 	modelsCfg := b.Models
 	if b.IsGeminiExtension() {
+		if modelsCfg != nil && !modelsCfg.ShouldSync() {
+			if modelsCfg.HasAllowGate() {
+				return syntheticModels(b.ID, modelsCfg.Allow)
+			}
+			return nil
+		}
+		if live := h.geminiInventory(r, b); len(live) > 0 {
+			if modelsCfg != nil && modelsCfg.HasAllowGate() {
+				live = mergeAllowSyntheticMissing(b.ID, live, modelsCfg.Allow)
+			}
+			if h.invCache != nil {
+				h.invCache.put(b.ID, live)
+			}
+			return live
+		}
+		if h.invCache != nil {
+			if cached, ok := h.invCache.get(b.ID); ok {
+				return cached
+			}
+		}
 		if modelsCfg != nil && modelsCfg.HasAllowGate() {
 			return syntheticModels(b.ID, modelsCfg.Allow)
 		}

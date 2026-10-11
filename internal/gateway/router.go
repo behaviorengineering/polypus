@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
+	"github.com/behaviorengineering/polypus/internal/clients/gemini"
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
@@ -46,12 +47,16 @@ type routerCloser interface {
 // CloudflareClientGet constructs extension clients (defaults to cloudflare.GetClient).
 type CloudflareClientGet func(config.BackendDef) (*cloudflare.Client, error)
 
+// GeminiClientGet constructs Gemini catalog clients (defaults to gemini.GetClient).
+type GeminiClientGet func(config.BackendDef) (*gemini.Client, error)
+
 // HandlerOption configures NewHandler.
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
 	router        Router
 	cfGet         CloudflareClientGet
+	geminiGet     GeminiClientGet
 	overlayPath   string
 	adminKeysPath string
 	clock         func() time.Time
@@ -72,6 +77,13 @@ func WithRouter(r Router) HandlerOption {
 func WithCloudflareClientGet(fn CloudflareClientGet) HandlerOption {
 	return func(o *handlerOptions) {
 		o.cfGet = fn
+	}
+}
+
+// WithGeminiClientGet injects Gemini catalog client construction for inventory.
+func WithGeminiClientGet(fn GeminiClientGet) HandlerOption {
+	return func(o *handlerOptions) {
+		o.geminiGet = fn
 	}
 }
 

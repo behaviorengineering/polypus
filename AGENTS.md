@@ -6,7 +6,8 @@ This module is the Polypus inference gateway. Humans read [README.md](README.md)
 
 1. [ai-copilots/skills/polypus-operator/SKILL.md](ai-copilots/skills/polypus-operator/SKILL.md)
 2. [ai-copilots/skills/polypus-operator/openai-compat.md](ai-copilots/skills/polypus-operator/openai-compat.md) (public OpenAI contract and upstream adapters)
-3. [ai-copilots/skills/release-polypus/SKILL.md](ai-copilots/skills/release-polypus/SKILL.md) (when tagging / releasing)
+3. [ai-copilots/skills/polypus-backend-inventory/SKILL.md](ai-copilots/skills/polypus-backend-inventory/SKILL.md) (when adding backends, inventory, or Allow model)
+4. [ai-copilots/skills/release-polypus/SKILL.md](ai-copilots/skills/release-polypus/SKILL.md) (when tagging / releasing)
 
 Wire discovery with [ai-copilots/BOOTSTRAP.md](ai-copilots/BOOTSTRAP.md).
 
