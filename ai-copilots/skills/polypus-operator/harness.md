@@ -50,7 +50,7 @@ Default audio models: cf_local Deepgram (`aura-2-en` / `nova-3`). MLX integratio
 |-------------|------------|
 | Gateway down / connection errors | Health + `go tool task smoke-chat` |
 | Named router / `router/…` fails | Health + `/health/backends` (switchyard) + `go tool task smoke-router` |
-| Batch files / batches facade fails | `batch_backend` + allow-list + `go tool task smoke-batch` |
+| Batch files / batches facade fails | Cloudflare backend (batch on by default) + allow-list + `go tool task smoke-batch` |
 | Live CI batch | Default main live integration skips batch; set `POLYPUS_SMOKE_BATCH=1` to include it |
 | Empty content / parse errors | L1 + host L2 if available |
 | Specific downstream job fails | Host L3 for that job's model |

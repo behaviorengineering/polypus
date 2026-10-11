@@ -12,7 +12,9 @@ test -f "$MODULE_ROOT/ai-copilots/BOOTSTRAP.md"
 ## Wire mode (Cursor example)
 
 ```bash
+mkdir -p .cursor/skills .cursor/rules
 ln -snf "$MODULE_ROOT/ai-copilots/skills/polypus-operator" .cursor/skills/polypus-operator
+ln -snf "$MODULE_ROOT/ai-copilots/rules/openai-compat-gateway.mdc" .cursor/rules/openai-compat-gateway.mdc
 ```
 
 **MUST NOT** copy skill bodies into the host unless links fail and the human approves.

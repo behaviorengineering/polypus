@@ -1,0 +1,28 @@
+---
+description: >-
+  Polypus public HTTP is OpenAI-compatible. Wrap non-OpenAI upstreams
+  (Cloudflare, Gemini, OpenRouter, MLX). Triggers: /v1/batches, BatchMeta,
+  extension, queueRequest, generateContent, openai-compat.
+alwaysApply: false
+globs:
+  - "**/internal/gateway/**/*.go"
+  - "**/internal/clients/**/*.go"
+  - "**/ai-copilots/skills/polypus-operator/**"
+---
+
+# OpenAI-compatible gateway
+
+**Skill:** `ai-copilots/skills/polypus-operator/openai-compat.md` (MUST Read when this rule loads).
+
+## MUST
+
+- Keep the public HTTP surface OpenAI-shaped (`/v1/chat/completions`, `/v1/files`, `/v1/batches`, documented Batch statuses).
+- Wrap extension-specific request, response, and poll JSON in `internal/clients/<extension>` or gateway adapters.
+- Persist OpenAI resources before acknowledging create; on retrieve, return last-known metadata when upstream refresh is empty or unavailable.
+- Point clients at the Polypus gateway (`:1320`), not upstream URLs.
+
+## MUST NOT
+
+- Leak upstream field names on public objects (`queueRequest`, `cf_request_id`, Gemini `generateContent` on the wire).
+- Fake capabilities the upstream lacks (Batch cancel stays 501, not `cancelled`).
+- Dump full skill procedures in this rule file.

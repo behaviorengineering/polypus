@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestPhoenixSpanCount(t *testing.T) {
+func TestPhoenixSpanCountREST(t *testing.T) {
 	const traceID = "0123456789abcdef0123456789abcdef"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/v1/projects/default/spans") {
@@ -24,6 +24,52 @@ func TestPhoenixSpanCount(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"data": []map[string]string{{"name": "smoke"}},
 		})
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	n, err := phoenixSpanCountREST(ctx, CollectorOptions{
+		PhoenixBaseURL: srv.URL,
+		PhoenixProject: "default",
+	}, traceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 span, got %d", n)
+	}
+}
+
+func TestPhoenixSpanCountGraphQLFallback(t *testing.T) {
+	const traceID = "0123456789abcdef0123456789abcdef"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/v1/projects/default/spans"):
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<!DOCTYPE html><html></html>"))
+		case r.URL.Path == "/graphql" && r.Method == http.MethodPost:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"projects": map[string]interface{}{
+						"edges": []map[string]interface{}{
+							{"node": map[string]interface{}{
+								"name": "default",
+								"trace": map[string]interface{}{
+									"spans": map[string]interface{}{
+										"edges": []map[string]interface{}{
+											{"node": map[string]string{"id": "span-1"}},
+										},
+									},
+								},
+							}},
+						},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer srv.Close()
 

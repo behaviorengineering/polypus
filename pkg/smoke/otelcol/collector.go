@@ -43,7 +43,10 @@ const DefaultCollectorPollInterval = 2 * time.Second
 // DefaultCollectorSmokeTimeout is the collector smoke budget.
 const DefaultCollectorSmokeTimeout = 90 * time.Second
 
-var errHyperDXAPIUnavailable = errors.New("hyperdx: v2 search API unavailable")
+var (
+	errHyperDXAPIUnavailable  = errors.New("hyperdx: v2 search API unavailable")
+	errPhoenixRESTUnavailable = errors.New("phoenix: REST spans API unavailable")
+)
 
 // RunCollector exports two synthetic traces through otelcol and verifies Phoenix / HyperDX routing.
 func RunCollector(ctx context.Context, opts CollectorOptions) error {
@@ -267,6 +270,17 @@ func normalizeHTTPEndpoint(endpoint string) (string, error) {
 }
 
 func phoenixSpanCount(ctx context.Context, opts CollectorOptions, traceID string) (int, error) {
+	n, err := phoenixSpanCountREST(ctx, opts, traceID)
+	if err == nil {
+		return n, nil
+	}
+	if errors.Is(err, errPhoenixRESTUnavailable) {
+		return phoenixSpanCountGraphQL(ctx, opts, traceID)
+	}
+	return 0, err
+}
+
+func phoenixSpanCountREST(ctx context.Context, opts CollectorOptions, traceID string) (int, error) {
 	traceID, err := normalizeTraceIDHex(traceID)
 	if err != nil {
 		return 0, err
@@ -279,6 +293,7 @@ func phoenixSpanCount(ctx context.Context, opts CollectorOptions, traceID string
 	if err != nil {
 		return 0, fmt.Errorf("collector smoke: phoenix request: %w", err)
 	}
+	req.Header.Set("Accept", "application/json")
 	if opts.PhoenixAPIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+opts.PhoenixAPIKey)
 	}
@@ -292,17 +307,21 @@ func phoenixSpanCount(ctx context.Context, opts CollectorOptions, traceID string
 		return 0, fmt.Errorf("collector smoke: phoenix: %w", err)
 	}
 	if resp.StatusCode == http.StatusNotFound {
-		return 0, fmt.Errorf("phoenix: %s returned 404 (check PHOENIX_PROJECT)", u)
+		return 0, errPhoenixRESTUnavailable
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return 0, fmt.Errorf("phoenix: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	trim := strings.TrimSpace(string(body))
+	if strings.HasPrefix(trim, "<") || strings.HasPrefix(strings.ToLower(trim), "<!doctype") {
+		return 0, errPhoenixRESTUnavailable
 	}
 
 	var parsed struct {
 		Data []json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return 0, fmt.Errorf("phoenix: decode spans: %w", err)
+		return 0, errPhoenixRESTUnavailable
 	}
 	return len(parsed.Data), nil
 }

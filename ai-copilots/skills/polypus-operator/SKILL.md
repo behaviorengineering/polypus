@@ -15,7 +15,7 @@ description: >-
 
 1. Confirm workspace: Polypus repo root (or this tree nested under `providers/polypus/` in a parent monorepo).
 2. For homelab Compose deploy: clone **gitlab.com/xynova/polypus-local** and load its `ai-copilots/`; wire **operatorconfig** via `go list -m -f '{{.Dir}}' github.com/behaviorengineering/operatorconfig` and that module's `ai-copilots/BOOTSTRAP.md` (do not copy operatorconfig skill bodies here).
-3. Load shard when needed: [config-reference.md](config-reference.md), [troubleshooting.md](troubleshooting.md), [harness.md](harness.md), [thinking-policy.md](thinking-policy.md), [windows-gitlab-deploy.md](windows-gitlab-deploy.md) (pointer to polypus-local + keyring).
+3. Load shard when needed: [config-reference.md](config-reference.md), [troubleshooting.md](troubleshooting.md), [harness.md](harness.md), [thinking-policy.md](thinking-policy.md), [openai-compat.md](openai-compat.md), [windows-gitlab-deploy.md](windows-gitlab-deploy.md) (pointer to polypus-local + keyring).
 4. Run health before deep edits: `curl -sf http://127.0.0.1:1320/health | jq .` (upstream probe: `/health/backends`)
 
 ## Supervision (MUST)
@@ -92,7 +92,7 @@ Router smoke integration requires Switchyard routing metadata: response header `
 
 ### 3c. Smoke OpenAI batch facade
 
-Requires `batch_backend` enabled, `batch` capability on a Cloudflare extension backend, and a Workers AI batch-capable model on the allow list. Not part of `go tool task smoke-all` (async poll can take minutes).
+Requires a Cloudflare extension backend (batch is on by default for those backends unless `batch_backend.enabled: false`) and a Workers AI batch-capable model on the allow list. Not part of `go tool task smoke-all` (async poll can take minutes).
 
 ```bash
 go tool task smoke-batch
@@ -167,6 +167,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 
 ## Observability
 
+- Container image pins (Phoenix, HyperDX, otelcol): `images.env` at repo root (`PHOENIX_IMAGE`, `HYPERDX_IMAGE`, `OTELCOL_IMAGE`). **MUST NOT** use `:latest`. `scripts/pc-up.sh` sources this file before `docker compose`; keep the same tags in your deploy `images.env` when you maintain both trees.
 - Phoenix UI: http://127.0.0.1:6006 (LLM / OpenInference)
 - HyperDX UI: http://127.0.0.1:8080 (app traces / logs)
 - OTLP ingest (gateway, Switchyard, clients): gRPC `127.0.0.1:4317`, HTTP `127.0.0.1:4318` via `polypus-otelcol` (`otelcol.config.yaml` routing: all traces to HyperDX; OpenInference / `gen_ai.*` spans also copied to Phoenix)

@@ -94,3 +94,38 @@ func TestParsePollResultRejectsUnknownStatus(t *testing.T) {
 		t.Fatal("expected error for unknown status")
 	}
 }
+
+func TestParsePollResultEmptyStatusIsQueued(t *testing.T) {
+	t.Parallel()
+	cases := [][]byte{
+		[]byte(`{}`),
+		[]byte(`null`),
+		[]byte(`{"request_id":"cf-req-1"}`),
+		[]byte(`{"success":true}`),
+		[]byte(`{"result":{}}`),
+	}
+	for _, raw := range cases {
+		poll, err := parsePollResult(raw)
+		if err != nil {
+			t.Fatalf("parsePollResult(%s): %v", raw, err)
+		}
+		if poll.State != BatchPollQueued {
+			t.Fatalf("parsePollResult(%s) state=%v want queued", raw, poll.State)
+		}
+	}
+}
+
+func TestUnwrapThenParseEmptyResultIsQueued(t *testing.T) {
+	t.Parallel()
+	raw, err := unwrapBatchEnvelope([]byte(`{"success":true,"result":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	poll, err := parsePollResult(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll.State != BatchPollQueued {
+		t.Fatalf("state=%v want queued", poll.State)
+	}
+}

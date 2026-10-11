@@ -300,18 +300,15 @@ func parsePollResult(raw []byte) (BatchPollResult, error) {
 		return out, nil
 	}
 	switch status {
-	case "queued":
+	case "queued", "":
 		return BatchPollResult{State: BatchPollQueued}, nil
 	case "running", "in_progress":
 		return BatchPollResult{State: BatchPollRunning}, nil
 	case "failed", "error", "cancelled":
 		return BatchPollResult{State: BatchPollFailed}, nil
 	default:
-		if status != "" {
-			return BatchPollResult{}, derrors.New(derrors.CodeUnavailable, "cloudflare.parsePollResult", "unexpected batch status").
-				With("status", status)
-		}
-		return BatchPollResult{}, derrors.New(derrors.CodeUnavailable, "cloudflare.parsePollResult", "unexpected poll response")
+		return BatchPollResult{}, derrors.New(derrors.CodeUnavailable, "cloudflare.parsePollResult", "unexpected batch status").
+			With("status", status)
 	}
 }
 
