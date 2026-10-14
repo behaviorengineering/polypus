@@ -90,6 +90,8 @@ Router smoke integration requires Switchyard routing metadata: response header `
 
 **Tracing:** On composed router chat, the gateway `polypus.router` span sets `polypus.downstream_model` when Switchyard returns selected-model metadata. Switchyard child spans already record `gen_ai.request.model` on `libsy.client_call`. Gateway and Switchyard export to `polypus-otelcol` (`POLYPUS_OTLP_ENDPOINT`, default `http://127.0.0.1:4317` when Phoenix and HyperDX containers run); the collector copies all traces to HyperDX and OpenInference / `gen_ai.*` spans to Phoenix.
 
+**Gemini / Bifrost chat (leaf backends):** When the client sends W3C `traceparent`, Phoenix should show `polypus.chat` on the same trace as the client span, plus Bifrost LLM child spans (for example `chat_completion_stream <model>`). Bifrost v1.8.4 does not expose an injectable Google HTTP client, so there is no timed `CLIENT POST generativelanguage.googleapis.com` span; Gemini hops instead carry a synthetic `url.full` on the Bifrost child (`generativelanguage.googleapis.com`, query `key=REDACTED`). Per chunk, compare `polypus.bifrost.stream_chunk` events on `polypus.chat`: `polypus.stream.raw_sha256` / `raw_present` (Google `RawResponse`, usually final chunk only), `polypus.stream.openai_sha256` (Bifrost OpenAI JSON before sanitize), and `polypus.stream.sse_action` (`forward`, `rewrite_usage`, or `drop`). Set `POLYPUS_STREAM_CHUNK_DEBUG=true` only for short captures; previews are capped and URL-redacted.
+
 ### 3c. Smoke OpenAI batch facade
 
 Requires a Cloudflare extension backend (batch is on by default for those backends unless `batch_backend.enabled: false`) and a Workers AI batch-capable model on the allow list. Not part of `go tool task smoke-all` (async poll can take minutes).

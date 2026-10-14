@@ -257,7 +257,7 @@ func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.
 	}
 	copyChatResponseHeaders(w, resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	n, err := io.Copy(w, io.LimitReader(resp.Body, chatMaxBody))
+	n, err := copyOpenAIChatStream(w, io.LimitReader(resp.Body, chatMaxBody), false)
 	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, int(n))
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "write stream")

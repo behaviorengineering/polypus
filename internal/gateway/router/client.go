@@ -12,8 +12,10 @@ import (
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Client wraps Bifrost for Polypus multi-backend routing (speech, chat, embed).
@@ -21,6 +23,7 @@ type Client struct {
 	bf               *bifrost.Bifrost
 	reg              *Registry
 	cfSpeechPluginOn bool
+	bfTracer         *observability.BifrostOTelTracer
 }
 
 // CloudflareClientGet optionally overrides process-scoped cloudflare.GetClient (tests).
@@ -50,14 +53,16 @@ func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
 		}
 		plugins = append(plugins, cloudflare.NewRunSpeechPlugin(lookup, cloudflare.ClientGet(cfGet)))
 	}
+	bfTracer := observability.NewBifrostOTelTracer()
 	bf, err := bifrost.Init(context.Background(), schemas.BifrostConfig{
 		Account:    account,
 		LLMPlugins: plugins,
+		Tracer:     bfTracer,
 	})
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "router.NewClient", "bifrost init")
 	}
-	return &Client{bf: bf, reg: reg, cfSpeechPluginOn: len(plugins) > 0}, nil
+	return &Client{bf: bf, reg: reg, cfSpeechPluginOn: len(plugins) > 0, bfTracer: bfTracer}, nil
 }
 
 func hasCloudflareBackend(cfg config.RouterConfig) bool {
@@ -85,8 +90,14 @@ func WithCloudflareClientGet(fn CloudflareClientGet) ClientOption {
 
 // Close shuts down the Bifrost client.
 func (c *Client) Close() {
-	if c != nil && c.bf != nil {
+	if c == nil {
+		return
+	}
+	if c.bf != nil {
 		c.bf.Shutdown()
+	}
+	if c.bfTracer != nil {
+		c.bfTracer.Stop()
 	}
 }
 
@@ -117,6 +128,17 @@ func bifrostRawContext(parent context.Context, timeout time.Duration, useRaw boo
 	bctx := schemas.NewBifrostContext(parent, deadline)
 	if useRaw {
 		bctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, true)
+	}
+	return bctx
+}
+
+func (c *Client) bifrostContext(parent context.Context, timeout time.Duration, useRaw bool) *schemas.BifrostContext {
+	bctx := bifrostRawContext(parent, timeout, useRaw)
+	if c != nil && c.bfTracer != nil {
+		c.bfTracer.Bind(parent)
+	}
+	if sc := trace.SpanFromContext(parent).SpanContext(); sc.HasSpanID() {
+		bctx.SetValue(schemas.BifrostContextKeyParentSpanID, sc.SpanID().String())
 	}
 	return bctx
 }
@@ -199,7 +221,7 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string,
 		return nil, derrors.New(derrors.CodeInvalid, "router.ChatCompletionRaw", "messages required")
 	}
 	useRaw := c.bifrostUseRawChatBody(backendID)
-	bctx := bifrostRawContext(ctx, timeout, useRaw)
+	bctx := c.bifrostContext(ctx, timeout, useRaw)
 	chatReq, err := bifrostChatRequest(backendID, model, envelope.Messages, body, useRaw)
 	if err != nil {
 		return nil, err
@@ -223,7 +245,7 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string,
 // ChatCompletionStreamRaw streams OpenAI-shaped chat via Bifrost.
 // Each channel value is one JSON chat.completion.chunk object (not SSE-framed).
 // The channel is closed when the stream ends; streamErr receives at most one terminal error.
-func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) (<-chan []byte, <-chan error, error) {
+func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) (<-chan ChatStreamChunk, <-chan error, error) {
 	if c == nil || c.bf == nil {
 		return nil, nil, derrors.New(derrors.CodeFailedPrecondition, "router.ChatCompletionStreamRaw", "bifrost not configured")
 	}
@@ -240,7 +262,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 	// timeout rules on the HTTP proxy path. The timeout arg is reserved for API symmetry.
 	_ = timeout
 	useRaw := c.bifrostUseRawChatBody(backendID)
-	bctx := bifrostRawContext(ctx, 0, useRaw)
+	bctx := c.bifrostContext(ctx, 0, useRaw)
 	chatReq, err := bifrostChatRequest(backendID, model, envelope.Messages, body, useRaw)
 	if err != nil {
 		return nil, nil, err
@@ -249,7 +271,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 	if berr != nil {
 		return nil, nil, bifrostErr(berr, bifrostProviderHeader(bctx))
 	}
-	out := make(chan []byte, 16)
+	out := make(chan ChatStreamChunk, 16)
 	errCh := make(chan error, 1)
 	go func() {
 		defer close(out)
@@ -265,7 +287,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 			if chunk.BifrostChatResponse == nil {
 				continue
 			}
-			raw, err := json.Marshal(chunk.BifrostChatResponse)
+			item, err := chatStreamChunkFromResponse(chunk.BifrostChatResponse)
 			if err != nil {
 				errCh <- derrors.Wrap(err, derrors.CodeInternal, "router.ChatCompletionStreamRaw", "marshal stream chunk")
 				return
@@ -274,7 +296,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 			case <-ctx.Done():
 				errCh <- derrors.Wrap(ctx.Err(), derrors.CodeCanceled, "router.ChatCompletionStreamRaw", "context done")
 				return
-			case out <- raw:
+			case out <- item:
 			}
 		}
 	}()
@@ -290,7 +312,7 @@ func (c *Client) EmbeddingRaw(ctx context.Context, backendID, model string, body
 	if err != nil {
 		return nil, err
 	}
-	bctx := bifrostRawContext(ctx, timeout, true)
+	bctx := c.bifrostContext(ctx, timeout, true)
 	resp, berr := c.bf.EmbeddingRequest(bctx, &schemas.BifrostEmbeddingRequest{
 		Provider:       schemas.ModelProvider(backendID),
 		Model:          model,
@@ -385,8 +407,7 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 	}
 	ctx, cancel := ensureSpeechDeadline(ctx, c.reg.Config().Timeouts)
 	defer cancel()
-	deadline, _ := ctx.Deadline()
-	bctx := schemas.NewBifrostContext(ctx, deadline)
+	bctx := c.bifrostContext(ctx, 0, false)
 	resp, berr := c.bf.SpeechRequest(bctx, &schemas.BifrostSpeechRequest{
 		Provider: provider,
 		Model:    model,
@@ -440,8 +461,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	}
 	ctx, cancel := ensureSpeechDeadline(ctx, c.reg.Config().Timeouts)
 	defer cancel()
-	deadline, _ := ctx.Deadline()
-	bctx := schemas.NewBifrostContext(ctx, deadline)
+	bctx := c.bifrostContext(ctx, 0, false)
 	resp, berr := c.bf.TranscriptionRequest(bctx, &schemas.BifrostTranscriptionRequest{
 		Provider: provider,
 		Model:    model,
