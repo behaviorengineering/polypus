@@ -1,12 +1,14 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 )
 
@@ -37,7 +39,8 @@ func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request,
 		if err != nil {
 			return err
 		}
-		return writeBifrostChatSSE(w, chunks, errCh)
+		ctx := withStreamChunkCounter(r.Context())
+		return writeBifrostChatSSE(ctx, w, chunks, errCh)
 	}
 	raw, err := h.router.ChatCompletionRaw(r.Context(), backendID, model, body, hop)
 	if err != nil {
@@ -61,11 +64,15 @@ func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request,
 // OpenAI-compat clients that require the key (for example llm-go) can parse.
 // Headers are not committed until the first chunk (or successful empty DONE) so
 // dial/stream setup errors can still map to HTTP error status.
-func writeBifrostChatSSE(w http.ResponseWriter, chunks <-chan []byte, errCh <-chan error) error {
+func writeBifrostChatSSE(ctx context.Context, w http.ResponseWriter, chunks <-chan router.ChatStreamChunk, errCh <-chan error) error {
+	if ctx == nil {
+		return derrors.New(derrors.CodeInvalid, "gateway.writeBifrostChatSSE", "context required")
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	flusher, _ := w.(http.Flusher)
+	san := newOpenAIStreamSanitizer()
 	started := false
 	start := func() {
 		if started {
@@ -74,11 +81,18 @@ func writeBifrostChatSSE(w http.ResponseWriter, chunks <-chan []byte, errCh <-ch
 		w.WriteHeader(http.StatusOK)
 		started = true
 	}
-	for raw := range chunks {
-		start()
-		if fixed, ok := ensureStreamChoiceFinishReason(raw); ok {
-			raw = fixed
+	for chunk := range chunks {
+		if ctx.Err() != nil {
+			return derrors.Wrap(ctx.Err(), derrors.CodeCanceled, "gateway.writeBifrostChatSSE", "context done")
 		}
+		start()
+		raw := chunk.OpenAIJSON
+		out, action, emit := sanitizeOpenAIStreamChunk(raw, san, true)
+		recordBifrostStreamChunk(ctx, chunk.OpenAIJSON, chunk.RawProviderJSON, out, action, emit)
+		if !emit {
+			continue
+		}
+		raw = out
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
 			return fmt.Errorf("%w: %w",
 				derrors.Wrap(err, derrors.CodeInternal, "gateway.writeBifrostChatSSE", "write stream"),

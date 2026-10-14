@@ -45,6 +45,20 @@ GET /v1/batches/{id} → 502 because cloudflare.parsePollResult failed.
 - Enforcement: Skills and examples use `http://127.0.0.1:1320` or configured gateway base URL.
 - Violation: STOP, rewrite examples to gateway-only.
 
+## Chat streaming (`stream: true`)
+
+Polypus normalizes every provider stream (Bifrost Gemini leaf and HTTP proxy backends) to the OpenAI chat completion chunk shape clients expect.
+
+**CONSTRAINT:** Mid-stream `choices[]` entries MAY include `"finish_reason": null` when the upstream omitted the key (openai-go and similar parsers require the field).
+
+**CONSTRAINT:** After a choice reports a string `finish_reason` (for example `"stop"`), Polypus MUST NOT forward another chunk with non-empty `choices` for that choice index unless the chunk is the legal usage trailer rewritten to `"choices": []` with the same `usage` object.
+
+**CONSTRAINT:** Illegal post-stop content chunks are dropped. When `POLYPUS_FAILURE_DUMP_DIR` (olly dump dir) is set, dropped chunks are also written under that directory for post-mortem.
+
+**CONSTRAINT:** `extra_fields` (Bifrost provider metadata such as `RawResponse`) MUST NOT appear on the public SSE wire. That JSON is recorded on the `polypus.chat` span as `polypus.bifrost.stream_chunk` events instead.
+
+Proxy backends that already emit legal OpenAI SSE pass through unchanged except for the shared sanitizer rules above.
+
 ## Related shards
 
 - [thinking-policy.md](thinking-policy.md) (OpenAI `reasoning.effort` inbound, per-extension outbound).

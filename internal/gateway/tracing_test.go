@@ -1,26 +1,25 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
+// TestChatCompletionsPropagatesTraceparent ensures inbound W3C context reaches
+// polypus.chat and the Bifrost stream path stays on the same trace ID.
+// Outbound Google HTTP is not wrapped in Bifrost v1.8.4; Gemini children are synthetic Bifrost spans.
 func TestChatCompletionsPropagatesTraceparent(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
@@ -28,97 +27,62 @@ func TestChatCompletionsPropagatesTraceparent(t *testing.T) {
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}))
 
-	cf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/models" {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"@cf/allow-me","object":"model"}]}`))
-			return
-		}
-		if r.URL.Path == "/v1/chat/completions" {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(cf.Close)
-
 	dir := t.TempDir()
-	content := fmt.Sprintf(`
-tts_backend:
-  enabled: true
-  default: cf_local
-stt_backend:
-  enabled: true
-  default: cf_local
-proxy_backend:
-  enabled: true
-  default: cf_local
+	writeConfig(t, dir, `
 chat_backend:
   enabled: true
-  default: cf_local
-vision_backend:
+  default: leaf
+tts_backend:
   enabled: true
-  default: cf_local
+  default: leaf
+stt_backend:
+  enabled: true
+  default: leaf
 backends:
-  cf_local:
-    base_url: %s
-    capabilities: [chat, vision, tts, stt, voices]
+  leaf:
+    base_url: http://127.0.0.1:9
+    capabilities: [chat, tts, stt, voices]
     models:
       allow:
-        - "@cf/allow-me"
-`, cf.URL)
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("POLYPUS_CONFIG", path)
-	t.Setenv("POLYPUS_MODELS_CACHE", filepath.Join(dir, "cache.json"))
-	t.Setenv("POLYPUS_DEFAULT_MODEL", "")
-	t.Setenv("POLYPUS_DEFAULT_STT_MODEL", "")
-
-	inner, err := NewHandler(config.ServeOptions{BackendURL: cf.URL})
+        - test-model
+`)
+	opts := config.ServeOptions{BackendURL: "http://127.0.0.1:9"}
+	rcfg, err := config.LoadRouterConfig(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := observability.WrapHandler(inner)
+	reg, err := router.NewRegistry(rcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recRouter := &recordingRouter{reg: reg, uses: map[string]bool{"leaf": true}}
+	handler := observability.WrapHandler(newTestGateway(t, opts, recRouter))
 
-	ctx, root := tp.Tracer("client").Start(context.Background(), "Predict.process_evaluator-FeedbackAnalysis.v1")
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(
-		`{"model":"@cf/allow-me","messages":[{"role":"user","content":"hi"}]}`,
+	ctx, root := tp.Tracer("client").Start(context.Background(), "test.client")
+	rootTrace := root.SpanContext().TraceID()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"leaf/test-model","stream":true,"messages":[{"role":"user","content":"hi"}]}`,
 	))
 	req = req.WithContext(ctx)
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	root.End()
-
 	if rec.Code != http.StatusOK {
-		body, _ := io.ReadAll(rec.Body)
-		t.Fatalf("status=%d body=%s", rec.Code, body)
+		t.Fatalf("status: %d body %q", rec.Code, rec.Body.String())
 	}
-	// Bifrost owns the leaf HTTP client; W3C injection onto that hop is not wired yet.
-	// Require the gateway LLM span to stay on the client trace.
-	clientSC := trace.SpanContextFromContext(ctx)
-	spans := exporter.GetSpans()
-	var sawChat bool
-	for _, sp := range spans {
+
+	var chatTrace string
+	for _, sp := range exporter.GetSpans() {
 		if sp.Name == "polypus.chat" {
-			sawChat = true
-			if sp.SpanContext.TraceID().String() != clientSC.TraceID().String() {
-				t.Fatalf("polypus.chat trace %s != client %s", sp.SpanContext.TraceID(), clientSC.TraceID())
-			}
+			chatTrace = sp.SpanContext.TraceID().String()
 		}
 	}
-	if !sawChat {
-		t.Fatalf("missing polypus.chat span in %+v", spanNames(spans))
+	if chatTrace == "" {
+		t.Fatal("missing polypus.chat span")
 	}
-}
-
-func spanNames(spans tracetest.SpanStubs) []string {
-	names := make([]string, 0, len(spans))
-	for _, sp := range spans {
-		names = append(names, sp.Name)
+	if chatTrace != rootTrace.String() {
+		t.Fatalf("polypus.chat trace %q != client trace %q", chatTrace, rootTrace)
 	}
-	return names
 }
