@@ -6,6 +6,7 @@ require (
 	github.com/behaviorengineering/olly v0.2.0
 	github.com/behaviorengineering/operatorconfig v0.1.1
 	github.com/failsafe-go/failsafe-go v0.9.7
+	github.com/google/uuid v1.6.0
 	github.com/maximhq/bifrost/core v1.8.4
 	github.com/sony/gobreaker v1.0.0
 	github.com/spf13/cobra v1.10.2
@@ -199,7 +200,6 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.10 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.22 // indirect
 	github.com/googleapis/gax-go/v2 v2.26.2 // indirect
 	github.com/gordonklaus/ineffassign v0.2.0 // indirect
