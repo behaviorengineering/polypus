@@ -65,7 +65,7 @@ func TestGeminiGemmaLive(t *testing.T) {
 	}
 	var streamed string
 	for chunk := range chunks {
-		streamed += deltaContentFromChunk(chunk)
+		streamed += deltaContentFromChunk(chunk.OpenAIJSON)
 	}
 	if err := drainStreamErr(errCh); err != nil {
 		t.Fatalf("stream: %v", err)
