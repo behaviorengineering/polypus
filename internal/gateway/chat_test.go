@@ -26,6 +26,25 @@ func chatJSONField(t *testing.T, body []byte, path ...string) any {
 	return nil
 }
 
+func TestChatCompletionsURL(t *testing.T) {
+	cases := []struct {
+		base string
+		want string
+	}{
+		{base: "https://openrouter.ai/api/v1", want: "https://openrouter.ai/api/v1/chat/completions"},
+		{base: "https://openrouter.ai/api/v1/", want: "https://openrouter.ai/api/v1/chat/completions"},
+		{base: "http://127.0.0.1:1234", want: "http://127.0.0.1:1234/v1/chat/completions"},
+		{base: "https://api.deepinfra.com/v1/openai", want: "https://api.deepinfra.com/v1/openai/chat/completions"},
+		{base: "https://api.deepinfra.com/v1/openai/", want: "https://api.deepinfra.com/v1/openai/chat/completions"},
+	}
+	for _, tc := range cases {
+		got := chatCompletionsURL(tc.base)
+		if got != tc.want {
+			t.Fatalf("base %q: got %q want %q", tc.base, got, tc.want)
+		}
+	}
+}
+
 func TestApplyChatThinkingCloudflareGLMOff(t *testing.T) {
 	in := []byte(`{"model":"@cf/zai-org/glm-4.7-flash","messages":[{"role":"user","content":"hi"}]}`)
 	out, changed := applyChatThinking(in, config.ExtensionCloudflare, "glm-4.7-flash")

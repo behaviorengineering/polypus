@@ -25,3 +25,4 @@ globs:
 
 - Return only `syntheticModels(allow)` for a syncing extension (Gemini early return anti-pattern).
 - Set Gemini chat `base_url` to Google for inventory; use the gemini catalog client list URL.
+- Derive DeepInfra inventory as `{chat-base}/v1/models`; pin `GET {origin}/v1/openai/models`.

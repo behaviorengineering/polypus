@@ -51,6 +51,7 @@ Speech smoke: cf_local via `go tool task smoke` / `go tool task smoke-stt`; MLX 
 secrets:
   - CF_AI_API_KEY
   - CF_ACCOUNT_ID
+  - DEEPINFRA_API_KEY
 chat_backend:
   enabled: true
   default: cf_local
@@ -122,6 +123,15 @@ backends:
     models:
       sync: true
       allow: [...]
+  deepinfra:
+    remote: true
+    base_url: https://api.deepinfra.com/v1/openai
+    auth:
+      bearer_env: DEEPINFRA_API_KEY
+    capabilities: [chat, vision]
+    models:
+      sync: true
+      allow: [...]
 ```
 
 `extension: gemini` uses Bifrost native `generateContent` (Google AI Studio). Omit `base_url` so Bifrost uses the Developer API default. Setting `https://generativelanguage.googleapis.com/v1beta` makes Bifrost send OpenAI chat JSON to the native API (502: unknown `messages` / `max_tokens`). Generic remote OpenAI backends cannot point at `generativelanguage.googleapis.com`; only `extension: gemini` may.
@@ -134,8 +144,9 @@ Client header `X-Polypus-Timeout` (duration or seconds) clamps to `timeouts.min`
 ## Model ids
 
 - Gateway rewrites ids as `backend_id/downstream-model`.
-- Examples: `cf_local/@cf/google/gemma-4-26b-a4b-it`, `gemini_studio/gemma-4-26b-a4b-it`, `openrouter/google/gemma-4-26b-a4b-it:free`, `lm_studio/allenai/olmocr-2-7b`, `cf_local/typesafe/jev`.
+- Examples: `cf_local/@cf/google/gemma-4-26b-a4b-it`, `gemini_studio/gemma-4-26b-a4b-it`, `openrouter/google/gemma-4-26b-a4b-it:free`, `deepinfra/google/gemma-4-26B-A4B-it`, `deepinfra/google/gemma-4-31B-it`, `lm_studio/allenai/olmocr-2-7b`, `cf_local/typesafe/jev`.
 - OpenRouter inventory sync (`models.sync: true` with `base_url` host `openrouter.ai` or `*.openrouter.ai`) appends `output_modalities=all` on the upstream models list request so speech and other non-text slugs appear in inventory; `models.allow` remains the inference gate.
+- DeepInfra inventory sync (`models.sync: true` with `base_url` host `deepinfra.com`, `api.deepinfra.com`, or `*.deepinfra.com`) lists `GET {origin}/v1/openai/models` with the backend bearer. Chat `base_url` stays `https://api.deepinfra.com/v1/openai`. Bifrost strips `/v1/openai` and posts `POST {origin}/v1/chat/completions` (same catalog as `/v1/openai/chat/completions`). Do not set chat `base_url` to `https://api.deepinfra.com/v1`. `models.allow` remains the inference gate.
 - Gemini inventory sync (`extension: gemini`, `models.sync: true`, default) lists `GET https://generativelanguage.googleapis.com/v1beta/openai/models` with the backend bearer. Omit chat `base_url`; inventory uses that URL only. Serve warmup and `POLYPUS_MODELS_REFRESH_INTERVAL` (default `30m`; `off` or `0` disables the ticker) refresh catalogs; `models.allow` remains the inference gate. `POST /v1/admin/models/allow` checks live inventory, not YAML allow alone.
 - Named routers: `router/<name>` (e.g. `router/investigator`, `router/scribe`).
 - No prefix → capability default backend applies.

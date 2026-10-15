@@ -100,6 +100,22 @@ backends:
 #     allow:
 #       - google/gemma-3-27b-it:free
 
+# Optional DeepInfra (OpenAI-compat remote).
+# Chat: POST https://api.deepinfra.com/v1/openai/chat/completions
+# Inventory (models.sync): GET https://api.deepinfra.com/v1/openai/models
+# deepinfra:
+#   remote: true
+#   base_url: https://api.deepinfra.com/v1/openai
+#   auth:
+#     bearer_env: DEEPINFRA_API_KEY
+#   capabilities: [chat, vision]
+#   models:
+#     sync: true
+#     allow:
+#       - deepseek-ai/DeepSeek-V4-Flash-0731
+#       - google/gemma-4-26B-A4B-it
+#       - google/gemma-4-31B-it
+
 # Case-mode breach guardrails (defaults match omission of this block).
 # policy:
 #   reject_non_loopback_backends: true
