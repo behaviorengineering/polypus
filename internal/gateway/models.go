@@ -495,10 +495,21 @@ func rewriteBackendModelList(raw []byte, backendID string) []openaiModel {
 	return nil
 }
 
-// openAIModelsURL joins base (with or without trailing /v1) to the OpenAI models path.
+// isOpenAICompatAPIRoot reports whether base already ends at the OpenAI API root
+// (/v1 or DeepInfra-style /v1/openai), so callers should join /models or
+// /chat/completions without inserting another /v1.
+func isOpenAICompatAPIRoot(base string) bool {
+	b := strings.ToLower(strings.TrimRight(strings.TrimSpace(base), "/"))
+	if strings.HasSuffix(b, "/v1/openai") {
+		return true
+	}
+	return strings.HasSuffix(b, "/v1")
+}
+
+// openAIModelsURL joins base (with or without trailing /v1 or /v1/openai) to the OpenAI models path.
 func openAIModelsURL(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if strings.HasSuffix(base, "/v1") {
+	if isOpenAICompatAPIRoot(base) {
 		return base + "/models"
 	}
 	return base + "/v1/models"
@@ -521,8 +532,44 @@ func isOpenRouterHost(base string) bool {
 	return host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai")
 }
 
-// openAIModelsListURL is the upstream models list URL, including OpenRouter modality query.
+// isDeepInfraHost reports whether base URL targets DeepInfra's API host.
+func isDeepInfraHost(base string) bool {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return false
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	return host == "deepinfra.com" || host == "api.deepinfra.com" || strings.HasSuffix(host, ".deepinfra.com")
+}
+
+// deepInfraModelsListURL is GET /v1/openai/models on the DeepInfra origin.
+// Chat uses POST /v1/openai/chat/completions; inventory does not follow a
+// chat base that omits /openai (https://api.deepinfra.com/v1 → /v1/models).
+func deepInfraModelsListURL(base string) string {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return openAIModelsURL(base)
+	}
+	u.Path = "/v1/openai/models"
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+// openAIModelsListURL is the upstream models list URL, including OpenRouter modality query
+// and the DeepInfra OpenAI-compat catalog path.
 func openAIModelsListURL(base string) string {
+	if isDeepInfraHost(base) {
+		return deepInfraModelsListURL(base)
+	}
 	target := openAIModelsURL(base)
 	if !isOpenRouterHost(base) {
 		return target

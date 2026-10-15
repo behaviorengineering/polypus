@@ -30,6 +30,7 @@ CORRECT:
 ```text
 Cloudflare: Model Search via internal/clients/cloudflare ListModelsStrict
 OpenRouter: GET {base}/v1/models?output_modalities=all via fetchBackendModelsProtected
+DeepInfra: GET {origin}/v1/openai/models via fetchBackendModelsProtected (chat base_url stays https://api.deepinfra.com/v1/openai)
 Gemini: GET https://generativelanguage.googleapis.com/v1beta/openai/models with Bearer (chat base_url stays empty)
 ```
 
@@ -54,8 +55,10 @@ MUST NOT return `syntheticModels(allow)` as the only inventory while `models.syn
 
 Gemini chat MUST keep empty `base_url` (Bifrost `generateContent`). Inventory MUST use the OpenAI-compat models URL in `internal/clients/gemini`, not `BackendDef.BaseURL` for chat.
 
-- Enforcement: `validateGeminiBackendURL` and operator docs say omit `base_url` for chat; catalog client has its own default list URL.
-- Violation: STOP, move list URL into gemini client; do not set generativelanguage host on backend for chat.
+DeepInfra chat MUST keep `base_url` `https://api.deepinfra.com/v1/openai`. Inventory MUST use `GET {origin}/v1/openai/models` (`deepInfraModelsListURL`), not `{chat-base}/v1/models`.
+
+- Enforcement: `validateGeminiBackendURL` and operator docs say omit `base_url` for Gemini chat; catalog client has its own default list URL. DeepInfra: `openAIModelsListURL` on host `api.deepinfra.com` (or `*.deepinfra.com`) returns `{origin}/v1/openai/models`; `TestAdminAllowDeepInfraFromLiveInventory` hits that path.
+- Violation: STOP, keep Gemini list URL in the gemini client; pin DeepInfra inventory to `/v1/openai/models`; do not set generativelanguage host on a Gemini backend for chat.
 
 ## CONSTRAINT: New extension checklist
 

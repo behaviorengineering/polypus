@@ -114,10 +114,12 @@ func chatBodyHasVision(body []byte) bool {
 	return false
 }
 
-// chatCompletionsURL joins base (with or without trailing /v1) to the OpenAI chat path.
+// chatCompletionsURL joins base (with or without trailing /v1 or /v1/openai) to the OpenAI chat path.
 func chatCompletionsURL(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	base = strings.TrimSuffix(base, "/v1")
+	if isOpenAICompatAPIRoot(base) {
+		return base + "/chat/completions"
+	}
 	return base + "/v1/chat/completions"
 }
 

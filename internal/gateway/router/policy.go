@@ -121,8 +121,14 @@ func isBlockedCloudHost(host string) bool {
 	return false
 }
 
-// openAIBaseURL normalizes the backend root (no /v1 suffix; Bifrost adds /v1/... paths).
+// openAIBaseURL normalizes the backend root (no /v1 or /v1/openai suffix).
+// Bifrost OpenAI custom providers append /v1/chat/completions to this origin.
 func openAIBaseURL(backend string) string {
 	s := strings.TrimRight(strings.TrimSpace(backend), "/")
+	lower := strings.ToLower(s)
+	const openaiRoot = "/v1/openai"
+	if strings.HasSuffix(lower, openaiRoot) {
+		return s[:len(s)-len(openaiRoot)]
+	}
 	return strings.TrimSuffix(s, "/v1")
 }

@@ -233,6 +233,27 @@ func TestOpenAIModelsListURL(t *testing.T) {
 			base:    "",
 			wantNot: "output_modalities",
 		},
+		{
+			name:    "deepinfra",
+			base:    "https://api.deepinfra.com/v1/openai",
+			wantSub: "https://api.deepinfra.com/v1/openai/models",
+			wantNot: "output_modalities",
+		},
+		{
+			name:    "deepinfra_v1_chat_base",
+			base:    "https://api.deepinfra.com/v1",
+			wantSub: "https://api.deepinfra.com/v1/openai/models",
+		},
+		{
+			name:    "deepinfra_mixed_case_host",
+			base:    "https://API.DeepInfra.com/v1/openai/",
+			wantSub: "https://API.DeepInfra.com/v1/openai/models",
+		},
+		{
+			name:    "evil_deepinfra_host",
+			base:    "https://evildeepinfra.com/v1",
+			wantNot: "/v1/openai/models",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -271,5 +292,39 @@ func TestOpenAIModelsListURLPreservesExistingModality(t *testing.T) {
 	q2 := u2.Query()
 	if q2.Get("output_modalities") != "text" {
 		t.Fatal("parsed target keeps text modality")
+	}
+}
+
+func TestOpenAIModelsURLDeepInfra(t *testing.T) {
+	got := openAIModelsURL("https://api.deepinfra.com/v1/openai")
+	want := "https://api.deepinfra.com/v1/openai/models"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	// Must not insert a second /v1 under /openai.
+	if strings.Contains(got, "/openai/v1/") {
+		t.Fatalf("double v1: %q", got)
+	}
+}
+
+func TestOpenAIModelsListURLDeepInfraPin(t *testing.T) {
+	got := openAIModelsListURL("https://api.deepinfra.com/v1")
+	want := "https://api.deepinfra.com/v1/openai/models"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestRewriteBackendModelListDeepInfra(t *testing.T) {
+	raw := []byte(`{"object":"list","data":[{"id":"google/gemma-3-27b-it","object":"model","created":0,"owned_by":"deepinfra","root":"google/gemma-3-27b-it","parent":null,"metadata":{"description":"Gemma","pricing":{"input_tokens":0.1},"tags":["chat","vision"]}}]}`)
+	got := rewriteBackendModelList(raw, "deepinfra")
+	if len(got) != 1 {
+		t.Fatalf("len=%d", len(got))
+	}
+	if got[0].ID != "deepinfra/google/gemma-3-27b-it" {
+		t.Fatalf("id=%q", got[0].ID)
+	}
+	if got[0].OwnedBy != "deepinfra" {
+		t.Fatalf("owned_by=%q", got[0].OwnedBy)
 	}
 }

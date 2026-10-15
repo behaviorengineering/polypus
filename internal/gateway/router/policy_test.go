@@ -94,4 +94,13 @@ func TestOpenAIBaseURL(t *testing.T) {
 	if got := openAIBaseURL("http://127.0.0.1:1234/v1"); got != "http://127.0.0.1:1234" {
 		t.Fatalf("strip /v1: got %q", got)
 	}
+	if got := openAIBaseURL("https://openrouter.ai/api/v1"); got != "https://openrouter.ai/api" {
+		t.Fatalf("openrouter: got %q", got)
+	}
+	if got := openAIBaseURL("https://api.deepinfra.com/v1/openai"); got != "https://api.deepinfra.com" {
+		t.Fatalf("deepinfra: got %q", got)
+	}
+	if got := openAIBaseURL("https://api.deepinfra.com/v1/openai/"); got != "https://api.deepinfra.com" {
+		t.Fatalf("deepinfra trailing: got %q", got)
+	}
 }
