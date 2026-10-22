@@ -31,12 +31,18 @@ type SpeechRouter interface {
 	Transcribe(ctx context.Context, req router.TranscriptionRequest) ([]byte, string, error)
 }
 
-// Router is the composed gateway dial dependency (Registry + Chat + Speech).
+// SystemOneRouter is the Bifrost Decision dial surface for native OpenRouter SystemOne.
+type SystemOneRouter interface {
+	SystemOneDecisionRaw(ctx context.Context, backendID, downstream string, body []byte, timeout time.Duration) ([]byte, error)
+}
+
+// Router is the composed gateway dial dependency (Registry + Chat + Speech + SystemOne).
 // Prefer depending on the smaller interfaces at call sites; *router.Client implements all.
 type Router interface {
 	RegistryProvider
 	ChatRouter
 	SpeechRouter
+	SystemOneRouter
 }
 
 // routerCloser is optional; owned Bifrost clients implement Close.

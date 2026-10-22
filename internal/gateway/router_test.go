@@ -50,6 +50,10 @@ func (f *fakeRouter) Transcribe(context.Context, router.TranscriptionRequest) ([
 	return nil, "", fmt.Errorf("fakeRouter: Transcribe not implemented")
 }
 
+func (f *fakeRouter) SystemOneDecisionRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
+	return nil, fmt.Errorf("fakeRouter: SystemOneDecisionRaw not used when UsesBifrost is false")
+}
+
 type errSynthRouter struct {
 	*fakeRouter
 	err error
@@ -107,6 +111,10 @@ func (r *recordingRouter) Synthesize(context.Context, router.SpeechRequest) ([]b
 
 func (r *recordingRouter) Transcribe(context.Context, router.TranscriptionRequest) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("recordingRouter: Transcribe not implemented")
+}
+
+func (r *recordingRouter) SystemOneDecisionRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
+	return nil, fmt.Errorf("recordingRouter: SystemOneDecisionRaw not implemented")
 }
 
 func newFakeRouter(t *testing.T, opts config.ServeOptions) *fakeRouter {

@@ -78,6 +78,9 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 	if !ok {
 		return nil, fmt.Errorf("provider %s not supported", provider)
 	}
+	if provider == schemas.OpenRouter {
+		return openRouterProviderConfig(b, a.timeouts), nil
+	}
 	baseURL := openAIBaseURL(b.BaseURL)
 	baseType := schemas.OpenAI
 	if b.IsGeminiExtension() {
@@ -88,16 +91,12 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 			baseURL = strings.TrimRight(strings.TrimSpace(b.BaseURL), "/")
 		}
 	}
-	var extraHeaders map[string]string
-	if len(b.ExtraHeaders) > 0 {
-		extraHeaders = b.ExtraHeaders
-	}
 	return &schemas.ProviderConfig{
 		NetworkConfig: schemas.NetworkConfig{
 			BaseURL:                        baseURL,
 			DefaultRequestTimeoutInSeconds: a.timeouts.ProviderSeconds(),
 			AllowPrivateNetwork:            true,
-			ExtraHeaders:                   extraHeaders,
+			ExtraHeaders:                   secretExtraHeaders(b.ExtraHeaders),
 		},
 		ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
 			Concurrency: 8,
@@ -109,6 +108,33 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 			AllowedRequests:  allowedRequestsForBackend(b),
 		},
 	}, nil
+}
+
+func openRouterProviderConfig(b config.BackendDef, timeouts config.Timeouts) *schemas.ProviderConfig {
+	return &schemas.ProviderConfig{
+		NetworkConfig: schemas.NetworkConfig{
+			BaseURL:                        openAIBaseURL(b.BaseURL),
+			DefaultRequestTimeoutInSeconds: timeouts.ProviderSeconds(),
+			AllowPrivateNetwork:            true,
+			ExtraHeaders:                   secretExtraHeaders(b.ExtraHeaders),
+		},
+		ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
+			Concurrency: 8,
+			BufferSize:  32,
+		},
+		SendBackRawResponse: true,
+	}
+}
+
+func secretExtraHeaders(h map[string]string) map[string]schemas.SecretVar {
+	if len(h) == 0 {
+		return nil
+	}
+	out := make(map[string]schemas.SecretVar, len(h))
+	for k, v := range h {
+		out[k] = *schemas.NewSecretVar(v)
+	}
+	return out
 }
 
 func allowedRequestsForBackend(b config.BackendDef) *schemas.AllowedRequests {

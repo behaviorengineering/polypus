@@ -308,7 +308,7 @@ func (c *Client) EmbeddingRaw(ctx context.Context, backendID, model string, body
 	if c == nil || c.bf == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.EmbeddingRaw", "bifrost not configured")
 	}
-	input, err := parseEmbeddingInput(body)
+	input, err := parseEmbeddingInputItems(body)
 	if err != nil {
 		return nil, err
 	}
@@ -334,25 +334,39 @@ func (c *Client) EmbeddingRaw(ctx context.Context, backendID, model string, body
 	return out, nil
 }
 
-func parseEmbeddingInput(body []byte) (*schemas.EmbeddingInput, error) {
+func parseEmbeddingInputItems(body []byte) ([]schemas.EmbeddingInputItem, error) {
 	var envelope struct {
 		Input json.RawMessage `json:"input"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInvalid, "router.parseEmbeddingInput", "parse embedding body")
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "router.parseEmbeddingInputItems", "parse embedding body")
 	}
 	if len(envelope.Input) == 0 || string(envelope.Input) == "null" {
-		return nil, derrors.New(derrors.CodeInvalid, "router.parseEmbeddingInput", "input required")
+		return nil, derrors.New(derrors.CodeInvalid, "router.parseEmbeddingInputItems", "input required")
 	}
 	var text string
 	if err := json.Unmarshal(envelope.Input, &text); err == nil {
-		return &schemas.EmbeddingInput{Text: &text}, nil
+		return []schemas.EmbeddingInputItem{{
+			Content: schemas.EmbeddingContent{{
+				Type: schemas.EmbeddingContentPartTypeText,
+				Text: &text,
+			}},
+		}}, nil
 	}
 	var texts []string
 	if err := json.Unmarshal(envelope.Input, &texts); err == nil {
-		return &schemas.EmbeddingInput{Texts: texts}, nil
+		out := make([]schemas.EmbeddingInputItem, len(texts))
+		for i := range texts {
+			out[i] = schemas.EmbeddingInputItem{
+				Content: schemas.EmbeddingContent{{
+					Type: schemas.EmbeddingContentPartTypeText,
+					Text: &texts[i],
+				}},
+			}
+		}
+		return out, nil
 	}
-	return nil, derrors.New(derrors.CodeInvalid, "router.parseEmbeddingInput", "input must be string or string array")
+	return nil, derrors.New(derrors.CodeInvalid, "router.parseEmbeddingInputItems", "input must be string or string array")
 }
 
 // SpeechRequest is a normalized OpenAI TTS request.

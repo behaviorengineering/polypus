@@ -174,11 +174,42 @@ func TestNewAccountCopiesExtraHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pc.NetworkConfig.ExtraHeaders["HTTP-Referer"] != "https://example.com" {
+	referer := pc.NetworkConfig.ExtraHeaders["HTTP-Referer"]
+	if referer.GetValue() != "https://example.com" {
 		t.Fatalf("referer: %+v", pc.NetworkConfig.ExtraHeaders)
 	}
-	if pc.NetworkConfig.ExtraHeaders["X-Title"] != "Polypus" {
+	title := pc.NetworkConfig.ExtraHeaders["X-Title"]
+	if title.GetValue() != "Polypus" {
 		t.Fatalf("title: %+v", pc.NetworkConfig.ExtraHeaders)
+	}
+}
+
+func TestNewAccountRegistersNativeOpenRouter(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "secret-key-at-least-twenty-ch")
+	cfg := config.RouterConfig{
+		Timeouts: config.DefaultTimeouts(),
+		Backends: map[string]config.BackendDef{
+			"openrouter": {
+				ID:      "openrouter",
+				Remote:  true,
+				BaseURL: "https://openrouter.ai/api/v1",
+				Auth:    config.BackendAuth{BearerEnv: "OPENROUTER_API_KEY"},
+				Capabilities: []config.Capability{
+					config.CapChat, config.CapSystemOne,
+				},
+			},
+		},
+	}
+	acct := NewAccount(cfg)
+	pc, err := acct.GetConfigForProvider(schemas.OpenRouter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pc.CustomProviderConfig != nil {
+		t.Fatalf("openrouter must be native Bifrost provider, got custom %+v", pc.CustomProviderConfig)
+	}
+	if pc.NetworkConfig.BaseURL != "https://openrouter.ai/api" {
+		t.Fatalf("baseURL=%q", pc.NetworkConfig.BaseURL)
 	}
 }
 

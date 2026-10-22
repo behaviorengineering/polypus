@@ -345,6 +345,9 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 		return syntheticModels(b.ID, modelsCfg.Allow)
 	}
 	live := h.fetchBackendModelsProtected(r, b)
+	if isOpenRouterHost(b.BaseURL) {
+		live = mergeOpenRouterDecisionModels(r, b, live)
+	}
 	if len(live) > 0 {
 		if modelsCfg != nil && modelsCfg.HasAllowGate() {
 			live = mergeAllowSyntheticMissing(b.ID, live, modelsCfg.Allow)
@@ -423,6 +426,69 @@ func (h modelsHandler) fetchBackendModelsProtected(r *http.Request, b config.Bac
 		slog.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
 	}
 	return out
+}
+
+func mergeOpenRouterDecisionModels(r *http.Request, b config.BackendDef, live []openaiModel) []openaiModel {
+	decisions, err := fetchBackendModelsAtURL(r, b, openRouterModelsListURL(b.BaseURL, "decisions"))
+	if err != nil || len(decisions) == 0 {
+		return live
+	}
+	seen := make(map[string]struct{}, len(live)+len(decisions))
+	out := append([]openaiModel(nil), live...)
+	for _, m := range live {
+		seen[m.ID] = struct{}{}
+	}
+	for _, m := range decisions {
+		if _, ok := seen[m.ID]; ok {
+			continue
+		}
+		seen[m.ID] = struct{}{}
+		out = append(out, m)
+	}
+	return out
+}
+
+func openRouterModelsListURL(base string, modality string) string {
+	target := openAIModelsListURL(base)
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	q := u.Query()
+	q.Set("output_modalities", modality)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func fetchBackendModelsAtURL(r *http.Request, b config.BackendDef, target string) ([]openaiModel, error) {
+	ctx := r.Context()
+	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, modelsListTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if auth, err := bearerAuthHeader(b); err == nil && auth != "" {
+		req.Header.Set("Authorization", auth)
+	} else if auth := r.Header.Get("Authorization"); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+	client := &http.Client{Timeout: modelsListTimeout}
+	resp, err := outbound.Do(ctx, outbound.DepGateway, client, req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("models list status %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
+	if err != nil {
+		return nil, err
+	}
+	return rewriteBackendModelList(raw, b.ID), nil
 }
 
 func fetchBackendModelsErr(r *http.Request, b config.BackendDef) ([]openaiModel, error) {
@@ -686,4 +752,22 @@ func (s *shared) ensureModelAllowed(backendID, model string) bool {
 		return true
 	}
 	return b.IsModelAllowed(model)
+}
+
+func (s *shared) ensureSystemOneAllowed(backendID, publicModel, downstream string) bool {
+	if s == nil || s.router == nil {
+		return true
+	}
+	b, ok := s.router.Registry().Config().Backends[backendID]
+	if !ok {
+		return true
+	}
+	if !b.HasCapability(config.CapSystemOne) {
+		return s.ensureModelAllowed(backendID, publicModel)
+	}
+	down := strings.TrimSpace(downstream)
+	if down == "" {
+		down = config.NormalizeDownstream(backendID, publicModel)
+	}
+	return b.IsSystemOneDownstream(down)
 }

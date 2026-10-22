@@ -243,7 +243,7 @@ Overlay POST and key-file changes take effect without restarting `polypus serve`
 | embed | `POST /v1/embeddings` | `lm_studio` |
 | tts | `POST /v1/audio/speech` | `mlx_local`, `cf_local` |
 | stt | `POST /v1/audio/transcriptions` | `mlx_local`, `cf_local` |
-| systemone | `POST /v1/systemone` | `cf_local` (TypeSafe / JEV) |
+| systemone | `POST /v1/systemone` | `cf_local` (TypeSafe / JEV via `/ai/run`); OpenRouter Deciders via Bifrost `Decision` to `/api/alpha/decisions` when backend id is `openrouter` and `capabilities` includes `systemone` |
 
 Router picks: (1) model prefix `backend_id/...`, else (2) `default_*_backend`.
 
