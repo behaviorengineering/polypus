@@ -205,6 +205,7 @@ Build Switchyard: `go tool task build` (Rust toolchain per `providers/switchyard
 | `GET /v1/apis/openai/models?view=inventory` | Full synced upstream catalog for the OpenAI surface |
 | `GET /v1/apis/systemone/models?view=inventory` | Inventory view for SystemOne-classified models |
 | POST inference | 400 `model_not_allowed` if not in allow list |
+| `GET /v1/admin/models/allow` | **Overlay file only** (`models-allow-overlay.yaml` contents, including slugs already in git YAML; not enabled list, not `?view=inventory`) |
 | `POST /v1/admin/models/allow` | Add one model to `models.allow` when it exists in inventory (no separate allow key; optional gateway access key when store is non-empty) |
 | `GET /` | Landing hub with allow form (backend + model) posting to `/v1/admin/models/allow` |
 
@@ -216,6 +217,8 @@ Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.jso
 |-----|----------------|------|
 | `POLYPUS_MODELS_ALLOW_OVERLAY` | `~/.local/state/polypus/models-allow-overlay.yaml` | Extra `models.allow` entries (additive; not in git config) |
 | `POLYPUS_ADMIN_KEYS` | `~/.local/state/polypus/admin-api-keys.json` | Hashed gateway access keys (`polypus admin-key` CLI) |
+
+`GET /v1/admin/models/allow` returns `{"object":"allow_overlay","backends":{...}}` with downstream slugs per backend (empty `backends` when the overlay file is missing). Probe: `curl -sS http://127.0.0.1:1320/v1/admin/models/allow`.
 
 `POST /v1/admin/models/allow` body: `{"backend":"cf_local","model":"@cf/..."}`. The model must appear in backend inventory; the backend must have `models.allow` configured. No dedicated allow Bearer.
 

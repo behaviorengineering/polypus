@@ -28,6 +28,31 @@ type adminAllowResponse struct {
 
 type adminHandler struct{ *shared }
 
+type adminAllowOverlayResponse struct {
+	Object   string                                `json:"object"`
+	Backends map[string]config.AllowOverlayBackend `json:"backends"`
+}
+
+func (h adminHandler) serveModelsAllowOverlay(w http.ResponseWriter, r *http.Request) {
+	file, err := config.LoadAllowOverlay(h.overlayPath)
+	if err != nil {
+		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllowOverlay", "load overlay"))
+		return
+	}
+	if file.Backends == nil {
+		file.Backends = make(map[string]config.AllowOverlayBackend)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	writeAdminJSON(w, http.StatusOK, adminAllowOverlayResponse{
+		Object:   "allow_overlay",
+		Backends: file.Backends,
+	})
+}
+
 func (h adminHandler) serveModelsAllow(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, adminAllowMaxBody))
 	if err != nil {

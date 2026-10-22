@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -85,5 +87,110 @@ func gatedAdminBackendConfig(baseURL string) config.RouterConfig {
 				},
 			},
 		},
+	}
+}
+
+func TestAdminAllowOverlayGetEmpty(t *testing.T) {
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	reg, err := router.NewRegistry(gatedAdminBackendConfig("http://example.invalid/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRouter{reg: reg}
+	dir := t.TempDir()
+	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/models/allow", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	var resp adminAllowOverlayResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Object != "allow_overlay" {
+		t.Fatalf("object %q", resp.Object)
+	}
+	if len(resp.Backends) != 0 {
+		t.Fatalf("backends %v", resp.Backends)
+	}
+}
+
+func TestAdminAllowOverlayGetFile(t *testing.T) {
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	reg, err := router.NewRegistry(gatedAdminBackendConfig("http://example.invalid/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRouter{reg: reg}
+	dir := t.TempDir()
+	overlayPath := filepath.Join(dir, "models-allow-overlay.yaml")
+	const overlayYAML = "backends:\n  cf:\n    allow:\n      - \"@cf/b\"\n"
+	if err := os.WriteFile(overlayPath, []byte(overlayYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/models/allow", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	var resp adminAllowOverlayResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Backends["cf"].Allow[0] != "@cf/b" {
+		t.Fatalf("allow %v", resp.Backends["cf"].Allow)
+	}
+}
+
+func TestAdminAllowOverlayGetIncludesYAMLDuplicate(t *testing.T) {
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	reg, err := router.NewRegistry(gatedAdminBackendConfig("http://example.invalid/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRouter{reg: reg}
+	dir := t.TempDir()
+	overlayPath := filepath.Join(dir, "models-allow-overlay.yaml")
+	const overlayYAML = "backends:\n  cf:\n    allow:\n      - \"@cf/a\"\n"
+	if err := os.WriteFile(overlayPath, []byte(overlayYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/models/allow", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !bytes.Contains(rec.Body.Bytes(), []byte("@cf/a")) {
+		t.Fatalf("expected overlay duplicate in body %s", body)
+	}
+}
+
+func TestAdminAllowOverlayHead(t *testing.T) {
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	reg, err := router.NewRegistry(gatedAdminBackendConfig("http://example.invalid/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRouter{reg: reg}
+	dir := t.TempDir()
+	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
+	req := httptest.NewRequest(http.MethodHead, "/v1/admin/models/allow", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("body len %d", rec.Body.Len())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("content-type %q", ct)
 	}
 }

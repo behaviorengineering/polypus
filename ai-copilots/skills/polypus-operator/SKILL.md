@@ -48,9 +48,10 @@ curl -sS http://127.0.0.1:1320/v1/apis | jq '.apis[] | {id, models, schema}'
 curl -sS http://127.0.0.1:1320/v1/apis/openai/models | jq '.data[].id'
 curl -sS http://127.0.0.1:1320/v1/apis/systemone/models | jq '.data[].id'
 curl -sS 'http://127.0.0.1:1320/v1/apis/openai/models?view=inventory' | jq '.data[].id'
+curl -sS http://127.0.0.1:1320/v1/admin/models/allow | jq .
 ```
 
-Compare to `config.yaml` `backends.*.models.allow`. OpenAI surface = chat/embed/audio/router ids; SystemOne surface = `models.systemone_allow` (default `typesafe/jev`). Inventory view = last call.
+Compare to `config.yaml` `backends.*.models.allow`. OpenAI surface = chat/embed/audio/router ids; SystemOne surface = `models.systemone_allow` (default `typesafe/jev`). Inventory view = last call. `GET /v1/admin/models/allow` is overlay-file contents only (runtime extras), not enabled list and not `?view=inventory`.
 
 ### 3. Smoke all Cloudflare channels
 
