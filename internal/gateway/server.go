@@ -272,8 +272,16 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		batchesHandler{g.shared}.serveBatches(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/batches/"):
 		batchesHandler{g.shared}.serveBatchByID(w, r)
-	case r.URL.Path == "/v1/admin/models/allow" && r.Method == http.MethodPost:
-		adminHandler{g.shared}.serveModelsAllow(w, r)
+	case r.URL.Path == "/v1/admin/models/allow":
+		h := adminHandler{g.shared}
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			h.serveModelsAllowOverlay(w, r)
+		case http.MethodPost:
+			h.serveModelsAllow(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	default:
 		if g.serveUIProxy(w, r) {
 			return

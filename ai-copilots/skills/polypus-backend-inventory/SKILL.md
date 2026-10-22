@@ -76,7 +76,10 @@ Adding `extension: <name>` MUST include:
 
 ```bash
 curl -sS 'http://127.0.0.1:1320/v1/apis/openai/models?view=inventory' | jq '.data[].id'
+curl -sS http://127.0.0.1:1320/v1/admin/models/allow | jq .
 ```
+
+Enabled list = `GET /v1/apis/openai/models` (git YAML plus overlay). Inventory = `?view=inventory`. `GET /v1/admin/models/allow` returns only the overlay file (`object: allow_overlay`), including slugs that duplicate git YAML.
 
 Landing `GET /` form posts `POST /v1/admin/models/allow` with `{"backend":"<id>","model":"<downstream>"}`. Model MUST appear in inventory for that backend.
 
