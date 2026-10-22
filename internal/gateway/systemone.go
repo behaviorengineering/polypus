@@ -7,10 +7,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/maximhq/bifrost/core/schemas"
 )
 
 type systemOneHandler struct{ *shared }
@@ -46,7 +48,7 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 	if publicModel == "" {
 		publicModel = prefixModelID(backendID, downstream)
 	}
-	if !h.ensureModelAllowed(backendID, publicModel) {
+	if !h.ensureSystemOneAllowed(backendID, publicModel, downstream) {
 		writeModelNotAllowed(w, publicModel)
 		return
 	}
@@ -78,11 +80,39 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		if backend.IsCloudflareExtension() {
 			return h.proxyCloudflareSystemOne(w, r, backend, downstream, body, publicModel)
 		}
+		if usesBifrostSystemOne(backend) {
+			return h.proxyBifrostSystemOne(w, r, backendID, downstream, body, publicModel, hop)
+		}
 		return h.proxySystemOnePassthrough(w, r, backend, backendURL, downstream, body)
 	})
 	if err != nil {
 		writeUpstreamDialError(w, err, "", backendID, nil)
 	}
+}
+
+func usesBifrostSystemOne(b config.BackendDef) bool {
+	return b.ID == string(schemas.OpenRouter) && b.HasCapability(config.CapSystemOne)
+}
+
+func (h systemOneHandler) proxyBifrostSystemOne(w http.ResponseWriter, r *http.Request, backendID, downstream string, body []byte, publicModel string, hop time.Duration) error {
+	if h.router == nil {
+		return derrors.New(derrors.CodeNotReady, "gateway.proxyBifrostSystemOne", "router not configured")
+	}
+	raw, err := h.router.SystemOneDecisionRaw(r.Context(), backendID, downstream, body, hop)
+	if err != nil {
+		return err
+	}
+	raw, err = rewriteSystemOneResponseModel(raw, publicModel)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, writeErr := w.Write(raw)
+	if writeErr != nil {
+		return derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.proxyBifrostSystemOne", "write response")
+	}
+	return nil
 }
 
 func (h systemOneHandler) proxyCloudflareSystemOne(w http.ResponseWriter, r *http.Request, backend config.BackendDef, downstream string, body []byte, publicModel string) error {
