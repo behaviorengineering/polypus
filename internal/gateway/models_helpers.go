@@ -36,6 +36,30 @@ func routerCatalogModels(cfg config.RouterConfig) []openaiModel {
 	return out
 }
 
+// keepEnabledCatalogModel reports whether modelID belongs on an enabled (non-inventory) list.
+// OpenAI enablement uses models.allow. SystemOne enablement uses models.systemone_allow
+// (or typesafe/jev when that key is omitted).
+func keepEnabledCatalogModel(b config.BackendDef, modelID string) bool {
+	if b.IsModelAllowed(modelID) {
+		return true
+	}
+	return b.IsSystemOneDownstream(config.NormalizeDownstream(b.ID, modelID))
+}
+
+// mergeEnabledSyntheticMissing appends missing models.allow and models.systemone_allow ids.
+func mergeEnabledSyntheticMissing(b config.BackendDef, live []openaiModel) []openaiModel {
+	if b.Models == nil {
+		return live
+	}
+	if b.Models.HasAllowGate() {
+		live = mergeAllowSyntheticMissing(b.ID, live, b.Models.Allow)
+	}
+	if b.Models.SystemOneAllowConfigured {
+		live = mergeAllowSyntheticMissing(b.ID, live, b.Models.SystemOneAllow)
+	}
+	return live
+}
+
 // mergeBackendInventories dedupes backend inventories into by-id, applying
 // allow-list (when not inventory view) and bare default-backend aliases.
 func mergeBackendInventories(cfg config.RouterConfig, asInventory bool, results []backendInventory) map[string]openaiModel {
@@ -46,7 +70,7 @@ func mergeBackendInventories(cfg config.RouterConfig, asInventory bool, results 
 		}
 		b := cfg.Backends[res.backend]
 		for _, m := range res.models {
-			if !asInventory && !b.IsModelAllowed(m.ID) {
+			if !asInventory && !keepEnabledCatalogModel(b, m.ID) {
 				continue
 			}
 			byID[m.ID] = m
@@ -55,7 +79,7 @@ func mergeBackendInventories(cfg config.RouterConfig, asInventory bool, results 
 			continue
 		}
 		for _, m := range res.models {
-			if !asInventory && !b.IsModelAllowed(m.ID) {
+			if !asInventory && !keepEnabledCatalogModel(b, m.ID) {
 				continue
 			}
 			down := config.NormalizeDownstream(res.backend, m.ID)
