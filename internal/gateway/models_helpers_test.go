@@ -75,6 +75,64 @@ func TestGeminiInventorySyntheticAllow(t *testing.T) {
 	}
 }
 
+func TestMergeBackendInventoriesKeepsSystemOneAllow(t *testing.T) {
+	cfg := config.RouterConfig{
+		Chat:      config.CapabilityBackend{Enabled: true, Default: "openrouter"},
+		SystemOne: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		Backends: map[string]config.BackendDef{
+			"openrouter": {
+				ID:           "openrouter",
+				Capabilities: []config.Capability{config.CapChat, config.CapSystemOne},
+				Models: &config.BackendModels{
+					AllowConfigured:          true,
+					Allow:                    []string{"mistralai/mistral-nemo"},
+					SystemOneAllowConfigured: true,
+					SystemOneAllow:           []string{"perplexity/pplx-decider-v1.2"},
+				},
+			},
+		},
+	}
+	results := []backendInventory{{
+		backend: "openrouter",
+		models: []openaiModel{
+			{ID: "openrouter/mistralai/mistral-nemo", Object: "model"},
+			{ID: "openrouter/perplexity/pplx-decider-v1.2", Object: "model"},
+			{ID: "openrouter/blocked-chat", Object: "model"},
+		},
+	}}
+	got := mergeBackendInventories(cfg, false, results)
+	if _, ok := got["openrouter/mistralai/mistral-nemo"]; !ok {
+		t.Fatal("expected chat allow model")
+	}
+	if _, ok := got["openrouter/perplexity/pplx-decider-v1.2"]; !ok {
+		t.Fatal("expected systemone_allow model on enabled catalog")
+	}
+	if _, ok := got["openrouter/blocked-chat"]; ok {
+		t.Fatal("blocked chat model should be filtered")
+	}
+}
+
+func TestMergeEnabledSyntheticMissingSystemOneAllow(t *testing.T) {
+	b := config.BackendDef{
+		ID: "openrouter",
+		Models: &config.BackendModels{
+			AllowConfigured:          true,
+			Allow:                    []string{"mistralai/mistral-nemo"},
+			SystemOneAllowConfigured: true,
+			SystemOneAllow:           []string{"perplexity/pplx-decider-v1.2", "perplexity/pplx-decider-flash-v1.2"},
+		},
+	}
+	live := []openaiModel{{ID: "openrouter/mistralai/mistral-nemo", Object: "model"}}
+	got := mergeEnabledSyntheticMissing(b, live)
+	seen := map[string]bool{}
+	for _, m := range got {
+		seen[m.ID] = true
+	}
+	if !seen["openrouter/perplexity/pplx-decider-v1.2"] || !seen["openrouter/perplexity/pplx-decider-flash-v1.2"] {
+		t.Fatalf("missing systemone_allow synthetics: %#v", got)
+	}
+}
+
 func TestMergeAllowSyntheticMissing(t *testing.T) {
 	live := []openaiModel{{ID: "cf_local/@cf/a", Object: "model", OwnedBy: "cf_local"}}
 	got := mergeAllowSyntheticMissing("cf_local", live, []string{"@cf/a", "typesafe/jev"})

@@ -297,15 +297,10 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 	modelsCfg := b.Models
 	if b.IsGeminiExtension() {
 		if modelsCfg != nil && !modelsCfg.ShouldSync() {
-			if modelsCfg.HasAllowGate() {
-				return syntheticModels(b.ID, modelsCfg.Allow)
-			}
-			return nil
+			return mergeEnabledSyntheticMissing(b, nil)
 		}
 		if live := h.geminiInventory(r, b); len(live) > 0 {
-			if modelsCfg != nil && modelsCfg.HasAllowGate() {
-				live = mergeAllowSyntheticMissing(b.ID, live, modelsCfg.Allow)
-			}
+			live = mergeEnabledSyntheticMissing(b, live)
 			if h.invCache != nil {
 				h.invCache.put(b.ID, live)
 			}
@@ -316,16 +311,11 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 				return cached
 			}
 		}
-		if modelsCfg != nil && modelsCfg.HasAllowGate() {
-			return syntheticModels(b.ID, modelsCfg.Allow)
-		}
-		return nil
+		return mergeEnabledSyntheticMissing(b, nil)
 	}
 	if b.IsCloudflareExtension() && (modelsCfg == nil || modelsCfg.ShouldSync()) {
 		if live := h.cloudflareInventory(r, b); len(live) > 0 {
-			if modelsCfg != nil && modelsCfg.HasAllowGate() {
-				live = mergeAllowSyntheticMissing(b.ID, live, modelsCfg.Allow)
-			}
+			live = mergeEnabledSyntheticMissing(b, live)
 			if h.invCache != nil {
 				h.invCache.put(b.ID, live)
 			}
@@ -336,22 +326,17 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 				return cached
 			}
 		}
-		if modelsCfg != nil && modelsCfg.HasAllowGate() {
-			return syntheticModels(b.ID, modelsCfg.Allow)
-		}
-		return nil
+		return mergeEnabledSyntheticMissing(b, nil)
 	}
 	if modelsCfg != nil && !modelsCfg.ShouldSync() {
-		return syntheticModels(b.ID, modelsCfg.Allow)
+		return mergeEnabledSyntheticMissing(b, nil)
 	}
 	live := h.fetchBackendModelsProtected(r, b)
 	if isOpenRouterHost(b.BaseURL) {
 		live = mergeOpenRouterDecisionModels(r, b, live)
 	}
 	if len(live) > 0 {
-		if modelsCfg != nil && modelsCfg.HasAllowGate() {
-			live = mergeAllowSyntheticMissing(b.ID, live, modelsCfg.Allow)
-		}
+		live = mergeEnabledSyntheticMissing(b, live)
 		if h.invCache != nil {
 			h.invCache.put(b.ID, live)
 		}
@@ -364,9 +349,7 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 	}
 	// No catalog: seeds + optional synthetic allow when gated.
 	out := seedModelsForBackend(h.router.Registry().Config(), b.ID)
-	if len(out) == 0 && modelsCfg != nil && modelsCfg.HasAllowGate() {
-		return syntheticModels(b.ID, modelsCfg.Allow)
-	}
+	out = mergeEnabledSyntheticMissing(b, out)
 	return out
 }
 

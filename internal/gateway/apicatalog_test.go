@@ -52,6 +52,60 @@ func TestIsSystemOneListedModelRejectsPrefixWithoutAllow(t *testing.T) {
 	}
 }
 
+func TestModelsForSurfaceOpenRouterSystemOneAllow(t *testing.T) {
+	cfg := config.RouterConfig{
+		Chat:      config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		SystemOne: config.CapabilityBackend{Enabled: true, Default: "cf_local"},
+		Backends: map[string]config.BackendDef{
+			"cf_local": {
+				ID:           "cf_local",
+				Capabilities: []config.Capability{config.CapChat, config.CapSystemOne},
+				Models: &config.BackendModels{
+					AllowConfigured: true,
+					Allow:           []string{"@cf/a", "typesafe/jev"},
+				},
+			},
+			"openrouter": {
+				ID:           "openrouter",
+				Capabilities: []config.Capability{config.CapChat, config.CapSystemOne},
+				Models: &config.BackendModels{
+					AllowConfigured:          true,
+					Allow:                    []string{"mistralai/mistral-nemo"},
+					SystemOneAllowConfigured: true,
+					SystemOneAllow:           []string{"perplexity/pplx-decider-v1.2", "inception/mercury-decide"},
+				},
+			},
+		},
+	}
+	merged := mergeBackendInventories(cfg, false, []backendInventory{
+		{backend: "cf_local", models: []openaiModel{
+			{ID: "cf_local/@cf/a", Object: "model"},
+			{ID: "cf_local/typesafe/jev", Object: "model"},
+		}},
+		{backend: "openrouter", models: mergeEnabledSyntheticMissing(cfg.Backends["openrouter"], []openaiModel{
+			{ID: "openrouter/mistralai/mistral-nemo", Object: "model"},
+		})},
+	})
+	all := finalizeModelList(nil, merged)
+	sys := modelsForSurface(cfg, all, surfaceSystemOne)
+	if !containsModelID(sys, "cf_local/typesafe/jev") {
+		t.Fatalf("missing jev: %#v", sys)
+	}
+	if !containsModelID(sys, "openrouter/perplexity/pplx-decider-v1.2") {
+		t.Fatalf("missing pplx-decider: %#v", sys)
+	}
+	if !containsModelID(sys, "openrouter/inception/mercury-decide") {
+		t.Fatalf("missing mercury-decide: %#v", sys)
+	}
+	openai := modelsForSurface(cfg, all, surfaceOpenAI)
+	if containsModelID(openai, "openrouter/perplexity/pplx-decider-v1.2") {
+		t.Fatalf("openai leaked decider: %#v", openai)
+	}
+	if !containsModelID(openai, "openrouter/mistralai/mistral-nemo") {
+		t.Fatalf("openai missing chat: %#v", openai)
+	}
+}
+
 func TestIsSystemOneListedModelExplicitSystemOneAllow(t *testing.T) {
 	cfg := mixedSystemOneRouterConfig()
 	b := cfg.Backends["cf_local"]
