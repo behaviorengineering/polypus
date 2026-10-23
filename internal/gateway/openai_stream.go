@@ -3,6 +3,7 @@ package gateway
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"strings"
@@ -26,6 +27,18 @@ func newOpenAIStreamSanitizer() *openAIStreamSanitizer {
 	return &openAIStreamSanitizer{finished: make(map[int]bool)}
 }
 
+func (st *openAIStreamSanitizer) hasAnyFinished() bool {
+	if st == nil {
+		return false
+	}
+	for _, done := range st.finished {
+		if done {
+			return true
+		}
+	}
+	return false
+}
+
 // sanitizeOpenAIStreamChunk enforces the public OpenAI stream contract on one JSON chunk.
 // stripExtraFields removes Bifrost-only extra_fields before emitting to clients.
 // On malformed JSON, fail open: emit the original bytes unchanged.
@@ -39,6 +52,9 @@ func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtr
 
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(body, &root); err != nil {
+		if st.hasAnyFinished() {
+			return nil, StreamSSEDrop, false
+		}
 		return body, action, true
 	}
 	if stripExtraFields {
@@ -61,6 +77,9 @@ func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtr
 	}
 	var choices []map[string]json.RawMessage
 	if err := json.Unmarshal(rawChoices, &choices); err != nil {
+		if st.hasAnyFinished() {
+			return nil, StreamSSEDrop, false
+		}
 		return body, action, true
 	}
 
@@ -175,12 +194,21 @@ func ensureStreamChoiceFinishReasonFromRoot(root map[string]json.RawMessage) (ma
 	return root, true
 }
 
+func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action StreamSSEAction) {
+	if action != StreamSSEDrop {
+		return
+	}
+	idx := nextStreamChunkIndex(ctx)
+	dumpIllegalStreamChunk(ctx, idx, openaiJSON, nil)
+}
+
 // copyOpenAIChatStream applies sanitizeOpenAIStreamChunk to each SSE data frame from src.
-func copyOpenAIChatStream(dst io.Writer, src io.Reader, stripExtraFields bool) (int64, error) {
+func copyOpenAIChatStream(ctx context.Context, dst io.Writer, src io.Reader, stripExtraFields bool) (int64, error) {
 	br := bufio.NewReader(src)
 	san := newOpenAIStreamSanitizer()
 	var written int64
 	var eventBuf bytes.Buffer
+	var seenDone bool
 
 	flushEvent := func() error {
 		if eventBuf.Len() == 0 {
@@ -202,12 +230,14 @@ func copyOpenAIChatStream(dst io.Writer, src io.Reader, stripExtraFields bool) (
 			}
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
+				seenDone = true
 				outEvent.WriteString("data: [DONE]\n")
 				continue
 			}
 			original := []byte(data)
 			out, action, emit := sanitizeOpenAIStreamChunk(original, san, stripExtraFields)
 			if !emit || action == StreamSSEDrop {
+				recordProxyStreamChunk(ctx, original, action)
 				continue
 			}
 			if !stripExtraFields && action == StreamSSEForward && openAIStreamJSONEqual(original, out) {
@@ -227,6 +257,11 @@ func copyOpenAIChatStream(dst io.Writer, src io.Reader, stripExtraFields bool) (
 	}
 
 	for {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return written, err
+			}
+		}
 		line, err := br.ReadString('\n')
 		if len(line) > 0 {
 			if line == "\n" || line == "\r\n" {
@@ -242,6 +277,14 @@ func copyOpenAIChatStream(dst io.Writer, src io.Reader, stripExtraFields bool) (
 				if eventBuf.Len() > 0 {
 					if flushErr := flushEvent(); flushErr != nil {
 						return written, flushErr
+					}
+					return written, nil
+				}
+				if !seenDone && san.hasAnyFinished() {
+					n, werr := io.WriteString(dst, "data: [DONE]\n\n")
+					written += int64(n)
+					if werr != nil {
+						return written, werr
 					}
 				}
 				return written, nil

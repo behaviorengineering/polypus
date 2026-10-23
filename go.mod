@@ -3,6 +3,7 @@ module github.com/behaviorengineering/polypus
 go 1.27.3
 
 require (
+	github.com/XiaoConstantine/llm-go v0.3.5
 	github.com/behaviorengineering/olly v0.2.0
 	github.com/behaviorengineering/operatorconfig v0.1.1
 	github.com/failsafe-go/failsafe-go v0.9.7
@@ -278,6 +279,7 @@ require (
 	github.com/nishanths/exhaustive v0.13.0 // indirect
 	github.com/nishanths/predeclared v0.2.2 // indirect
 	github.com/nunnatsa/ginkgolinter v0.24.0 // indirect
+	github.com/openai/openai-go/v3 v3.52.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
