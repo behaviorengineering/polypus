@@ -85,7 +85,7 @@ func TestProxyChatStreamSanitizerDropsIllegalChunk(t *testing.T) {
 		"\n",
 	}, "")
 	var buf bytes.Buffer
-	n, err := copyOpenAIChatStream(&buf, strings.NewReader(upstream), false)
+	n, err := copyOpenAIChatStream(context.Background(), &buf, strings.NewReader(upstream), false)
 	if err != nil {
 		t.Fatalf("copy: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestProxyChatStreamSanitizerDropsIllegalChunk(t *testing.T) {
 func TestProxyChatStreamLegalPassthrough(t *testing.T) {
 	legal := "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n"
 	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(&buf, strings.NewReader(legal), false)
+	_, err := copyOpenAIChatStream(context.Background(), &buf, strings.NewReader(legal), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestProxyChatStreamLegalPassthrough(t *testing.T) {
 func TestCopyOpenAIChatStreamPreservesDone(t *testing.T) {
 	src := "data: [DONE]\n\n"
 	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(&buf, strings.NewReader(src), false)
+	_, err := copyOpenAIChatStream(context.Background(), &buf, strings.NewReader(src), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestSanitizePerIndexFinish(t *testing.T) {
 func TestCopyOpenAIChatStreamEOF(t *testing.T) {
 	src := "data: {\"choices\":[{\"index\":0,\"delta\":{}}]}\n"
 	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(&buf, io.MultiReader(strings.NewReader(src)), false)
+	_, err := copyOpenAIChatStream(context.Background(), &buf, io.MultiReader(strings.NewReader(src)), false)
 	if err != nil {
 		t.Fatal(err)
 	}
