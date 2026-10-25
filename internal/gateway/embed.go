@@ -99,7 +99,7 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 
 func embeddingsURL(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if strings.HasSuffix(base, "/v1") {
+	if isOpenAICompatAPIRoot(base) {
 		return base + "/embeddings"
 	}
 	return base + "/v1/embeddings"
