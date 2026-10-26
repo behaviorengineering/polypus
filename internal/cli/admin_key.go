@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/admin/keys"
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/spf13/cobra"
 )
 
 // adminKeyNow stamps key metadata; tests may replace.
@@ -24,42 +24,74 @@ func openAdminKeyStore() (*keys.Store, error) {
 	return keys.Config{Path: path, Clock: adminKeyNow}.CreateStore()
 }
 
-func runAdminKeyGenerate(args []string) int {
-	return runAdminKeyMutate("generate", args, func(s *keys.Store, name string, dry bool) (keys.GenerateResult, error) {
-		if dry {
-			return keys.GenerateResult{}, nil
-		}
+type adminKeyOpts struct {
+	name    string
+	yes     bool
+	dryRun  bool
+	jsonOut bool
+}
+
+func newAdminKeyCmd() *cobra.Command {
+	adminKey := &cobra.Command{
+		Use:   "admin-key",
+		Short: "Gateway access keys (optional lock)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_ = cmd.Help()
+			return exitStatus(2)
+		},
+	}
+	addCLIGroups(adminKey)
+	adminKey.AddCommand(newAdminKeySubcommand("list", "List gateway access key metadata (no secrets)", groupInspect, false, runAdminKeyList))
+	adminKey.AddCommand(newAdminKeySubcommand("generate", "Create gateway access key (plaintext once)", groupMutate, true, runAdminKeyGenerate))
+	adminKey.AddCommand(newAdminKeySubcommand("rotate", "Rotate gateway access key secret", groupMutate, true, runAdminKeyRotate))
+	adminKey.AddCommand(newAdminKeySubcommand("delete", "Remove gateway access key", groupMutate, true, runAdminKeyDelete))
+	return adminKey
+}
+
+// newAdminKeySubcommand binds the shared flags; mutating verbs also get --name,
+// --yes and --dry-run.
+func newAdminKeySubcommand(use, short, group string, mutates bool, run func(adminKeyOpts) int) *cobra.Command {
+	var o adminKeyOpts
+	c := &cobra.Command{
+		Use:     use,
+		Short:   short,
+		GroupID: group,
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return exitStatus(run(o))
+		},
+	}
+	c.Flags().BoolVar(&o.jsonOut, "json", false, "json output")
+	if mutates {
+		c.Flags().StringVar(&o.name, "name", "", "key name")
+		c.Flags().BoolVar(&o.yes, "yes", false, "skip confirmation")
+		c.Flags().BoolVar(&o.dryRun, "dry-run", false, "validate without writing")
+	}
+	return c
+}
+
+func runAdminKeyGenerate(o adminKeyOpts) int {
+	return runAdminKeyMutate("generate", o, func(s *keys.Store, name string) (keys.GenerateResult, error) {
 		return s.Generate(name)
 	})
 }
 
-func runAdminKeyRotate(args []string) int {
-	return runAdminKeyMutate("rotate", args, func(s *keys.Store, name string, dry bool) (keys.GenerateResult, error) {
-		if dry {
-			return keys.GenerateResult{}, nil
-		}
+func runAdminKeyRotate(o adminKeyOpts) int {
+	return runAdminKeyMutate("rotate", o, func(s *keys.Store, name string) (keys.GenerateResult, error) {
 		return s.Rotate(name)
 	})
 }
 
-func runAdminKeyDelete(args []string) int {
-	fs := flag.NewFlagSet("admin-key delete", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	name := fs.String("name", "", "key name")
-	yes := fs.Bool("yes", false, "skip confirmation")
-	dry := fs.Bool("dry-run", false, "validate without writing")
-	jsonOut := fs.Bool("json", false, "json output")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	if err := requireAdminKeyName(*name, *yes); err != nil {
+func runAdminKeyDelete(o adminKeyOpts) int {
+	if err := requireAdminKeyName(o.name, o.yes); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 2
 	}
-	if !*yes && !confirmTTY("delete admin API key", *name) {
+	if !o.yes && !confirmTTY("delete admin API key", o.name) {
 		return 1
 	}
-	if *dry {
+	if o.dryRun {
 		return 0
 	}
 	s, err := openAdminKeyStore()
@@ -67,25 +99,18 @@ func runAdminKeyDelete(args []string) int {
 		fmt.Fprintf(os.Stderr, "polypus admin-key delete: %v\n", err)
 		return 1
 	}
-	if err := s.Delete(*name); err != nil {
+	if err := s.Delete(o.name); err != nil {
 		fmt.Fprintf(os.Stderr, "polypus admin-key delete: %v\n", err)
 		return 1
 	}
-	if *jsonOut {
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"name": *name, "deleted": "true"})
-	} else {
-		fmt.Fprintf(os.Stderr, "polypus admin-key delete: removed %s\n", *name)
+	if o.jsonOut {
+		return writeJSONResult("delete", map[string]string{"name": o.name, "deleted": "true"})
 	}
+	fmt.Fprintf(os.Stderr, "polypus admin-key delete: removed %s\n", o.name)
 	return 0
 }
 
-func runAdminKeyList(args []string) int {
-	fs := flag.NewFlagSet("admin-key list", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	jsonOut := fs.Bool("json", false, "json output")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
+func runAdminKeyList(o adminKeyOpts) int {
 	s, err := openAdminKeyStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus admin-key list: %v\n", err)
@@ -96,9 +121,8 @@ func runAdminKeyList(args []string) int {
 		fmt.Fprintf(os.Stderr, "polypus admin-key list: %v\n", err)
 		return 1
 	}
-	if *jsonOut {
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"keys": recs})
-		return 0
+	if o.jsonOut {
+		return writeJSONResult("list", map[string]any{"keys": recs})
 	}
 	for _, r := range recs {
 		fmt.Printf("Name: %s\n", r.Name)
@@ -110,19 +134,20 @@ func runAdminKeyList(args []string) int {
 	return 0
 }
 
-type adminKeyMutateFn func(*keys.Store, string, bool) (keys.GenerateResult, error)
-
-func runAdminKeyMutate(verb string, args []string, fn adminKeyMutateFn) int {
-	fs := flag.NewFlagSet("admin-key "+verb, flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	name := fs.String("name", "", "key name")
-	yes := fs.Bool("yes", false, "skip confirmation")
-	dry := fs.Bool("dry-run", false, "validate without writing")
-	jsonOut := fs.Bool("json", false, "json output")
-	if err := fs.Parse(args); err != nil {
-		return 2
+// writeJSONResult prints v to stdout; a failed write is reported and exits 1.
+func writeJSONResult(verb string, v any) int {
+	if err := json.NewEncoder(os.Stdout).Encode(v); err != nil {
+		fmt.Fprintf(os.Stderr, "polypus admin-key %s: write json: %v\n", verb, err)
+		return 1
 	}
-	if strings.TrimSpace(*name) == "" {
+	return 0
+}
+
+type adminKeyMutateFn func(*keys.Store, string) (keys.GenerateResult, error)
+
+func runAdminKeyMutate(verb string, o adminKeyOpts, fn adminKeyMutateFn) int {
+	name := o.name
+	if strings.TrimSpace(name) == "" {
 		if !stdinTTY() {
 			fmt.Fprintln(os.Stderr, "polypus admin-key "+verb+": cannot prompt when stdin is not a TTY; use --name and --yes")
 			return 2
@@ -132,17 +157,17 @@ func runAdminKeyMutate(verb string, args []string, fn adminKeyMutateFn) int {
 			fmt.Fprintf(os.Stderr, "polypus admin-key %s: %v\n", verb, err)
 			return 2
 		}
-		*name = prompted
+		name = prompted
 	}
-	if err := requireAdminKeyName(*name, *yes); err != nil {
+	if err := requireAdminKeyName(name, o.yes); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 2
 	}
-	if !*yes && !confirmTTY(verb+" admin API key", *name) {
+	if !o.yes && !confirmTTY(verb+" admin API key", name) {
 		return 1
 	}
-	if *dry {
-		fmt.Fprintf(os.Stderr, "polypus admin-key %s: dry-run ok for %q\n", verb, *name)
+	if o.dryRun {
+		fmt.Fprintf(os.Stderr, "polypus admin-key %s: dry-run ok for %q\n", verb, name)
 		return 0
 	}
 	s, err := openAdminKeyStore()
@@ -150,21 +175,24 @@ func runAdminKeyMutate(verb string, args []string, fn adminKeyMutateFn) int {
 		fmt.Fprintf(os.Stderr, "polypus admin-key %s: %v\n", verb, err)
 		return 1
 	}
-	res, err := fn(s, *name, *dry)
+	res, err := fn(s, name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus admin-key %s: %v\n", verb, err)
 		return 1
 	}
-	if *jsonOut {
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"name": res.Record.Name,
-			"id":   res.Record.ID,
-			"key":  res.Key,
-		})
-	} else {
-		fmt.Println(res.Key)
-		fmt.Fprintf(os.Stderr, "polypus admin-key %s: stored %s (id=%s); save the key above (shown once)\n", verb, res.Record.Name, res.Record.ID)
+	if o.jsonOut {
+		if code := writeJSONResult(verb, map[string]any{"name": res.Record.Name, "id": res.Record.ID, "key": res.Key}); code != 0 {
+			// The key is stored but its only copy was lost: say so, so it can be rotated.
+			fmt.Fprintf(os.Stderr, "polypus admin-key %s: %s is stored but its key was not shown; run admin-key rotate --name %s\n", verb, res.Record.Name, res.Record.Name)
+			return code
+		}
+		return 0
 	}
+	if _, err := fmt.Println(res.Key); err != nil {
+		fmt.Fprintf(os.Stderr, "polypus admin-key %s: %s is stored but its key was not shown (%v); run admin-key rotate --name %s\n", verb, res.Record.Name, err, res.Record.Name)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "polypus admin-key %s: stored %s (id=%s); save the key above (shown once)\n", verb, res.Record.Name, res.Record.ID)
 	return 0
 }
 

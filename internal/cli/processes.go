@@ -1,24 +1,38 @@
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/spf13/cobra"
 )
 
-func runProcesses(args []string) int {
-	fs := flag.NewFlagSet("processes", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", "", "router config path (default POLYPUS_CONFIG resolution)")
-	printKey := fs.String("print", "", "print one key as 0/1 for scripts (mlx); unset key prints nothing and exits 3")
-	if err := fs.Parse(args); err != nil {
-		return 2
+type processesOpts struct {
+	configPath string
+	printKey   string
+}
+
+func newProcessesCmd() *cobra.Command {
+	var o processesOpts
+	cmd := &cobra.Command{
+		Use:     "processes",
+		Short:   "Print process-compose toggles from config",
+		GroupID: groupInspect,
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return exitStatus(runProcesses(o))
+		},
 	}
-	if *configPath != "" {
-		if err := os.Setenv("POLYPUS_CONFIG", *configPath); err != nil {
+	cmd.Flags().StringVar(&o.configPath, "config", "", "router config path (default POLYPUS_CONFIG resolution)")
+	cmd.Flags().StringVar(&o.printKey, "print", "", "print one key as 0/1 for scripts (mlx); an unset key prints nothing and exits 3")
+	return cmd
+}
+
+func runProcesses(o processesOpts) int {
+	if o.configPath != "" {
+		if err := os.Setenv("POLYPUS_CONFIG", o.configPath); err != nil {
 			fmt.Fprintf(os.Stderr, "polypus processes: set POLYPUS_CONFIG: %v\n", err)
 			return 1
 		}
@@ -30,7 +44,7 @@ func runProcesses(args []string) int {
 		return 1
 	}
 
-	key := strings.TrimSpace(strings.ToLower(*printKey))
+	key := strings.TrimSpace(strings.ToLower(o.printKey))
 	if key != "" {
 		return printProcessKey(key, flags)
 	}

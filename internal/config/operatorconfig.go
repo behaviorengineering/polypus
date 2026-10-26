@@ -109,3 +109,9 @@ func declaredSecretEnvs() ([]string, error) {
 	}
 	return out, nil
 }
+
+// UserConfigFilePath is where polypus init writes the user config
+// (~/.config/polypus/config.yaml, or under $XDG_CONFIG_HOME).
+func UserConfigFilePath() (string, error) {
+	return operatorconfig.UserConfigPath("polypus", "config.yaml")
+}

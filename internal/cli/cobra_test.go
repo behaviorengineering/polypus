@@ -179,3 +179,42 @@ func sameSet(a, b []string) bool {
 	}
 	return true
 }
+
+func TestSubcommandHelpShowsRealFlags(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"init", "--help"}, []string{"--force", "--dry-run"}},
+		{[]string{"switchyard-render", "--help"}, []string{"--out", "--dry-run"}},
+		{[]string{"secret", "set", "--help"}, []string{"--stdin", "--dry-run"}},
+		{[]string{"admin-key", "generate", "--help"}, []string{"--name", "--yes", "--dry-run", "--json"}},
+	} {
+		code, out, errOut := captureRun(tc.args)
+		for _, w := range tc.want {
+			if code != 0 || !strings.Contains(out+errOut, w) {
+				t.Errorf("polypus %v: exit %d, missing %s in %q", tc.args, code, w, out+errOut)
+			}
+		}
+	}
+}
+
+func TestUnknownCommandSaysSo(t *testing.T) {
+	code, _, errOut := captureRun([]string{"bogus"})
+	if code != 2 || !strings.Contains(errOut, `unknown command "bogus"`) || !strings.Contains(errOut, "polypus help") {
+		t.Fatalf("exit %d stderr %q", code, errOut)
+	}
+}
+
+func TestInitDryRunWritesNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home+"/config")
+	code, _, errOut := captureRun([]string{"init", "--dry-run"})
+	if code != 0 || !strings.Contains(errOut, "dry-run: would write") {
+		t.Fatalf("exit %d stderr %q", code, errOut)
+	}
+	if entries, _ := os.ReadDir(home + "/config"); len(entries) != 0 {
+		t.Fatalf("dry-run wrote files: %v", entries)
+	}
+}

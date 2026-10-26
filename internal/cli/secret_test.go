@@ -8,22 +8,6 @@ import (
 	"testing"
 )
 
-func TestNormalizeSecretSetArgs_trailingStdin(t *testing.T) {
-	got := normalizeSecretSetArgs([]string{"CF_ACCOUNT_ID", "--stdin"})
-	want := []string{"--stdin", "CF_ACCOUNT_ID"}
-	if strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Fatalf("got %v want %v", got, want)
-	}
-}
-
-func TestNormalizeSecretSetArgs_trailingPassword(t *testing.T) {
-	got := normalizeSecretSetArgs([]string{"CF_ACCOUNT_ID", "--password", "secret"})
-	want := []string{"--password", "secret", "CF_ACCOUNT_ID"}
-	if strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Fatalf("got %v want %v", got, want)
-	}
-}
-
 func TestLooksLikeCLIFlag(t *testing.T) {
 	if !looksLikeCLIFlag("--stdin") {
 		t.Fatal("expected --stdin to look like a flag")
@@ -58,7 +42,7 @@ func TestRunSecretSet_trailingStdinReadsPipe(t *testing.T) {
 		_ = f.Close()
 	}()
 
-	code := runSecretSet([]string{"NOT_DECLARED", "--stdin"})
+	code := Run([]string{"secret", "set", "NOT_DECLARED", "--stdin"})
 	_ = f.Close()
 	if code == 0 {
 		t.Fatal("expected failure for undeclared secret")
@@ -92,14 +76,14 @@ func TestRunSecretSet_rejectsFlagShapedPositional(t *testing.T) {
 		_ = f.Close()
 	}()
 
-	code := runSecretSet([]string{"NOT_DECLARED", "--oops"})
+	code := Run([]string{"secret", "set", "NOT_DECLARED", "--oops"})
 	_ = f.Close()
 	if code != 2 {
 		t.Fatalf("code %d", code)
 	}
 	out, _ := os.ReadFile(stderrPath)
-	if !strings.Contains(string(out), "looks like a flag") {
-		t.Fatalf("stderr: %q", out)
+	if !strings.Contains(string(out), "unknown flag: --oops") {
+		t.Fatalf("a flag-shaped value must be refused as an unknown flag, not stored: %q", out)
 	}
 }
 
@@ -136,7 +120,7 @@ func TestRunSecretSet_argvWarns(t *testing.T) {
 		_ = f.Close()
 	}()
 
-	code := runSecretSet([]string{"NOT_DECLARED", "visible"})
+	code := Run([]string{"secret", "set", "NOT_DECLARED", "visible"})
 	_ = f.Close()
 	if code == 0 {
 		t.Fatal("expected failure for undeclared secret")
@@ -164,7 +148,7 @@ func TestRunSecretSet_passwordFlagWarns(t *testing.T) {
 		_ = f.Close()
 	}()
 
-	code := runSecretSet([]string{"NOT_DECLARED", "--password", "visible"})
+	code := Run([]string{"secret", "set", "NOT_DECLARED", "--password", "visible"})
 	_ = f.Close()
 	if code == 0 {
 		t.Fatal("expected failure for undeclared secret")
@@ -184,7 +168,7 @@ func TestRunSecretSet_helpNoWarn(t *testing.T) {
 	os.Stderr = w
 	defer func() { os.Stderr = old }()
 
-	code := runSecretSet([]string{})
+	code := Run([]string{"secret", "set"})
 	_ = w.Close()
 	if code != 2 {
 		t.Fatalf("code %d", code)

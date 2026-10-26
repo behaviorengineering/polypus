@@ -31,11 +31,21 @@ func execute(root *cobra.Command, args []string) int {
 		}
 		return ex.code
 	}
-	if isUnknownCommand(err) {
+	if isUnknownCommand(err) || isUsageError(err) {
+		fmt.Fprintf(os.Stderr, "%s: %v\nRun '%s help' for the command list.\n", root.Name(), err, root.Name())
 		return 2
 	}
 	fmt.Fprintln(os.Stderr, err)
 	return 1
+}
+
+// isUsageError reports Cobra's argument and flag errors (unknown flag, wrong
+// number of arguments), which exit 2 like an unknown command.
+func isUsageError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "unknown flag") || strings.Contains(msg, "unknown shorthand flag") ||
+		strings.Contains(msg, "accepts ") || strings.Contains(msg, "requires at least") ||
+		strings.Contains(msg, "flag needs an argument") || strings.Contains(msg, "invalid argument")
 }
 
 func isUnknownCommand(err error) bool {
