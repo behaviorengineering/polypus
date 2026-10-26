@@ -16,7 +16,7 @@ type accessProtector struct {
 
 func wrapGatewayAccess(store *keys.Store, gw *Gateway) http.Handler {
 	if gw == nil {
-		return nil
+		panic("gateway: wrapGatewayAccess(nil gateway)")
 	}
 	return &accessProtector{keys: store, gw: gw}
 }

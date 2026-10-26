@@ -29,19 +29,19 @@ query PhoenixTraceSpans($traceId: ID!) {
   }
 }`
 
+// gqlRequest is a GraphQL request body.
+type gqlRequest struct {
+	Query     string            `json:"query"`
+	Variables map[string]string `json:"variables"`
+}
+
 func phoenixSpanCountGraphQL(ctx context.Context, opts CollectorOptions, traceID string) (int, error) {
 	traceID, err := normalizeTraceIDHex(traceID)
 	if err != nil {
 		return 0, err
 	}
 	base := strings.TrimRight(opts.PhoenixBaseURL, "/")
-	payload := map[string]interface{}{
-		"query": phoenixTraceSpansQuery,
-		"variables": map[string]string{
-			"traceId": traceID,
-		},
-	}
-	buf, err := json.Marshal(payload)
+	buf, err := json.Marshal(gqlRequest{Query: phoenixTraceSpansQuery, Variables: map[string]string{"traceId": traceID}})
 	if err != nil {
 		return 0, fmt.Errorf("collector smoke: phoenix graphql payload: %w", err)
 	}

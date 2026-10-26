@@ -414,6 +414,9 @@ type TranscriptionRequest struct {
 
 // Synthesize runs TTS via the resolved backend.
 func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, error) {
+	if c == nil || c.bf == nil || c.reg == nil {
+		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.Synthesize", "bifrost not configured")
+	}
 	if strings.TrimSpace(req.Input) == "" {
 		return nil, derrors.New(derrors.CodeInvalid, "router.Synthesize", "input required")
 	}
@@ -465,6 +468,9 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 
 // Transcribe runs STT via the resolved backend.
 func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]byte, string, error) {
+	if c == nil || c.bf == nil || c.reg == nil {
+		return nil, "", derrors.New(derrors.CodeFailedPrecondition, "router.Transcribe", "bifrost not configured")
+	}
 	if len(req.Audio) == 0 {
 		return nil, "", derrors.New(derrors.CodeInvalid, "router.Transcribe", "audio file required")
 	}

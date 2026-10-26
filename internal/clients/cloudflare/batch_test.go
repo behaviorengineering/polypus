@@ -128,3 +128,22 @@ func TestUnwrapThenParseEmptyResultIsQueued(t *testing.T) {
 		t.Fatalf("state=%v want queued", poll.State)
 	}
 }
+
+func TestBatchLinesKeepLargeIntegersExact(t *testing.T) {
+	items, err := translateBatchRequests(batch.EndpointChatCompletions, []batch.InputLine{{
+		CustomID: "a",
+		Body:     json.RawMessage(`{"model":"m","stream":true,"seed":9007199254740993,"messages":[]}`),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(items[0]["seed"]); got != "9007199254740993" {
+		t.Fatalf("seed = %s, want it byte for byte", got)
+	}
+	if _, has := items[0]["model"]; has {
+		t.Fatal("model is dropped")
+	}
+	if got := string(items[0]["external_reference"]); got != `"a"` {
+		t.Fatalf("external_reference = %s", got)
+	}
+}

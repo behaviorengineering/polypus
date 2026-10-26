@@ -111,10 +111,11 @@ func (p *runSpeechPlugin) shortCircuitSpeech(
 	b config.BackendDef,
 	sr *schemas.BifrostSpeechRequest,
 ) *schemas.LLMPluginShortCircuit {
-	model := ""
-	if sr != nil {
-		model = sr.Model
+	if sr == nil {
+		err := derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "speech request required").With("backend", b.ID)
+		return shortCircuitFail(ctx, b, "", "speech", err, true)
 	}
+	model := sr.Model
 	if _, ok := ctx.Deadline(); !ok {
 		err := derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
 			With("backend", b.ID).
@@ -176,10 +177,11 @@ func (p *runSpeechPlugin) shortCircuitTranscription(
 	b config.BackendDef,
 	tr *schemas.BifrostTranscriptionRequest,
 ) *schemas.LLMPluginShortCircuit {
-	model := ""
-	if tr != nil {
-		model = tr.Model
+	if tr == nil {
+		err := derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "transcription request required").With("backend", b.ID)
+		return shortCircuitFail(ctx, b, "", "transcription", err, true)
 	}
+	model := tr.Model
 	if _, ok := ctx.Deadline(); !ok {
 		err := derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
 			With("backend", b.ID).

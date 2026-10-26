@@ -180,7 +180,7 @@ const (
 	dispatchSwitchyard
 )
 
-func classifyNamedRouterRoute(routeType string) namedRouterDispatch {
+func classifyNamedRouterRoute(routeType config.RouteType) namedRouterDispatch {
 	switch routeType {
 	case config.RoutePassthrough:
 		return dispatchPassthrough

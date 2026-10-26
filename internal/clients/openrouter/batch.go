@@ -28,21 +28,24 @@ const (
 	completionWindow = "24h"
 )
 
+// BatchStatus is a batch's state as OpenRouter reports it.
+type BatchStatus string
+
 // Batch status values OpenRouter reports.
 const (
-	StatusValidating = "validating"
-	StatusInProgress = "in_progress"
-	StatusFinalizing = "finalizing"
-	StatusCompleted  = "completed"
-	StatusFailed     = "failed"
-	StatusExpired    = "expired"
-	StatusCancelled  = "cancelled"
+	StatusValidating BatchStatus = "validating"
+	StatusInProgress BatchStatus = "in_progress"
+	StatusFinalizing BatchStatus = "finalizing"
+	StatusCompleted  BatchStatus = "completed"
+	StatusFailed     BatchStatus = "failed"
+	StatusExpired    BatchStatus = "expired"
+	StatusCancelled  BatchStatus = "cancelled"
 )
 
 // Batch is the OpenRouter batch object. Results are inline once the batch completes.
 type Batch struct {
 	ID            string        `json:"id"`
-	Status        string        `json:"status"`
+	Status        BatchStatus   `json:"status"`
 	RequestCounts RequestCounts `json:"request_counts"`
 	Results       []BatchResult `json:"results"`
 	Error         *BatchError   `json:"error"`

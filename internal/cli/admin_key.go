@@ -124,7 +124,7 @@ func runAdminKeyList(o adminKeyOpts) int {
 		return 1
 	}
 	if o.jsonOut {
-		return writeJSONResult("list", map[string]any{"keys": recs})
+		return writeJSONResult("list", adminKeyListJSON{Keys: recs})
 	}
 	for _, r := range recs {
 		fmt.Printf("Name: %s\n", r.Name)
@@ -137,6 +137,18 @@ func runAdminKeyList(o adminKeyOpts) int {
 }
 
 // writeJSONResult prints v to stdout; a failed write is reported and exits 1.
+// adminKeyListJSON is `admin-key list --json`.
+type adminKeyListJSON struct {
+	Keys []keys.Record `json:"keys"`
+}
+
+// adminKeyJSON is `admin-key generate|rotate --json`: the key is shown once.
+type adminKeyJSON struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+	Key  string `json:"key"`
+}
+
 func writeJSONResult(verb string, v any) int {
 	if err := json.NewEncoder(os.Stdout).Encode(v); err != nil {
 		fmt.Fprintf(os.Stderr, "polypus admin-key %s: write json: %v\n", verb, err)
@@ -183,7 +195,7 @@ func runAdminKeyMutate(verb string, o adminKeyOpts, fn adminKeyMutateFn) int {
 		return 1
 	}
 	if o.jsonOut {
-		if code := writeJSONResult(verb, map[string]any{"name": res.Record.Name, "id": res.Record.ID, "key": res.Key}); code != 0 {
+		if code := writeJSONResult(verb, adminKeyJSON{Name: res.Record.Name, ID: res.Record.ID, Key: res.Key}); code != 0 {
 			// The key is stored but its only copy was lost: say so, so it can be rotated.
 			fmt.Fprintf(os.Stderr, "polypus admin-key %s: %s is stored but its key was not shown; run admin-key rotate --name %s\n", verb, res.Record.Name, res.Record.Name)
 			return code

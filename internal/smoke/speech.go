@@ -66,13 +66,12 @@ func runSTT(ctx context.Context, opts Options) ([]Result, error) {
 }
 
 func synthesize(ctx context.Context, opts Options) ([]byte, error) {
-	payload := map[string]any{
-		"model":           opts.TTSModel,
-		"input":           opts.TTSText,
-		"voice":           opts.TTSVoice,
-		"response_format": "mp3",
-	}
-	raw, err := json.Marshal(payload)
+	raw, err := json.Marshal(struct {
+		Model          string `json:"model"`
+		Input          string `json:"input"`
+		Voice          string `json:"voice"`
+		ResponseFormat string `json:"response_format"`
+	}{opts.TTSModel, opts.TTSText, opts.TTSVoice, "mp3"})
 	if err != nil {
 		return nil, err
 	}

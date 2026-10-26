@@ -94,11 +94,10 @@ func render(cfg config.RouterConfig, polypusBaseURL string) ([]byte, error) {
 		file.LLMClients[fallbackClient] = llmClient{Format: formatOpenAIChat, BaseURL: polypusBaseURL, MaxRetries: &noRetries}
 	}
 	for name, router := range cfg.Routers {
-		if !router.IsComposed() {
-			continue
-		}
 		var err error
 		switch router.Route.Type {
+		case config.RoutePassthrough:
+			// Polypus serves passthrough routers itself; Switchyard never sees them.
 		case config.RouteStageRouter:
 			addStageRouter(&file, name, router)
 		case config.RouteLLMClassifier:
@@ -154,7 +153,7 @@ func addStageRouter(file *routesFile, name string, router config.NamedRouter) {
 		Type:                string(config.RouteStageRouter),
 		CapableTarget:       capable,
 		EfficientTarget:     efficient,
-		Picker:              router.Route.Picker,
+		Picker:              string(router.Route.Picker),
 		ConfidenceThreshold: &threshold,
 		RecentTurnWindow:    router.Route.RecentTurnWindow,
 	}
@@ -185,7 +184,7 @@ func addLLMClassifier(file *routesFile, name string, router config.NamedRouter) 
 		MessageHashFallback: r.MessageHashFallback,
 		RecentTurnWindow:    r.RecentTurnWindow,
 		MaxOutputTokens:     r.MaxOutputTokens,
-		Policy:              &routePolicy{Type: r.PolicyType, Selector: r.PolicySelector},
+		Policy:              &routePolicy{Type: string(r.PolicyType), Selector: r.PolicySelector},
 	}
 	return nil
 }

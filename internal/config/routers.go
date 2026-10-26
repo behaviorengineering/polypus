@@ -10,17 +10,40 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// RouterIDPrefix starts every public router model id.
+const RouterIDPrefix = "router/"
+
+// RouteType is how a named router picks its leaf.
+type RouteType string
+
+// Route types.
 const (
-	RouterIDPrefix       = "router/"
-	RoutePassthrough     = "passthrough"
-	RouteStageRouter     = "stage_router"
-	RouteLLMClassifier   = "llm_classifier"
-	RouteFallback        = "fallback"
-	PickerEfficientFirst = "efficient_first"
-	PickerCapableFirst   = "capable_first"
-	ClassifierModeCustom = "custom"
-	PolicyTargetSelector = "target_selector"
+	RoutePassthrough   RouteType = "passthrough"
+	RouteStageRouter   RouteType = "stage_router"
+	RouteLLMClassifier RouteType = "llm_classifier"
+	RouteFallback      RouteType = "fallback"
 )
+
+// Picker is the order a stage_router tries its leaves in.
+type Picker string
+
+// Stage router pickers.
+const (
+	PickerEfficientFirst Picker = "efficient_first"
+	PickerCapableFirst   Picker = "capable_first"
+)
+
+// ClassifierMode is how an llm_classifier route is configured.
+type ClassifierMode string
+
+// ClassifierModeCustom is the one supported llm_classifier mode.
+const ClassifierModeCustom ClassifierMode = "custom"
+
+// PolicyType is how an llm_classifier reads the judge's decision.
+type PolicyType string
+
+// PolicyTargetSelector reads the chosen target from a JSON pointer.
+const PolicyTargetSelector PolicyType = "target_selector"
 
 // NamedRouter is one configured router/<name> entry.
 type NamedRouter struct {
@@ -37,20 +60,20 @@ type ClassifierTarget struct {
 
 // RouterRoute holds passthrough or composed routing policy.
 type RouterRoute struct {
-	Type                string
+	Type                RouteType
 	Target              string
 	Capable             string
 	Efficient           string
-	Picker              string
+	Picker              Picker
 	ConfidenceThreshold float64
 	RecentTurnWindow    *int
-	Mode                string
+	Mode                ClassifierMode
 	Classifier          string
 	Targets             []ClassifierTarget
 	DefaultTarget       string
 	Prompt              string
 	ResponseSchema      string
-	PolicyType          string
+	PolicyType          PolicyType
 	PolicySelector      string
 	SessionAffinity     *bool
 	MessageHashFallback *bool
@@ -243,7 +266,7 @@ func parseNamedRouters(raw map[string]namedRouterFile) (map[string]NamedRouter, 
 }
 
 func parseRouterRoute(name string, file routerRouteFile) (RouterRoute, error) {
-	routeType := strings.TrimSpace(file.Type)
+	routeType := RouteType(strings.TrimSpace(file.Type))
 	if routeType == "" {
 		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.type required", name)
 	}
@@ -263,7 +286,7 @@ func parseRouterRoute(name string, file routerRouteFile) (RouterRoute, error) {
 		}
 		capable := strings.TrimSpace(file.Capable)
 		efficient := strings.TrimSpace(file.Efficient)
-		picker := strings.TrimSpace(file.Picker)
+		picker := Picker(strings.TrimSpace(file.Picker))
 		if capable == "" {
 			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.capable required for stage_router", name)
 		}
@@ -371,7 +394,7 @@ func classifierSelector(name string, policy *classifierRoutePolicyFile) (string,
 	if policy == nil {
 		return "", fmt.Errorf("router: routers.%s.route.policy required for llm_classifier custom", name)
 	}
-	policyType := strings.TrimSpace(policy.Type)
+	policyType := PolicyType(strings.TrimSpace(policy.Type))
 	if policyType == "" {
 		return "", fmt.Errorf("router: routers.%s.route.policy.type required for llm_classifier custom", name)
 	}
@@ -404,7 +427,7 @@ func validateClassifierKnobs(name string, file routerRouteFile) error {
 }
 
 func parseLLMClassifierRoute(name string, file routerRouteFile) (RouterRoute, error) {
-	mode := strings.TrimSpace(file.Mode)
+	mode := ClassifierMode(strings.TrimSpace(file.Mode))
 	if mode == "" {
 		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.mode required for llm_classifier", name)
 	}
@@ -612,7 +635,7 @@ func rejectFallbackRouteExtras(name string, file routerRouteFile) error {
 	return rejectClassifierOnlyFields(name, RouteFallback, rest)
 }
 
-func rejectStageOnlyFields(name, routeType string, file routerRouteFile) error {
+func rejectStageOnlyFields(name string, routeType RouteType, file routerRouteFile) error {
 	if strings.TrimSpace(file.Capable) != "" {
 		return fmt.Errorf("router: routers.%s.route.capable not allowed for %s", name, routeType)
 	}
@@ -660,7 +683,7 @@ func rejectClassifierRouteExtras(name string, file routerRouteFile) error {
 	return nil
 }
 
-func rejectClassifierOnlyFields(name, routeType string, file routerRouteFile) error {
+func rejectClassifierOnlyFields(name string, routeType RouteType, file routerRouteFile) error {
 	if strings.TrimSpace(file.Mode) != "" {
 		return fmt.Errorf("router: routers.%s.route.mode not allowed for %s", name, routeType)
 	}

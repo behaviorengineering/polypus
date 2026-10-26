@@ -95,7 +95,10 @@ func (s openRouterSubmitter) Poll(ctx context.Context, meta batch.BatchMeta) (Po
 		return Poll{State: PollExpired}, nil
 	case openrouter.StatusCancelled:
 		return Poll{State: PollCancelled}, nil
+	case openrouter.StatusValidating, openrouter.StatusInProgress, openrouter.StatusFinalizing:
+		return Poll{State: PollRunning}, nil
 	default:
+		// A status OpenRouter adds later reads as still running until it is mapped.
 		return Poll{State: PollRunning}, nil
 	}
 }

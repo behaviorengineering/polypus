@@ -29,22 +29,31 @@ func isSystemOneBillingSkip(detail string) bool {
 		strings.Contains(d, "use byok")
 }
 
+// systemOneRequest is a SystemOne decision request.
+type systemOneRequest struct {
+	Model     string                       `json:"model"`
+	State     string                       `json:"state"`
+	Questions map[string]systemOneQuestion `json:"questions"`
+}
+
+type systemOneQuestion struct {
+	Type         string            `json:"type"`
+	Instructions string            `json:"instructions"`
+	Criteria     map[string]string `json:"criteria"`
+}
+
 func systemOnePing(ctx context.Context, opts Options) (string, error) {
-	payload := map[string]any{
-		"model": opts.SystemOneModel,
-		"state": "Help! My payouts have been failing for 3 days.",
-		"questions": map[string]any{
-			"is_urgent": map[string]any{
-				"type":         "noul",
-				"instructions": "Does this convey urgency?",
-				"criteria": map[string]string{
-					"true":  "Explicitly time-sensitive",
-					"false": "No urgency expressed",
-				},
+	raw, err := json.Marshal(systemOneRequest{
+		Model: opts.SystemOneModel,
+		State: "Help! My payouts have been failing for 3 days.",
+		Questions: map[string]systemOneQuestion{
+			"is_urgent": {
+				Type:         "noul",
+				Instructions: "Does this convey urgency?",
+				Criteria:     map[string]string{"true": "Explicitly time-sensitive", "false": "No urgency expressed"},
 			},
 		},
-	}
-	raw, err := json.Marshal(payload)
+	})
 	if err != nil {
 		return "", err
 	}

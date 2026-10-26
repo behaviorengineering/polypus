@@ -95,6 +95,9 @@ func (c *Cache) Put(models []Model) {
 // ListStrict serves a fresh cache hit, else fetches and caches. When the fetch fails it
 // falls back to a cached copy, and returns the error only when none exists.
 func ListStrict(ctx context.Context, provider string, cache *Cache, fetch func(context.Context) ([]Model, error)) (ModelList, error) {
+	if cache == nil || fetch == nil {
+		return ModelList{Object: ObjectList}, derrors.New(derrors.CodeInternal, "catalog.ListStrict", "cache and fetch required")
+	}
 	if cached, ok := cache.Get(); ok {
 		return ModelList{Object: ObjectList, Data: cached}, nil
 	}

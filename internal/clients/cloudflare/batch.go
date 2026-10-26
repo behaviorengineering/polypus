@@ -84,9 +84,9 @@ func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string,
 	if err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(map[string]interface{}{
-		"requests": requests,
-	})
+	payload, err := json.Marshal(struct {
+		Requests []map[string]json.RawMessage `json:"requests"`
+	}{requests})
 	if err != nil {
 		return "", derrors.Wrap(err, derrors.CodeInternal, "cloudflare.SubmitBatch", "marshal")
 	}
@@ -159,10 +159,13 @@ func batchRunURL(apiBase, model string) string {
 	return runURL(apiBase, model) + "?queueRequest=true"
 }
 
-func translateBatchRequests(endpoint string, lines []batch.InputLine) ([]map[string]interface{}, error) {
-	out := make([]map[string]interface{}, 0, len(lines))
+// translateBatchRequests turns OpenAI batch lines into Workers AI batch requests.
+// Bodies stay as raw JSON, so fields the gateway does not touch (large integers such
+// as seed included) pass through byte for byte.
+func translateBatchRequests(endpoint string, lines []batch.InputLine) ([]map[string]json.RawMessage, error) {
+	out := make([]map[string]json.RawMessage, 0, len(lines))
 	for _, line := range lines {
-		var item map[string]interface{}
+		var item map[string]json.RawMessage
 		var err error
 		switch endpoint {
 		case batch.EndpointChatCompletions:
@@ -180,31 +183,46 @@ func translateBatchRequests(endpoint string, lines []batch.InputLine) ([]map[str
 	return out, nil
 }
 
-func chatLineToCF(body json.RawMessage, customID string) (map[string]interface{}, error) {
-	var m map[string]interface{}
+func chatLineToCF(body json.RawMessage, customID string) (map[string]json.RawMessage, error) {
+	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.chatLineToCF", "parse body")
 	}
 	delete(m, "model")
 	delete(m, "stream")
-	m["external_reference"] = customID
-	return m, nil
+	return withString(m, "external_reference", customID)
 }
 
-func embedLineToCF(body json.RawMessage, customID string) (map[string]interface{}, error) {
-	var m map[string]interface{}
+func embedLineToCF(body json.RawMessage, customID string) (map[string]json.RawMessage, error) {
+	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.embedLineToCF", "parse body")
 	}
 	delete(m, "model")
-	input := m["input"]
+	var input any
+	if raw, ok := m["input"]; ok {
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.embedLineToCF", "parse input")
+		}
+	}
 	delete(m, "input")
 	text, err := embeddingInputToText(input)
 	if err != nil {
 		return nil, err
 	}
-	m["text"] = text
-	m["external_reference"] = customID
+	if m, err = withString(m, "text", text); err != nil {
+		return nil, err
+	}
+	return withString(m, "external_reference", customID)
+}
+
+// withString sets key to the JSON string s.
+func withString(m map[string]json.RawMessage, key, s string) (map[string]json.RawMessage, error) {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "cloudflare.withString", "marshal").With("key", key)
+	}
+	m[key] = raw
 	return m, nil
 }
 

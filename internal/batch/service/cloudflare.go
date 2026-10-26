@@ -110,6 +110,48 @@ func synthesizeOpenAIBody(endpoint, publicModel string, created int64, result js
 	}
 }
 
+// chatCompletionBody is the OpenAI chat.completion a Workers AI {"response": ...}
+// result becomes.
+type chatCompletionBody struct {
+	ID      string       `json:"id"`
+	Object  string       `json:"object"`
+	Created int64        `json:"created"`
+	Model   string       `json:"model"`
+	Choices []chatChoice `json:"choices"`
+	Usage   chatUsage    `json:"usage"`
+}
+
+type chatChoice struct {
+	Index        int         `json:"index"`
+	Message      chatMessage `json:"message"`
+	FinishReason string      `json:"finish_reason"`
+}
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// chatUsage is all zeros: Workers AI batch results carry no token counts.
+type chatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+// embeddingListBody is the OpenAI embedding list a bare Workers AI vector becomes.
+type embeddingListBody struct {
+	Object string          `json:"object"`
+	Model  string          `json:"model"`
+	Data   []embeddingItem `json:"data"`
+}
+
+type embeddingItem struct {
+	Object    string          `json:"object"`
+	Index     int             `json:"index"`
+	Embedding json.RawMessage `json:"embedding"`
+}
+
 // synthesizeChatBody returns the result as a chat.completion: one that already has
 // choices keeps them (relabelled), a {"response": "..."} one becomes a single message.
 func synthesizeChatBody(publicModel string, created int64, result json.RawMessage) (json.RawMessage, error) {
@@ -133,17 +175,12 @@ func synthesizeChatBody(publicModel string, created int64, result json.RawMessag
 	if err := json.Unmarshal(result, &text); err == nil && strings.TrimSpace(text.Response) != "" {
 		content = text.Response
 	}
-	return json.Marshal(map[string]any{
-		"id":      "chatcmpl-batch",
-		keyObject: "chat.completion",
-		"created": created,
-		keyModel:  publicModel,
-		"choices": []map[string]any{{
-			"index":         0,
-			"message":       map[string]string{"role": "assistant", "content": content},
-			"finish_reason": "stop",
-		}},
-		"usage": map[string]int{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+	return json.Marshal(chatCompletionBody{
+		ID:      "chatcmpl-batch",
+		Object:  "chat.completion",
+		Created: created,
+		Model:   publicModel,
+		Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: content}, FinishReason: "stop"}},
 	})
 }
 
@@ -156,9 +193,9 @@ func synthesizeEmbedBody(publicModel string, result json.RawMessage) (json.RawMe
 	if raw, ok := probe["data"]; ok && len(raw) > 0 {
 		return json.Marshal(map[string]any{keyObject: "list", keyModel: publicModel, "data": raw})
 	}
-	return json.Marshal(map[string]any{
-		keyObject: "list",
-		keyModel:  publicModel,
-		"data":    []map[string]any{{keyObject: "embedding", "index": 0, "embedding": result}},
+	return json.Marshal(embeddingListBody{
+		Object: "list",
+		Model:  publicModel,
+		Data:   []embeddingItem{{Object: "embedding", Embedding: result}},
 	})
 }

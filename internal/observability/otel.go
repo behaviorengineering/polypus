@@ -104,8 +104,8 @@ func Tracer() trace.Tracer {
 // WrapHandler extracts incoming W3C context and creates SERVER spans for each request.
 // Paths in SkipPaths (default /health) are not traced.
 func WrapHandler(h http.Handler) http.Handler {
-	skip, _ := skipHTTPPaths.Load().([]string)
-	if skip == nil {
+	skip, ok := skipHTTPPaths.Load().([]string)
+	if !ok || skip == nil {
 		skip = defaultSkipPaths
 	}
 	return wrapHandler(h, append([]string(nil), skip...))
