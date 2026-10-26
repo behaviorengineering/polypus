@@ -90,41 +90,24 @@ func TestBackendHealthDegradedWhenBackendDown(t *testing.T) {
 	}
 }
 
-func TestHealthIncludesSwitchyardURL(t *testing.T) {
-	t.Setenv("POLYPUS_SWITCHYARD", "1")
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestHealthNamesNoBackendOrSwitchyard(t *testing.T) {
+	for _, switchyard := range []string{"0", "1"} {
+		t.Setenv("POLYPUS_SWITCHYARD", switchyard)
+		handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d body %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `"switchyard"`) {
-		t.Fatalf("body: %s", rec.Body.String())
-	}
-}
-
-func TestHealthOmitsSwitchyardWhenDisabled(t *testing.T) {
-	t.Setenv("POLYPUS_SWITCHYARD", "0")
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d body %s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), `"switchyard"`) {
-		t.Fatalf("body should omit switchyard: %s", rec.Body.String())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("switchyard=%s: status %d body %s", switchyard, rec.Code, rec.Body.String())
+		}
+		if got := strings.TrimSpace(rec.Body.String()); got != `{"status":"ok"}` {
+			t.Fatalf("switchyard=%s: /health must be liveness only: %s", switchyard, got)
+		}
 	}
 }
 

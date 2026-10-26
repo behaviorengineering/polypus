@@ -16,20 +16,10 @@ import (
 
 const backendProbeTimeout = 5 * time.Second
 
-type healthBackend struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
-}
-
-type healthSwitchyard struct {
-	URL string `json:"url"`
-}
-
+// healthResponse is the keyless liveness body. It names no backend, URL or account:
+// those sit behind the client key on /health/backends and /health/upstreams.
 type healthResponse struct {
-	Status     string            `json:"status"`
-	Router     string            `json:"router"`
-	Switchyard *healthSwitchyard `json:"switchyard,omitempty"`
-	Backends   []healthBackend   `json:"backends"`
+	Status string `json:"status"`
 }
 
 type backendProbeResult struct {
@@ -62,27 +52,10 @@ func (h healthHandler) serveUpstreamHealth(w http.ResponseWriter, _ *http.Reques
 }
 
 // serveHealth reports gateway liveness only (no upstream probes).
-func (h healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
-	reg := h.router.Registry()
-	cfg := reg.Config()
-	backends := make([]healthBackend, 0, len(cfg.Backends))
-	for _, id := range cfg.BackendIDs() {
-		b := cfg.Backends[id]
-		backends = append(backends, healthBackend{ID: id, URL: b.BaseURL})
-	}
-	resp := healthResponse{
-		Status:   "ok",
-		Router:   "bifrost",
-		Backends: backends,
-	}
-	if config.SwitchyardEnabled() {
-		resp.Switchyard = &healthSwitchyard{
-			URL: cfg.EffectiveSwitchyardBaseURL(),
-		}
-	}
+func (healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok"})
 }
 
 // serveBackendHealth probes configured upstream backends (manual / stack-doctor use).

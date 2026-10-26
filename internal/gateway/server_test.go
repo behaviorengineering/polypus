@@ -366,11 +366,8 @@ func TestHealthOKWhenBackendUp(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d body %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"router":"bifrost"`) {
-		t.Fatalf("body: %q", rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `"backends"`) {
-		t.Fatalf("body: %q", rec.Body.String())
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"status":"ok"}` {
+		t.Fatalf("body: %q", got)
 	}
 }
 
@@ -945,8 +942,8 @@ backends:
 	if rec.Code != http.StatusOK {
 		t.Fatalf("health status: %d %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"id":"cf_local"`) {
-		t.Fatalf("health body: %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "cf_local") {
+		t.Fatalf("keyless /health must not name backends: %s", rec.Body.String())
 	}
 }
 

@@ -71,6 +71,8 @@ func (a *accessProtector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.gw.ServeHTTP(w, r)
 }
 
+// accessExempt lets only the liveness probe through without a key. /health/backends
+// and /health/upstreams name backend URLs and dial upstreams, so they need the key.
 func accessExempt(r *http.Request) bool {
 	if r == nil {
 		return false
@@ -78,12 +80,7 @@ func accessExempt(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
-	switch r.URL.Path {
-	case "/health", "/health/backends", "/health/upstreams":
-		return true
-	default:
-		return false
-	}
+	return r.URL.Path == "/health"
 }
 
 func extractAccessCredential(r *http.Request) string {

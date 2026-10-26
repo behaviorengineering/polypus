@@ -222,7 +222,7 @@ Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.jso
 
 `POST /v1/admin/models/allow` body: `{"backend":"cf_local","model":"@cf/..."}`. The model must appear in backend inventory; the backend must have `models.allow` configured. No dedicated allow Bearer.
 
-When `admin-api-keys.json` contains at least one key, all routes except `GET|HEAD /health`, `/health/backends`, and `/health/upstreams` require a gateway access key: `Authorization: Bearer ppk.<id>.<secret>`, `X-Api-Key`, or HTTP Basic (password = the full `ppk...` token). Plaintext keys print once on `polypus admin-key generate` or `rotate`.
+When `admin-api-keys.json` contains at least one key, all routes except `GET|HEAD /health` require a gateway access key: `Authorization: Bearer ppk.<id>.<secret>`, `X-Api-Key`, or HTTP Basic (password = the full `ppk...` token). Plaintext keys print once on `polypus admin-key generate` or `rotate`. `/health` returns only `{"status":"ok"}`. `/health/backends` and `/health/upstreams` name backend URLs and dial upstreams, so they need the key like any other route.
 
 Overlay POST and key-file changes take effect without restarting `polypus serve`. YAML `backends`, `routers:`, and secrets still require a gateway restart.
 

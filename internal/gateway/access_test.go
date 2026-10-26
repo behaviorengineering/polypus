@@ -85,7 +85,7 @@ func TestAccessKeysPresentRequiresCredential(t *testing.T) {
 	}
 }
 
-func TestAccessHealthExemptWhenGated(t *testing.T) {
+func TestAccessOnlyLivenessExemptWhenGated(t *testing.T) {
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
 	reg, err := router.NewRegistry(gatedAdminBackendConfig("http://127.0.0.1:9/v1"))
 	if err != nil {
@@ -100,17 +100,31 @@ func TestAccessHealthExemptWhenGated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Generate("ops"); err != nil {
+	gen, err := store.Generate("ops")
+	if err != nil {
 		t.Fatal(err)
 	}
 	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
 
-	for _, path := range []string{"/health", "/health/backends", "/health/upstreams"} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, "/health", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s /health without a key: status %d, want 200", method, rec.Code)
+		}
+	}
+	for _, path := range []string{"/health/backends", "/health/upstreams"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s without a key: status %d, want 401", path, rec.Code)
+		}
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+gen.Key)
+		rec = httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code == http.StatusUnauthorized {
-			t.Fatalf("%s should be exempt, got 401", path)
+			t.Fatalf("%s with a key: got 401", path)
 		}
 	}
 }

@@ -16,7 +16,7 @@ description: >-
 1. Confirm workspace: Polypus repo root (or this tree nested under `providers/polypus/` in a parent monorepo).
 2. For homelab Compose deploy: clone **gitlab.com/xynova/polypus-local** and load its `ai-copilots/`; wire **operatorconfig** via `go list -m -f '{{.Dir}}' github.com/behaviorengineering/operatorconfig` and that module's `ai-copilots/BOOTSTRAP.md` (do not copy operatorconfig skill bodies here).
 3. Load shard when needed: [config-reference.md](config-reference.md), [troubleshooting.md](troubleshooting.md), [harness.md](harness.md), [thinking-policy.md](thinking-policy.md), [openai-compat.md](openai-compat.md), [windows-gitlab-deploy.md](windows-gitlab-deploy.md) (pointer to polypus-local + keyring).
-4. Run health before deep edits: `curl -sf http://127.0.0.1:1320/health | jq .` (upstream probe: `/health/backends`)
+4. Run health before deep edits: `curl -sf http://127.0.0.1:1320/health | jq .` (upstream probe: `/health/backends`, which needs the gateway access key once a key exists)
 
 ## Supervision (MUST)
 
@@ -167,7 +167,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
   ```
   `secret set` refuses names that are not listed under `secrets:` in the live config. Omit `secrets:` for MLX-only so the keyring is never queried. Docker Compose / Windows GitLab: put `CF_*` in the container env (SOPS); do not use the host keyring inside Linux containers.
 - After YAML `backends`, `routers:`, or secrets change: restart gateway in process-compose TUI (or `go tool task serve-down && go tool task serve`). Runtime allow via `GET /` form or `POST /v1/admin/models/allow` does **not** require restart.
-- Gateway access keys (optional): `polypus admin-key generate --name ops --yes`. When at least one key exists, the whole gateway (except `GET /health*`) requires `Authorization: Bearer ppk...`, `X-Api-Key`, or HTTP Basic (password = the key). Empty key store = open. Allow POST is inventory-gated only (no per-route key).
+- Gateway access keys (optional): `polypus admin-key generate --name ops --yes`. When at least one key exists, the whole gateway (except `GET /health`, which returns only `{"status":"ok"}`) requires `Authorization: Bearer ppk...`, `X-Api-Key`, or HTTP Basic (password = the key). Empty key store = open. Allow POST is inventory-gated only (no per-route key).
 - With `cf_local` configured, serve fail-closes on startup if Cloudflare Model Search ping fails (fix `secret set` / env; MLX-only configs skip this probe). Remote backends (including `extension: gemini` and OpenRouter) must resolve `auth.bearer_env` at startup.
 - **MUST NOT** add non-loopback backend URLs when `reject_non_loopback_backends` applies.
 
