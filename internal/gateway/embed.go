@@ -44,8 +44,9 @@ func rewriteEmbedModel(body []byte, model string) ([]byte, error) {
 	return out, nil
 }
 
-func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
-	target := embeddingsURL(backendURL)
+func (h chatHandler) proxyEmbeddings(w http.ResponseWriter, r *http.Request, t backendTarget, body []byte, hopTimeout time.Duration) error {
+	client, backendAuth := h.client, t.auth
+	target := embeddingsURL(t.url)
 	hopTimeout = hopBudget(hopTimeout, config.DefaultTimeouts().Embed)
 	ctx, cancel := context.WithTimeout(r.Context(), hopTimeout)
 	defer cancel()

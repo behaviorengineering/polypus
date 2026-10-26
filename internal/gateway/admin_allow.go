@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -95,7 +96,7 @@ func (h adminHandler) serveModelsAllow(w http.ResponseWriter, r *http.Request) {
 	}
 	publicID := prefixModelID(backendID, down)
 	if b.IsModelAllowed(model) || b.IsModelAllowed(down) || b.IsModelAllowed(publicID) {
-		h.writeAdminAllowOK(w, backendID, down, publicID, true, b.Models.Allow)
+		h.writeJSON(w, http.StatusOK, adminAllowResponse{Backend: backendID, Model: down, PublicID: publicID, AlreadyAllowed: true, Allow: slices.Clone(b.Models.Allow)})
 		return
 	}
 	budgeted, cancel := withModelsBudget(r.Context(), h.router.Registry().Config())
@@ -124,10 +125,10 @@ func (h adminHandler) serveModelsAllow(w http.ResponseWriter, r *http.Request) {
 	}
 	b2, ok := reg.Backend(backendID)
 	if !ok || b2.Models == nil {
-		h.writeAdminAllowOK(w, backendID, down, publicID, false, nil)
+		h.writeJSON(w, http.StatusOK, adminAllowResponse{Backend: backendID, Model: down, PublicID: publicID})
 		return
 	}
-	h.writeAdminAllowOK(w, backendID, down, publicID, false, b2.Models.Allow)
+	h.writeJSON(w, http.StatusOK, adminAllowResponse{Backend: backendID, Model: down, PublicID: publicID, Allow: slices.Clone(b2.Models.Allow)})
 }
 
 func modelInInventory(backendID, down, req string, models []openaiModel) bool {
@@ -144,14 +145,4 @@ func modelInInventory(backendID, down, req string, models []openaiModel) bool {
 
 func (h adminHandler) writeAdminJSONError(w http.ResponseWriter, status int, typ, code, msg string) {
 	h.writeOpenAIError(w, status, openaiError{Message: msg, Type: typ, Code: code})
-}
-
-func (h adminHandler) writeAdminAllowOK(w http.ResponseWriter, backend, down, publicID string, already bool, allow []string) {
-	h.writeJSON(w, http.StatusOK, adminAllowResponse{
-		Backend:        backend,
-		Model:          down,
-		PublicID:       publicID,
-		AlreadyAllowed: already,
-		Allow:          append([]string(nil), allow...),
-	})
 }

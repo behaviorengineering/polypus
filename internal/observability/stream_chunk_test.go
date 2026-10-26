@@ -24,7 +24,7 @@ func TestRecordChatStreamChunk_eventsOnActiveSpan(t *testing.T) {
 	ctx, span := Tracer().Start(context.Background(), "polypus.chat")
 	raw := []byte(`{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}`)
 	openai := []byte(`{"choices":[{"index":0,"delta":{"content":"hi"}}]}`)
-	RecordChatStreamChunk(ctx, 1, openai, raw, "forward", true)
+	RecordChatStreamChunk(ctx, StreamChunk{Index: 1, OpenAIJSON: openai, RawProviderJSON: raw, SSEAction: "forward", Emitted: true})
 	span.End()
 
 	spans := exporter.GetSpans()
@@ -69,7 +69,7 @@ func TestRecordChatStreamChunk_debugRedactsSecrets(t *testing.T) {
 
 	ctx, span := Tracer().Start(context.Background(), "polypus.chat")
 	leaky := []byte(`https://generativelanguage.googleapis.com/v1?key=super-secret`)
-	RecordChatStreamChunk(ctx, 1, leaky, nil, "drop", false)
+	RecordChatStreamChunk(ctx, StreamChunk{Index: 1, OpenAIJSON: leaky, SSEAction: "drop"})
 	span.End()
 
 	for _, sp := range exporter.GetSpans() {

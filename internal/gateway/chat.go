@@ -158,7 +158,7 @@ func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) 
 
 	if streaming {
 		resp.Body = newIdleTimeoutBody(resp.Body, d.streamIdle, cancel)
-		return writeChatStreamResponse(w, r, resp, target, streaming, d.log)
+		return d.writeStreamResponse(w, r, resp, target)
 	}
 
 	raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
@@ -190,7 +190,8 @@ func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) 
 	return upstream.StatusFailure(status)
 }
 
-func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string, streaming bool, log *slog.Logger) error {
+func (d chatDial) writeStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string) error {
+	streaming, log := d.stream, d.log
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
 		if err != nil {

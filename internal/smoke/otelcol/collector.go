@@ -119,31 +119,63 @@ func exportSmokeTraces(ctx context.Context, opts CollectorOptions) (genAI, plain
 	return genAI, plain, nil
 }
 
+// probeResult is one routing check: how many spans a backend holds for a trace, and
+// whether that count is what routing should produce.
+type probeResult struct {
+	name  string // for example "gen_ai phoenix".
+	want  string // "0" or ">0".
+	count int
+	err   error
+}
+
+func (p probeResult) ok() bool {
+	if p.err != nil {
+		return false
+	}
+	if p.want == "0" {
+		return p.count == 0
+	}
+	return p.count > 0
+}
+
 // probeRouting checks the collector's routing once: the gen_ai trace reaches Phoenix
 // and the plain one does not, and (unless skipped) both reach HyperDX. It returns nil
 // when routing is right, else what is still missing.
 func probeRouting(ctx context.Context, opts CollectorOptions, genAITrace, plainTrace string) error {
-	genPhoenix, errGenPhoenix := phoenixSpanCount(ctx, opts, genAITrace)
-	plainPhoenix, errPlainPhoenix := phoenixSpanCount(ctx, opts, plainTrace)
-	var genHyper, plainHyper int
-	var errGenHyper, errPlainHyper error
-	if !opts.SkipHyperDXVerify {
-		genHyper, errGenHyper = hyperdxTraceCount(ctx, opts, genAITrace)
-		plainHyper, errPlainHyper = hyperdxTraceCount(ctx, opts, plainTrace)
+	results := make([]probeResult, 0, 4)
+	add := func(name, want string, count int, err error) {
+		results = append(results, probeResult{name: name, want: want, count: count, err: err})
 	}
-	opts.Logger.Info("collector smoke: probe counts", "gen_ai_phoenix", genPhoenix, "gen_ai_hyperdx", genHyper,
-		"plain_phoenix", plainPhoenix, "plain_hyperdx", plainHyper)
+	n, err := phoenixSpanCount(ctx, opts, genAITrace)
+	add("gen_ai phoenix", ">0", n, err)
+	n, err = phoenixSpanCount(ctx, opts, plainTrace)
+	add("plain phoenix", "0", n, err)
+	if !opts.SkipHyperDXVerify {
+		n, err = hyperdxTraceCount(ctx, opts, genAITrace)
+		add("gen_ai hyperdx", ">0", n, err)
+		n, err = hyperdxTraceCount(ctx, opts, plainTrace)
+		add("plain hyperdx", ">0", n, err)
+	}
+	attrs := make([]any, 0, 2*len(results))
+	for _, r := range results {
+		attrs = append(attrs, strings.ReplaceAll(r.name, " ", "_"), r.count)
+	}
+	opts.Logger.Info("collector smoke: probe counts", attrs...)
+	return joinProbeErrors(results)
+}
 
-	okGenPhoenix := errGenPhoenix == nil && genPhoenix > 0
-	okPlainAbsentPhoenix := errPlainPhoenix == nil && plainPhoenix == 0
-	okGenHyper := opts.SkipHyperDXVerify || (errGenHyper == nil && genHyper > 0)
-	okPlainHyper := opts.SkipHyperDXVerify || (errPlainHyper == nil && plainHyper > 0)
-	if okGenPhoenix && okPlainAbsentPhoenix && okGenHyper && okPlainHyper {
+// joinProbeErrors describes every failed probe, or returns nil when all passed.
+func joinProbeErrors(results []probeResult) error {
+	var parts []string
+	for _, r := range results {
+		if !r.ok() {
+			parts = append(parts, fmt.Sprintf("%s want %s got %d err=%v", r.name, r.want, r.count, r.err))
+		}
+	}
+	if len(parts) == 0 {
 		return nil
 	}
-	return joinProbeErrors(genPhoenix, plainPhoenix, genHyper, plainHyper,
-		errGenPhoenix, errPlainPhoenix, errGenHyper, errPlainHyper,
-		okGenPhoenix, okPlainAbsentPhoenix, okGenHyper, okPlainHyper)
+	return errors.New(strings.Join(parts, "; "))
 }
 
 func (o CollectorOptions) withCollectorDefaults() CollectorOptions {
@@ -539,26 +571,6 @@ func parseCountOutput(out []byte) (int, error) {
 		return 0, fmt.Errorf("hyperdx: parse clickhouse count %q: %w", s, err)
 	}
 	return n, nil
-}
-
-func joinProbeErrors(genPhoenix, plainPhoenix, genHyper, plainHyper int,
-	errGenPhoenix, errPlainPhoenix, errGenHyper, errPlainHyper error,
-	okGenPhoenix, okPlainAbsentPhoenix, okGenHyper, okPlainHyper bool,
-) error {
-	var parts []string
-	if !okGenPhoenix {
-		parts = append(parts, fmt.Sprintf("gen_ai phoenix want >0 got %d err=%v", genPhoenix, errGenPhoenix))
-	}
-	if !okPlainAbsentPhoenix {
-		parts = append(parts, fmt.Sprintf("plain phoenix want 0 got %d err=%v", plainPhoenix, errPlainPhoenix))
-	}
-	if !okGenHyper {
-		parts = append(parts, fmt.Sprintf("gen_ai hyperdx want >0 got %d err=%v", genHyper, errGenHyper))
-	}
-	if !okPlainHyper {
-		parts = append(parts, fmt.Sprintf("plain hyperdx want >0 got %d err=%v", plainHyper, errPlainHyper))
-	}
-	return errors.New(strings.Join(parts, "; "))
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {

@@ -434,7 +434,7 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 		h.servePassthroughRouterChat(w, r, req, nr.Route.Target)
 	case dispatchSwitchyard:
 		// Switchyard picks the leaf itself, so it gets the body as the client sent it.
-		h.serveSwitchyardRouterChat(w, r, body, req, routerName, cfg.EffectiveSwitchyardBaseURL())
+		h.serveSwitchyardRouterChat(w, r, body, req, routerName)
 	case dispatchUnknown:
 		fallthrough
 	default:
@@ -462,10 +462,13 @@ func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.R
 	h.dialChat(w, r, req, t, false)
 }
 
-func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Request, body []byte, req chatRequest, routerName, switchyardURL string) {
+func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Request, body []byte, req chatRequest, routerName string) {
+	switchyardURL := h.router.Registry().Config().EffectiveSwitchyardBaseURL()
 	model := req.model
 	var err error
-	ctx, span := observability.StartRouterSpan(r.Context(), "polypus.router", model, routerName, switchyardURL)
+	ctx, span := observability.StartRouterSpan(r.Context(), "polypus.router", observability.LLMSpanAttrs{
+		Model: model, BackendURL: switchyardURL, Router: routerName,
+	})
 	dialUpstream := upstream.NameSwitchyard
 	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	r = r.WithContext(ctx)
@@ -602,13 +605,15 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		h.writeHandlerError(w, err)
 		return
 	}
-	backendURL, backendAuth := t.url, t.auth
+	backendURL := t.url
 	rewritten, err := rewriteEmbedModel(body, downstream)
 	if err != nil {
 		h.writeHandlerError(w, err)
 		return
 	}
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", model, backendID, backendURL, downstream)
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", observability.LLMSpanAttrs{
+		Model: model, BackendID: backendID, BackendURL: backendURL, Downstream: downstream,
+	})
 	dialUpstream := backendID
 	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	r = r.WithContext(ctx)
@@ -627,7 +632,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		}
-		return proxyEmbeddings(w, r, backendURL, rewritten, h.client, hop, backendAuth)
+		return h.proxyEmbeddings(w, r, t, rewritten, hop)
 	})
 	if err != nil {
 		h.writeUpstreamDialError(w, err, "", string(backendID), nil)
@@ -671,7 +676,9 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	backendURL, _ := h.router.Registry().BackendURL(string(backendID))
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.speech", req.Model, string(backendID), backendURL, downstream)
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.speech", observability.LLMSpanAttrs{
+		Model: req.Model, BackendID: string(backendID), BackendURL: backendURL, Downstream: downstream,
+	})
 	dialUpstream := string(backendID)
 	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	hop := h.timeouts.ResolveSpeech(r.Header.Get(config.TimeoutHeader))
@@ -739,7 +746,9 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 		return
 	}
 	backendURL, _ := h.router.Registry().BackendURL(string(backendID))
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.transcription", sttModel, string(backendID), backendURL, downstream)
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.transcription", observability.LLMSpanAttrs{
+		Model: sttModel, BackendID: string(backendID), BackendURL: backendURL, Downstream: downstream,
+	})
 	dialUpstream := string(backendID)
 	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	hop := h.timeouts.ResolveSpeech(r.Header.Get(config.TimeoutHeader))

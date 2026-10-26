@@ -172,30 +172,44 @@ func RecordDownstreamModel(ctx context.Context, model string) {
 	span.SetAttributes(attribute.String("polypus.downstream_model", model))
 }
 
-// StartRouterSpan starts an OpenInference span for a composed router hop via Switchyard.
-func StartRouterSpan(ctx context.Context, operation, model, routerName, switchyardURL string) (context.Context, trace.Span) {
+// LLMSpanAttrs names one inference hop for StartLLMSpan and StartRouterSpan.
+type LLMSpanAttrs struct {
+	// Model is the model the client asked for.
+	Model string
+	// BackendID and BackendURL name the backend the hop dials.
+	BackendID  string
+	BackendURL string
+	// Downstream is the model id the backend receives (LLM spans).
+	Downstream string
+	// Router is the composed router's name (router spans).
+	Router string
+}
+
+// StartRouterSpan starts an OpenInference span for a composed router hop via
+// Switchyard; a.BackendURL is the Switchyard URL.
+func StartRouterSpan(ctx context.Context, operation string, a LLMSpanAttrs) (context.Context, trace.Span) {
 	ctx, span := Tracer().Start(ctx, operation, trace.WithSpanKind(trace.SpanKindInternal))
 	span.SetAttributes(
 		attribute.String("openinference.span.kind", "LLM"),
-		attribute.String("llm.model_name", model),
+		attribute.String("llm.model_name", a.Model),
 		attribute.String("llm.provider", "polypus"),
 		attribute.String("polypus.backend_id", "switchyard"),
-		attribute.String("polypus.backend_url", switchyardURL),
-		attribute.String("polypus.router_name", routerName),
+		attribute.String("polypus.backend_url", a.BackendURL),
+		attribute.String("polypus.router_name", a.Router),
 	)
 	return ctx, span
 }
 
 // StartLLMSpan starts an OpenInference LLM span for a routed inference call.
-func StartLLMSpan(ctx context.Context, operation, model, backendID, backendURL, downstream string) (context.Context, trace.Span) {
+func StartLLMSpan(ctx context.Context, operation string, a LLMSpanAttrs) (context.Context, trace.Span) {
 	ctx, span := Tracer().Start(ctx, operation, trace.WithSpanKind(trace.SpanKindInternal))
 	span.SetAttributes(
 		attribute.String("openinference.span.kind", "LLM"),
-		attribute.String("llm.model_name", model),
+		attribute.String("llm.model_name", a.Model),
 		attribute.String("llm.provider", "polypus"),
-		attribute.String("polypus.backend_id", backendID),
-		attribute.String("polypus.backend_url", backendURL),
-		attribute.String("polypus.downstream_model", downstream),
+		attribute.String("polypus.backend_id", a.BackendID),
+		attribute.String("polypus.backend_url", a.BackendURL),
+		attribute.String("polypus.downstream_model", a.Downstream),
 	)
 	return ctx, span
 }

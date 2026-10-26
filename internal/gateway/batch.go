@@ -122,7 +122,9 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.batch.create", publicModel, backendID, backend.BaseURL, downstream)
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.batch.create", observability.LLMSpanAttrs{
+		Model: publicModel, BackendID: backendID, BackendURL: backend.BaseURL, Downstream: downstream,
+	})
 	var createErr error
 	defer func() { observability.EndDialSpan(span, createErr, backendID) }()
 	ctx, cancel := h.batchHopContext(ctx, r.Header.Get(config.TimeoutHeader), backendID)

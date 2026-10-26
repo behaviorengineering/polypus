@@ -22,37 +22,49 @@ func (h chatHandler) dialChat(w http.ResponseWriter, r *http.Request, req chatRe
 		h.writeHandlerError(w, err)
 		return
 	}
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", req.model, t.id, t.url, t.downstream)
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", observability.LLMSpanAttrs{
+		Model: req.model, BackendID: t.id, BackendURL: t.url, Downstream: t.downstream,
+	})
 	defer func() { observability.EndDialSpan(span, err, t.id) }()
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), t.id, vision, req.thinking)
-	if err = h.proxyOrBifrostChat(w, r, t, body, req.stream, hop); err != nil {
+	if err = h.proxyOrBifrostChat(w, r, chatCall{target: t, body: body, stream: req.stream, hop: hop}); err != nil {
 		h.writeUpstreamDialError(w, err, "", t.id, nil)
 	}
 }
 
+// chatCall is one encoded chat request for a resolved backend.
+type chatCall struct {
+	target backendTarget
+	body   []byte
+	stream bool
+	hop    time.Duration
+}
+
 // proxyOrBifrostChat sends leaf chat via Bifrost when the backend is registered;
 // otherwise falls back to the OpenAI HTTP proxy.
-func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, t backendTarget, body []byte, stream bool, hop time.Duration) error {
+func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, c chatCall) error {
+	t := c.target
 	return h.upstreams.Execute(t.id, func() error {
 		if !h.router.UsesBifrost(t.id) {
-			return proxyChat(w, r, body, chatDial{
+			return proxyChat(w, r, c.body, chatDial{
 				backendURL:  t.url,
 				client:      h.client,
-				hop:         hop,
+				hop:         c.hop,
 				streamIdle:  h.timeouts.ResolveStreamIdle(t.id),
-				stream:      stream,
+				stream:      c.stream,
 				backendAuth: t.auth,
 				log:         h.log,
 			})
 		}
-		return h.bifrostChatResponse(w, r, t.id, t.downstream, body, stream, hop)
+		return h.bifrostChatResponse(w, r, c)
 	})
 }
 
 // bifrostChatResponse dials chat through Bifrost (stream or non-stream).
-func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request, backendID, model string, body []byte, stream bool, hop time.Duration) error {
-	if stream {
+func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request, c chatCall) error {
+	backendID, model, body, hop := c.target.id, c.target.downstream, c.body, c.hop
+	if c.stream {
 		chunks, errCh, err := h.router.ChatCompletionStreamRaw(r.Context(), backendID, model, body)
 		if err != nil {
 			return gatewayErr(err, "gateway.bifrostChatResponse", "stream").With("backend", backendID)
@@ -109,7 +121,7 @@ func writeBifrostChatSSE(ctx context.Context, w http.ResponseWriter, chunks <-ch
 		start()
 		raw := chunk.OpenAIJSON
 		out, action, emit := sanitizeOpenAIStreamChunk(raw, san, true)
-		recordBifrostStreamChunk(ctx, chunk.OpenAIJSON, chunk.RawProviderJSON, out, action, emit)
+		recordBifrostStreamChunk(ctx, chunk, action, emit)
 		if !emit {
 			continue
 		}

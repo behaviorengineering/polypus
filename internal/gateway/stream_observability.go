@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -52,11 +53,13 @@ func nextStreamChunkIndex(ctx context.Context) int {
 	return c.index
 }
 
-func recordBifrostStreamChunk(ctx context.Context, openaiJSON, rawProviderJSON, outbound []byte, action StreamSSEAction, emit bool) {
+func recordBifrostStreamChunk(ctx context.Context, chunk router.ChatStreamChunk, action StreamSSEAction, emit bool) {
 	idx := nextStreamChunkIndex(ctx)
-	observability.RecordChatStreamChunk(ctx, idx, openaiJSON, rawProviderJSON, string(action), emit)
+	observability.RecordChatStreamChunk(ctx, observability.StreamChunk{
+		Index: idx, OpenAIJSON: chunk.OpenAIJSON, RawProviderJSON: chunk.RawProviderJSON, SSEAction: string(action), Emitted: emit,
+	})
 	if action == StreamSSEDrop {
-		dumpIllegalStreamChunk(ctx, idx, openaiJSON, rawProviderJSON)
+		dumpIllegalStreamChunk(ctx, idx, chunk.OpenAIJSON, chunk.RawProviderJSON)
 	}
 }
 
