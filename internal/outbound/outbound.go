@@ -185,12 +185,15 @@ func retryPolicyFor(name string) failsafe.Policy[any] {
 }
 
 func policies(name string) []failsafe.Policy[any] {
-	var out []failsafe.Policy[any]
+	return append(breakerOnly(name), retryPolicyFor(name))
+}
+
+// breakerOnly is the policy set for a request that must not be retried.
+func breakerOnly(name string) []failsafe.Policy[any] {
 	if b := breakerFor(name); b != nil {
-		out = append(out, b)
+		return []failsafe.Policy[any]{b}
 	}
-	out = append(out, retryPolicyFor(name))
-	return out
+	return nil
 }
 
 // Run executes fn under outbound retry (and breaker when name is a shared remote dep).
@@ -214,8 +217,14 @@ func Do(ctx context.Context, name string, client *http.Client, req *http.Request
 	if req == nil {
 		return nil, fmt.Errorf("outbound: nil request")
 	}
+	pol := policies(name)
+	if !replayable(req) {
+		// A body without GetBody is consumed by the first attempt; retrying would
+		// send it empty, so this request gets one attempt.
+		pol = breakerOnly(name)
+	}
 	var resp *http.Response
-	err := failsafe.With(policies(name)...).
+	err := failsafe.With(pol...).
 		WithContext(ctx).
 		Run(func() error {
 			if resp != nil && resp.Body != nil {
@@ -253,10 +262,24 @@ func Do(ctx context.Context, name string, client *http.Client, req *http.Request
 	return resp, nil
 }
 
+// cloneRequest copies req for one attempt. Clone shares the body, so a replayable
+// body is reopened from GetBody for every attempt.
 func cloneRequest(ctx context.Context, req *http.Request) (*http.Request, error) {
 	clone := req.Clone(ctx)
 	if clone == nil {
 		return nil, fmt.Errorf("outbound: clone request")
 	}
+	if req.GetBody != nil && req.Body != nil && req.Body != http.NoBody {
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, fmt.Errorf("outbound: reopen request body: %w", err)
+		}
+		clone.Body = body
+	}
 	return clone, nil
+}
+
+// replayable reports whether every attempt can send the full body.
+func replayable(req *http.Request) bool {
+	return req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
 }

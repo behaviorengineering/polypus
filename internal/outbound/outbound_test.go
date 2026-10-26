@@ -2,8 +2,10 @@ package outbound
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -51,6 +53,61 @@ func TestDoRetries503(t *testing.T) {
 	}
 	if calls.Load() < 2 {
 		t.Fatalf("expected retry, calls=%d", calls.Load())
+	}
+}
+
+func TestDoRetryResendsTheFullBody(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
+		if len(bodies) == 1 {
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(`{"q":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := Do(ctx, DepGitHub, srv.Client(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if len(bodies) != 2 || bodies[0] != `{"q":1}` || bodies[1] != `{"q":1}` {
+		t.Fatalf("each attempt must send the full body, got %q", bodies)
+	}
+}
+
+func TestDoSendsAnUnreplayableBodyOnce(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, io.NopCloser(strings.NewReader(`{"q":1}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.GetBody != nil {
+		t.Fatal("test needs a body without GetBody")
+	}
+	resp, err := Do(ctx, DepGitHub, srv.Client(), req)
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("an unreplayable body must be sent once, calls=%d", calls.Load())
 	}
 }
 
