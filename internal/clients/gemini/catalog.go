@@ -40,7 +40,7 @@ type Client struct {
 // NewClient builds a Gemini catalog client from a backend definition.
 func NewClient(b config.BackendDef) (*Client, error) {
 	if !b.IsGeminiExtension() {
-		return nil, fmt.Errorf("%w: %q", errNotGeminiExtension, b.ID)
+		return nil, derrors.Wrap(errNotGeminiExtension, derrors.CodeInvalid, "gemini", "backend").With("backend", b.ID)
 	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {
@@ -93,7 +93,7 @@ func openAIModelsListURL(base string) string {
 // ListModelsStrict fetches the catalog or returns an error when fetch fails and no cache exists.
 func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
-		return ModelList{}, fmt.Errorf("gemini: not configured")
+		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, "gemini", "not configured")
 	}
 	if ctx == nil {
 		return ModelList{}, derrors.New(derrors.CodeInvalid, "gemini.ListModelsStrict", "context required")
@@ -104,19 +104,19 @@ func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 func (c *Client) fetch(ctx context.Context) ([]Model, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.listURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("gemini models: request: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "gemini models", "request")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := outbound.Do(ctx, outbound.DepGemini, c.httpClient, req)
 	if err != nil {
-		return nil, fmt.Errorf("gemini models: fetch: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "gemini models", "fetch")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
 	if err != nil {
-		return nil, fmt.Errorf("gemini models: read: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "gemini models", "read")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -124,9 +124,9 @@ func (c *Client) fetch(ctx context.Context) ([]Model, error) {
 				With("status", strconv.Itoa(resp.StatusCode))
 		}
 		if outbound.HTTPStatusPermanent(resp.StatusCode) {
-			return nil, outbound.Abort(fmt.Errorf("gemini models: status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200)))
+			return nil, outbound.Abort(derrors.New(catalog.StatusCode(resp.StatusCode), "gemini models", fmt.Sprintf("status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200))))
 		}
-		return nil, fmt.Errorf("gemini models: status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200))
+		return nil, derrors.New(catalog.StatusCode(resp.StatusCode), "gemini models", fmt.Sprintf("status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200)))
 	}
 	return parseOpenAIModelList(raw)
 }
@@ -134,7 +134,7 @@ func (c *Client) fetch(ctx context.Context) ([]Model, error) {
 func parseOpenAIModelList(raw []byte) ([]Model, error) {
 	var list ModelList
 	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, fmt.Errorf("gemini models: decode: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "gemini models", "decode")
 	}
 	out := make([]Model, 0, len(list.Data))
 	for _, m := range list.Data {

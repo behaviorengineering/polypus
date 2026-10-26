@@ -1,8 +1,9 @@
 package cloudflare
 
 import (
-	"fmt"
 	"sync"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 )
@@ -21,7 +22,7 @@ func clientCacheKey(backendID, token, apiBase string) string {
 // env token rotation after restart (or different backends) gets a fresh client.
 func GetClient(b config.BackendDef) (*Client, error) {
 	if !b.IsCloudflareExtension() {
-		return nil, fmt.Errorf("%w: %q", errNotCloudflareExtension, b.ID)
+		return nil, derrors.Wrap(errNotCloudflareExtension, derrors.CodeInvalid, "cloudflare", "backend").With("backend", b.ID)
 	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {

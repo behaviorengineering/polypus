@@ -6,8 +6,11 @@ package catalog
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 const (
@@ -139,6 +142,22 @@ func (r *Registry[T]) Reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.clients = nil
+}
+
+// StatusCode maps an upstream HTTP status to the closest domain code.
+func StatusCode(status int) derrors.Code {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return derrors.CodeRateLimited
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return derrors.CodeUnauthorized
+	case status == http.StatusNotFound || status == http.StatusGone:
+		return derrors.CodeNotFound
+	case status >= 400 && status < 500:
+		return derrors.CodeInvalid
+	default:
+		return derrors.CodeUnavailable
+	}
 }
 
 // Truncate shortens s to at most n bytes for error messages.

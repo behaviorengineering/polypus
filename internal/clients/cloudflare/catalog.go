@@ -54,7 +54,7 @@ type Client struct {
 // process-scoped client (and transport after speech-client wiring).
 func NewClient(b config.BackendDef) (*Client, error) {
 	if !b.IsCloudflareExtension() {
-		return nil, fmt.Errorf("%w: %q", errNotCloudflareExtension, b.ID)
+		return nil, derrors.Wrap(errNotCloudflareExtension, derrors.CodeInvalid, "cloudflare", "backend").With("backend", b.ID)
 	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {
@@ -94,7 +94,7 @@ func newClient(apiBase, token string) (*Client, error) {
 // caller's ctx deadline bounds it.
 func (c *Client) Ping(ctx context.Context) error {
 	if c == nil {
-		return fmt.Errorf("cloudflare: not configured")
+		return derrors.New(derrors.CodeFailedPrecondition, "cloudflare", "not configured")
 	}
 	_, _, err := c.fetchPage(ctx, 1)
 	return err
@@ -109,7 +109,7 @@ func (c *Client) Ping(ctx context.Context) error {
 // fresh sync. With no cache, the dial error is returned.
 func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
-		return ModelList{}, fmt.Errorf("cloudflare: not configured")
+		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, "cloudflare", "not configured")
 	}
 	return catalog.ListStrict(ctx, "cloudflare", c.cache, c.fetchAll)
 }
@@ -192,7 +192,7 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 	base := strings.TrimRight(c.apiBase, "/")
 	u, err := url.Parse(base + "/models/search")
 	if err != nil {
-		return nil, 0, fmt.Errorf("cloudflare models: parse url: %w", err)
+		return nil, 0, derrors.Wrap(err, derrors.CodeInternal, "cloudflare models", "parse url")
 	}
 	q := u.Query()
 	q.Set("page", fmt.Sprintf("%d", page))
@@ -202,14 +202,14 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, 0, fmt.Errorf("cloudflare models: request: %w", err)
+		return nil, 0, derrors.Wrap(err, derrors.CodeInternal, "cloudflare models", "request")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := outbound.Do(ctx, outbound.DepCloudflare, c.httpClient, req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("cloudflare models: fetch: %w", err)
+		return nil, 0, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "cloudflare models", "fetch")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := readCapped(resp.Body, modelsMaxBody, "cloudflare.fetchPage")
@@ -221,18 +221,18 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 			return nil, 0, derrors.Wrap(nil, derrors.CodeUnauthorized, "cloudflare.fetchPage", "API key rejected").
 				With("status", strconv.Itoa(resp.StatusCode))
 		}
-		return nil, 0, fmt.Errorf("cloudflare models: status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+		return nil, 0, derrors.New(catalog.StatusCode(resp.StatusCode), "cloudflare models", fmt.Sprintf("status %d: %s", resp.StatusCode, truncate(string(raw), 200)))
 	}
 	var body cfModelsSearchResponse
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, 0, fmt.Errorf("cloudflare models: decode: %w", err)
+		return nil, 0, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare models", "decode")
 	}
 	if !body.Success {
 		msg := "models search failed"
 		if len(body.Errors) > 0 && strings.TrimSpace(body.Errors[0].Message) != "" {
 			msg = body.Errors[0].Message
 		}
-		return nil, 0, fmt.Errorf("cloudflare models: %s", msg)
+		return nil, 0, derrors.New(derrors.CodeUnavailable, "cloudflare models", msg)
 	}
 	out := make([]Model, 0, len(body.Result))
 	for _, e := range body.Result {

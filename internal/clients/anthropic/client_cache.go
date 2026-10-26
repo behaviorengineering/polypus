@@ -1,7 +1,7 @@
 package anthropic
 
 import (
-	"fmt"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -12,7 +12,7 @@ var clients catalog.Registry[Client]
 // GetClient returns a process-scoped Anthropic catalog client for b.
 func GetClient(b config.BackendDef) (*Client, error) {
 	if !b.IsAnthropicExtension() {
-		return nil, fmt.Errorf("%w: %q", errNotAnthropicExtension, b.ID)
+		return nil, derrors.Wrap(errNotAnthropicExtension, derrors.CodeInvalid, "anthropic", "backend").With("backend", b.ID)
 	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {

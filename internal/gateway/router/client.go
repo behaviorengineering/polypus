@@ -651,7 +651,9 @@ func bifrostErr(berr *schemas.BifrostError, header http.Header) error {
 		return derrors.Wrap(rl, derrors.CodeRateLimited, "router.bifrost", "provider rate limited")
 	}
 	if berr.Error != nil && berr.Error.Error != nil {
-		out := derrors.Wrap(berr.Error.Error, derrors.CodeUnavailable, "router.bifrost", "provider call")
+		// Keep a domain code the provider (or a plugin) already set, such as a
+		// rate limit or invalid input; otherwise the provider failed.
+		out := derrors.Wrap(berr.Error.Error, derrors.CodeOr(berr.Error.Error, derrors.CodeUnavailable), "router.bifrost", "provider call")
 		if status > 0 {
 			out = out.With("status", fmt.Sprintf("%d", status))
 		}

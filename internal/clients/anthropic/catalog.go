@@ -54,7 +54,7 @@ type Client struct {
 // NewClient builds an Anthropic catalog client from a backend definition.
 func NewClient(b config.BackendDef) (*Client, error) {
 	if !b.IsAnthropicExtension() {
-		return nil, fmt.Errorf("%w: %q", errNotAnthropicExtension, b.ID)
+		return nil, derrors.Wrap(errNotAnthropicExtension, derrors.CodeInvalid, "anthropic", "backend").With("backend", b.ID)
 	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {
@@ -102,7 +102,7 @@ func modelsListURL(base string) string {
 // ListModelsStrict fetches the catalog or returns an error when fetch fails and no cache exists.
 func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
-		return ModelList{}, fmt.Errorf("anthropic: not configured")
+		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, "anthropic", "not configured")
 	}
 	if ctx == nil {
 		return ModelList{}, derrors.New(derrors.CodeInvalid, "anthropic.ListModelsStrict", "context required")
@@ -136,13 +136,13 @@ func (c *Client) fetchAll(ctx context.Context) ([]Model, error) {
 		}
 		afterID = p.LastID
 	}
-	return nil, fmt.Errorf("anthropic models: more than %d pages", modelsMaxPages)
+	return nil, derrors.New(derrors.CodeUnavailable, "anthropic models", fmt.Sprintf("more than %d pages", modelsMaxPages))
 }
 
 func (c *Client) fetchPage(ctx context.Context, afterID string) (anthropicModelPage, error) {
 	u, err := url.Parse(c.listURL)
 	if err != nil {
-		return anthropicModelPage{}, fmt.Errorf("anthropic models: list url: %w", err)
+		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeInternal, "anthropic models", "list url")
 	}
 	q := u.Query()
 	q.Set("limit", strconv.Itoa(modelsPageLimit))
@@ -152,7 +152,7 @@ func (c *Client) fetchPage(ctx context.Context, afterID string) (anthropicModelP
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return anthropicModelPage{}, fmt.Errorf("anthropic models: request: %w", err)
+		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeInternal, "anthropic models", "request")
 	}
 	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", apiVersion)
@@ -160,12 +160,12 @@ func (c *Client) fetchPage(ctx context.Context, afterID string) (anthropicModelP
 
 	resp, err := outbound.Do(ctx, outbound.DepAnthropic, c.httpClient, req)
 	if err != nil {
-		return anthropicModelPage{}, fmt.Errorf("anthropic models: fetch: %w", err)
+		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "anthropic models", "fetch")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
 	if err != nil {
-		return anthropicModelPage{}, fmt.Errorf("anthropic models: read: %w", err)
+		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeUnavailable, "anthropic models", "read")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -173,13 +173,13 @@ func (c *Client) fetchPage(ctx context.Context, afterID string) (anthropicModelP
 				With("status", strconv.Itoa(resp.StatusCode))
 		}
 		if outbound.HTTPStatusPermanent(resp.StatusCode) {
-			return anthropicModelPage{}, outbound.Abort(fmt.Errorf("anthropic models: status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200)))
+			return anthropicModelPage{}, outbound.Abort(derrors.New(catalog.StatusCode(resp.StatusCode), "anthropic models", fmt.Sprintf("status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200))))
 		}
-		return anthropicModelPage{}, fmt.Errorf("anthropic models: status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200))
+		return anthropicModelPage{}, derrors.New(catalog.StatusCode(resp.StatusCode), "anthropic models", fmt.Sprintf("status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200)))
 	}
 	var page anthropicModelPage
 	if err := json.Unmarshal(raw, &page); err != nil {
-		return anthropicModelPage{}, fmt.Errorf("anthropic models: decode: %w", err)
+		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeUnavailable, "anthropic models", "decode")
 	}
 	return page, nil
 }

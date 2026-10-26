@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/failsafe-go/failsafe-go"
 	"github.com/failsafe-go/failsafe-go/circuitbreaker"
 	"github.com/failsafe-go/failsafe-go/retrypolicy"
@@ -85,10 +87,10 @@ func TransportRetryable(err error) bool {
 
 func validateCtx(ctx context.Context) error {
 	if ctx == nil {
-		return fmt.Errorf("outbound: context required")
+		return derrors.New(derrors.CodeInvalid, "outbound", "context required")
 	}
 	if _, ok := ctx.Deadline(); !ok {
-		return fmt.Errorf("outbound: missing deadline")
+		return derrors.New(derrors.CodeFailedPrecondition, "outbound", "missing deadline")
 	}
 	return nil
 }
@@ -207,7 +209,7 @@ func Do(ctx context.Context, name string, client *http.Client, req *http.Request
 		client = http.DefaultClient
 	}
 	if req == nil {
-		return nil, fmt.Errorf("outbound: nil request")
+		return nil, derrors.New(derrors.CodeInvalid, "outbound", "nil request")
 	}
 	pol := policies(name)
 	if !replayable(req) {
@@ -252,7 +254,7 @@ func Do(ctx context.Context, name string, client *http.Client, req *http.Request
 		if resp != nil {
 			return resp, nil
 		}
-		return nil, err
+		return nil, dialError(name, err)
 	}
 	return resp, nil
 }
@@ -268,7 +270,7 @@ func DoOnce(ctx context.Context, name string, client *http.Client, req *http.Req
 		client = http.DefaultClient
 	}
 	if req == nil {
-		return nil, fmt.Errorf("outbound: nil request")
+		return nil, derrors.New(derrors.CodeInvalid, "outbound", "nil request")
 	}
 	var resp *http.Response
 	err := failsafe.With(breakerOnly(name)...).
@@ -282,9 +284,15 @@ func DoOnce(ctx context.Context, name string, client *http.Client, req *http.Req
 			return nil
 		})
 	if err != nil {
-		return nil, err
+		return nil, dialError(name, err)
 	}
 	return resp, nil
+}
+
+// dialError types a transport or breaker failure as CodeUnavailable for dep name,
+// keeping any domain code already in the chain.
+func dialError(name string, err error) error {
+	return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "outbound."+name, "dial")
 }
 
 // cloneRequest copies req for one attempt. Clone shares the body, so a replayable

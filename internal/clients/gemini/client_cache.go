@@ -1,7 +1,7 @@
 package gemini
 
 import (
-	"fmt"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -16,7 +16,7 @@ func clientCacheKey(backendID, token, listURL string) string {
 // GetClient returns a process-scoped Gemini catalog client for b.
 func GetClient(b config.BackendDef) (*Client, error) {
 	if !b.IsGeminiExtension() {
-		return nil, fmt.Errorf("%w: %q", errNotGeminiExtension, b.ID)
+		return nil, derrors.Wrap(errNotGeminiExtension, derrors.CodeInvalid, "gemini", "backend").With("backend", b.ID)
 	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {

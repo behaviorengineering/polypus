@@ -153,7 +153,7 @@ func (p *runSpeechPlugin) shortCircuitSpeech(
 		ResponseFormat: format,
 	})
 	if err != nil {
-		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "synthesize").
+		wrapped := derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "cloudflare.runSpeech", "synthesize").
 			With("backend", b.ID).
 			With("model", model)
 		return shortCircuitFail(ctx, b, model, "speech", wrapped, false)
@@ -216,7 +216,7 @@ func (p *runSpeechPlugin) shortCircuitTranscription(
 		Language: lang,
 	})
 	if err != nil {
-		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "transcribe").
+		wrapped := derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "cloudflare.runSpeech", "transcribe").
 			With("backend", b.ID).
 			With("model", model)
 		return shortCircuitFail(ctx, b, model, "transcription", wrapped, false)

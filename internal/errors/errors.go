@@ -213,6 +213,17 @@ func (e *Error) Format(f fmt.State, verb rune) {
 	_, _ = io.WriteString(f, e.Error())
 }
 
+// CodeOr returns the outermost domain Code in err's chain, or fallback when the
+// chain holds no *Error. Wraps use it to keep an inner rate-limit or invalid-input
+// code instead of masking it with their own.
+func CodeOr(err error, fallback Code) Code {
+	var de *Error
+	if stderrors.As(err, &de) && de != nil {
+		return de.code
+	}
+	return fallback
+}
+
 // CodeOf returns the outermost domain Code, or CodeInternal if err holds no *Error.
 // errors.As also follows multi-%w wraps such as fmt.Errorf("%w: %w", de, sentinel).
 func CodeOf(err error) Code {

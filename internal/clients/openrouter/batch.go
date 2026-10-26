@@ -237,26 +237,10 @@ func (c *Client) do(ctx context.Context, method, target string, payload []byte) 
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "openrouter.do", "read body")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, derrors.New(statusCode(resp.StatusCode), "openrouter.do", errorMessage(raw, resp.StatusCode)).
+		return nil, derrors.New(catalog.StatusCode(resp.StatusCode), "openrouter.do", errorMessage(raw, resp.StatusCode)).
 			With("status", strconv.Itoa(resp.StatusCode))
 	}
 	return raw, nil
-}
-
-// statusCode maps an OpenRouter HTTP status to the closest domain code.
-func statusCode(status int) derrors.Code {
-	switch {
-	case status == http.StatusTooManyRequests:
-		return derrors.CodeRateLimited
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return derrors.CodeUnauthorized
-	case status == http.StatusNotFound || status == http.StatusGone:
-		return derrors.CodeNotFound
-	case status >= 400 && status < 500:
-		return derrors.CodeInvalid
-	default:
-		return derrors.CodeUnavailable
-	}
 }
 
 func errorMessage(raw []byte, status int) string {
