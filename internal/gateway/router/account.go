@@ -184,5 +184,11 @@ func allowedRequestsForBackend(b config.BackendDef) *schemas.AllowedRequests {
 	if b.HasCapability(config.CapEmbed) {
 		allowed.Embedding = true
 	}
+	if b.IsAnthropicExtension() && b.HasCapability(config.CapBatch) {
+		allowed.BatchCreate = true
+		allowed.BatchRetrieve = true
+		allowed.BatchResults = true
+		allowed.BatchCancel = true
+	}
 	return allowed
 }

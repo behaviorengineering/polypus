@@ -7,7 +7,7 @@ import (
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
-// FinalizePatch is the durable outcome of a completed Cloudflare batch poll.
+// FinalizePatch is the durable outcome of an upstream batch that has finished.
 type FinalizePatch struct {
 	OkJSONL       []byte
 	ErrJSONL      []byte
@@ -15,19 +15,22 @@ type FinalizePatch struct {
 	Status        BatchStatus
 	CompletedAt   int64
 	FailedAt      int64
+	CancelledAt   int64
 }
 
 func isTerminalBatchStatus(st BatchStatus) bool {
 	switch st {
 	case BatchStatusCompleted, BatchStatusFailed, BatchStatusCancelled, BatchStatusExpired:
 		return true
+	case BatchStatusValidating, BatchStatusInProgress, BatchStatusCancelling:
+		return false
 	default:
 		return false
 	}
 }
 
 func statusAllowsFinalize(st BatchStatus) bool {
-	return st == BatchStatusValidating || st == BatchStatusInProgress
+	return st == BatchStatusValidating || st == BatchStatusInProgress || st == BatchStatusCancelling
 }
 
 // TryFinalizeBatch atomically writes output files and terminal metadata when the batch is still open.
@@ -81,6 +84,7 @@ func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (BatchMeta,
 	meta.Status = patch.Status
 	meta.CompletedAt = patch.CompletedAt
 	meta.FailedAt = patch.FailedAt
+	meta.CancelledAt = patch.CancelledAt
 	if err := s.writeBatchMeta(&meta); err != nil {
 		return meta, false, err
 	}

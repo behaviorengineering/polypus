@@ -121,17 +121,8 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 			With("backend", backendID))
 		return
 	}
-	if !backend.IsCloudflareExtension() {
-		writeHandlerError(w, derrors.New(derrors.CodeFailedPrecondition, "gateway.serveBatchCreate", "batch only supported for cloudflare extension backends"))
-		return
-	}
-	if !backend.HasCapability(config.CapBatch) {
-		writeHandlerError(w, derrors.New(derrors.CodeFailedPrecondition, "gateway.serveBatchCreate", "backend lacks batch capability"))
-		return
-	}
-	if !cloudflare.ModelSupportsBatch(downstream) {
-		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveBatchCreate", "model does not support cloudflare batch").
-			With("model", downstream))
+	if err := validateBatchBackend(backend, req.Endpoint, downstream); err != nil {
+		writeHandlerError(w, err)
 		return
 	}
 	now := h.batchNowTime().Unix()
@@ -147,7 +138,6 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		Status:           batch.BatchStatusValidating,
 		BackendID:        backendID,
 		PublicModel:      publicModel,
-		CFModel:          cloudflare.NormalizeModel(downstream),
 		RequestCounts: batch.RequestCounts{
 			Total: len(parsed.Lines),
 		},
@@ -169,13 +159,13 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		ctx, cancel = context.WithTimeout(ctx, hop)
 		defer cancel()
 	}
-	var cfRequestID string
+	if backend.IsCloudflareExtension() {
+		meta.CFModel = cloudflare.NormalizeModel(downstream)
+	}
+	var upstreamID string
 	submitErr = h.upstreams.Execute(backendID, func() error {
-		client, err := h.cloudflareClient(backend)
-		if err != nil {
-			return err
-		}
-		cfRequestID, err = client.SubmitBatch(ctx, downstream, req.Endpoint, parsed.Lines)
+		var err error
+		upstreamID, err = h.submitBatch(ctx, backend, downstream, req.Endpoint, parsed.Lines, hop)
 		return err
 	})
 	if submitErr != nil {
@@ -188,7 +178,11 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		writeUpstreamDialError(w, submitErr, "", backendID, nil)
 		return
 	}
-	meta.CFRequestID = cfRequestID
+	if backend.IsCloudflareExtension() {
+		meta.CFRequestID = upstreamID
+	} else {
+		meta.UpstreamBatchID = upstreamID
+	}
 	meta.Status = batch.BatchStatusInProgress
 	meta.InProgressAt = h.batchNowTime().Unix()
 	if err := h.batchStore.UpdateBatch(*meta); err != nil {
@@ -217,7 +211,7 @@ func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, meta.Public())
 		return
 	}
-	meta, err = h.refreshBatchFromCloudflare(r, meta)
+	meta, err = h.refreshBatch(r, meta)
 	if err != nil {
 		if isBatchRefreshMiss(err) {
 			slog.Warn("polypus: batch refresh failed; returning last-known", "batch_id", meta.ID, "err", err)
@@ -241,18 +235,22 @@ func (h batchesHandler) applyBatchExpiry(meta batch.BatchMeta) (batch.BatchMeta,
 			return meta, false, err
 		}
 		return meta, true, nil
+	case batch.BatchStatusCancelling, batch.BatchStatusCompleted, batch.BatchStatusFailed,
+		batch.BatchStatusCancelled, batch.BatchStatusExpired:
+		return meta, false, nil
 	default:
 		return meta, false, nil
 	}
 }
 
-func (h batchesHandler) refreshBatchFromCloudflare(r *http.Request, meta batch.BatchMeta) (batch.BatchMeta, error) {
+// refreshBatch polls the upstream batch for its backend and finalizes it once finished.
+func (h batchesHandler) refreshBatch(r *http.Request, meta batch.BatchMeta) (batch.BatchMeta, error) {
 	if meta.Status == batch.BatchStatusCancelled {
 		return meta, nil
 	}
 	backend, ok := h.router.Registry().Backend(meta.BackendID)
 	if !ok {
-		return meta, derrors.New(derrors.CodeUnavailable, "gateway.refreshBatchFromCloudflare", errBackendNotFound)
+		return meta, derrors.New(derrors.CodeUnavailable, "gateway.refreshBatch", errBackendNotFound)
 	}
 	ctx := r.Context()
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), meta.BackendID, false, false)
@@ -261,6 +259,13 @@ func (h batchesHandler) refreshBatchFromCloudflare(r *http.Request, meta batch.B
 		ctx, cancel = context.WithTimeout(ctx, hop)
 		defer cancel()
 	}
+	if backend.IsAnthropicExtension() {
+		return h.refreshClaudeBatch(ctx, meta, hop)
+	}
+	return h.refreshBatchFromCloudflare(ctx, backend, meta)
+}
+
+func (h batchesHandler) refreshBatchFromCloudflare(ctx context.Context, backend config.BackendDef, meta batch.BatchMeta) (batch.BatchMeta, error) {
 	var poll cloudflare.BatchPollResult
 	err := h.upstreams.Execute(meta.BackendID, func() error {
 		client, err := h.cloudflareClient(backend)
@@ -307,6 +312,13 @@ func (h batchesHandler) finalizeBatch(meta batch.BatchMeta, poll cloudflare.Batc
 			failed++
 		}
 	}
+	return h.finalizeBatchOutput(meta, okJSONL, errJSONL, completed, failed)
+}
+
+// finalizeBatchOutput writes the output files and the terminal status. A batch that was
+// cancelling ends cancelled and keeps the lines that finished.
+func (h batchesHandler) finalizeBatchOutput(meta batch.BatchMeta, okJSONL, errJSONL []byte, completed, failed int) (batch.BatchMeta, error) {
+	createdUnix := h.batchNowTime().Unix()
 	patch := batch.FinalizePatch{
 		OkJSONL:  okJSONL,
 		ErrJSONL: errJSONL,
@@ -316,10 +328,14 @@ func (h batchesHandler) finalizeBatch(meta batch.BatchMeta, poll cloudflare.Batc
 			Failed:    failed,
 		},
 	}
-	if failed > 0 && completed == 0 {
+	switch {
+	case meta.Status == batch.BatchStatusCancelling:
+		patch.Status = batch.BatchStatusCancelled
+		patch.CancelledAt = createdUnix
+	case failed > 0 && completed == 0:
 		patch.Status = batch.BatchStatusFailed
 		patch.FailedAt = createdUnix
-	} else {
+	default:
 		patch.Status = batch.BatchStatusCompleted
 		patch.CompletedAt = createdUnix
 	}
@@ -351,10 +367,20 @@ func (h batchesHandler) serveBatchList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request, id string) {
-	_, err := h.batchStore.GetBatch(id)
+	meta, err := h.batchStore.GetBatch(id)
 	if err != nil {
 		writeHandlerError(w, err)
 		return
 	}
-	writeHandlerError(w, derrors.New(derrors.CodeUnimplemented, "gateway.serveBatchCancel", "batch cancel is not currently supported for cloudflare workers ai"))
+	backend, ok := h.router.Registry().Backend(meta.BackendID)
+	if !ok || !backend.IsAnthropicExtension() {
+		writeHandlerError(w, derrors.New(derrors.CodeUnimplemented, "gateway.serveBatchCancel", "batch cancel is not currently supported for cloudflare workers ai"))
+		return
+	}
+	meta, err = h.cancelClaudeBatch(r, meta)
+	if err != nil {
+		writeUpstreamDialError(w, err, "", meta.BackendID, nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, meta.Public())
 }

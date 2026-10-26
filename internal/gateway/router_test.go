@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/batch"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -22,13 +24,33 @@ import (
 )
 
 // fakeRouter satisfies Router without bifrost.Init (UsesBifrost always false).
+// noBatchRouter stubs BatchRouter for test routers that never dial batches.
+type noBatchRouter struct{}
+
 type fakeRouter struct {
+	noBatchRouter
 	reg *router.Registry
 }
 
 func (f *fakeRouter) Registry() *router.Registry { return f.reg }
 
 func (f *fakeRouter) UsesBifrost(string) bool { return false }
+
+func (noBatchRouter) ClaudeBatchCreate(context.Context, string, string, []batch.InputLine, time.Duration) (string, error) {
+	return "", fmt.Errorf("noBatchRouter: ClaudeBatchCreate not used")
+}
+
+func (noBatchRouter) ClaudeBatchStatus(context.Context, string, string, time.Duration) (router.BatchPoll, error) {
+	return router.BatchPoll{}, fmt.Errorf("noBatchRouter: ClaudeBatchStatus not used")
+}
+
+func (noBatchRouter) ClaudeBatchResults(context.Context, string, string, string, time.Duration) ([]router.BatchLineResult, error) {
+	return nil, fmt.Errorf("noBatchRouter: ClaudeBatchResults not used")
+}
+
+func (noBatchRouter) ClaudeBatchCancel(context.Context, string, string, time.Duration) error {
+	return fmt.Errorf("noBatchRouter: ClaudeBatchCancel not used")
+}
 
 func (f *fakeRouter) ChatCompletionRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
 	return nil, fmt.Errorf("fakeRouter: ChatCompletionRaw not used when UsesBifrost is false")
@@ -65,6 +87,7 @@ func (e *errSynthRouter) Synthesize(context.Context, router.SpeechRequest) ([]by
 
 // recordingRouter is a fake that can force Bifrost paths and record dials.
 type recordingRouter struct {
+	noBatchRouter
 	reg             *router.Registry
 	uses            map[string]bool
 	chatProviders   []string
