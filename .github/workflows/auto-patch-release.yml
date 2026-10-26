@@ -31,10 +31,16 @@ permissions:
   issues: write
 
 jobs:
+  # Release only from a green push to this repo's main. The branches filter on
+  # workflow_run matches by name, so a fork PR from a branch called main would
+  # otherwise get its head_sha tagged and released.
   gate:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
