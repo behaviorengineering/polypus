@@ -9,8 +9,6 @@ vars:
   GO_BUILDFLAGS: "-buildvcs=false"
   LDFLAGS: "-X github.com/behaviorengineering/polypus/internal/buildinfo.Version={{.VERSION}}"
   INTEGRATION_PKG: ./internal/smoke/integration
-  IMAGE_REPO: xynova/polypus
-  IMAGE_TAG: latest
   THEME_ACCENT: '{{.OPERATOR_CLI_THEME_ACCENT | default "42"}}'
   THEME_MARK: '{{.OPERATOR_CLI_THEME_MARK | default "214"}}'
 
@@ -24,6 +22,7 @@ env:
 tasks:
   default:
     desc: List local-dev tasks
+    summary: "Prints go tool task --list and the four first steps."
     silent: true
     cmds:
       - go tool task --list
@@ -34,117 +33,142 @@ tasks:
         echo "  2. go tool task serve"
         echo "  3. go tool task smoke-all"
         echo "  4. POLYPUS_SMOKE_OTEL=1 go tool task smoke-otel"
-        echo ""
-        echo "Long-running stack is process-compose. CLI catalog: bin/polypus help"
 
   build:
     desc: Build gateway and switchyard-server binaries
+    summary: "Builds bin/polypus (go build) and bin/switchyard-server (cargo install from providers/switchyard). Needs Go and a Rust toolchain."
     deps: [build-gateway, switchyard-build]
 
   serve:
     desc: process-compose TUI (gateway, backends, optional observability)
+    summary: "Builds, then starts the process-compose stack via scripts/pc-up.sh. Needs a POSIX shell and process-compose."
     deps: [build]
     cmds:
       - ./scripts/pc-up.sh
 
   serve-down:
     desc: Stop this process-compose project only
+    summary: "Stops this repo's process-compose project via scripts/pc-down.sh. Leaves Docker volumes alone."
     cmds:
       - ./scripts/pc-down.sh
 
   init:
     desc: Write XDG config from example via polypus init
+    summary: "Builds the gateway, then runs polypus init to write ~/.config/polypus/config.yaml from the example."
     deps: [build-gateway]
     cmds:
       - '{{.BINARY}} init'
 
   test:
     desc: Unit tests (excludes integration tag)
+    summary: "go test ./... (unit tests only; the integration tag is excluded)."
     cmds:
       - go test ./...
 
   vet:
     desc: Run go vet
+    summary: "go vet ./..."
     cmds:
       - go vet ./...
 
   lint:
     desc: Run golangci-lint on cmd, internal, and pkg
+    summary: "go tool golangci-lint over cmd, internal and pkg with .golangci.yml."
     cmds:
       - go tool golangci-lint run --timeout 5m ./cmd/... ./internal/... ./pkg/...
 
   format:
     desc: Format Go sources with gofumpt
+    summary: "go tool gofumpt -w over cmd, internal and pkg (rewrites files)."
     cmds:
       - go tool gofumpt -w ./cmd ./internal ./pkg
 
   tidy:
     desc: Run go mod tidy
+    summary: "go mod tidy (rewrites go.mod and go.sum)."
     cmds:
       - go mod tidy
 
   ci:
-    desc: Module CI checks (tidy, gofmt, vet, race tests, build)
+    desc: Module CI checks (tidy, gofumpt, vet, lint, race tests, build)
+    summary: "The local twin of CI quality: tidy check, config example drift, gofumpt check, vet, lint, race tests, build."
     cmds:
       - go mod tidy -diff
       - task: check-config-example
       - |
-        unformatted=$(gofmt -l .)
+        unformatted=$(go tool gofumpt -l ./cmd ./internal ./pkg)
         if [ -n "$unformatted" ]; then
-          echo "gofmt needed:"
+          echo "gofumpt needed (go tool task format):"
           echo "$unformatted"
           exit 1
         fi
       - go vet ./...
+      - task: lint
       - go test -race -count=1 ./...
       - go build {{.GO_BUILDFLAGS}} ./...
 
   mlx-sync:
     desc: uv sync for MLX backends
+    summary: "Runs backends/mlx/scripts/sync.sh (uv sync for the MLX backends). Apple silicon only."
     cmds:
       - ./backends/mlx/scripts/sync.sh
 
   build-smoke:
     desc: Build polypus-smoke CLI
+    summary: "Builds bin/polypus-smoke. Run probes with bin/polypus-smoke run (paid calls)."
     deps: [build-smoke-bin]
 
   docker-build:
-    desc: Build gateway Docker image
+    desc: Build the gateway image for this machine as polypus:dev
+    summary: "Cross-builds the gateway for linux/<this arch> into docker-bin/, then bakes the gateway target of docker-bake.hcl and loads polypus:dev. Needs Docker with buildx; the Switchyard image comes from release CI."
+    env:
+      GOOS: linux
+      CGO_ENABLED: "0"
+      PLATFORMS: linux/{{ARCH}}
     cmds:
-      - docker build -t {{.IMAGE_REPO}}:{{.IMAGE_TAG}} .
+      - go build {{.GO_BUILDFLAGS}} -ldflags "{{.LDFLAGS}}" -o docker-bin/{{ARCH}}/polypus ./cmd/polypus
+      - docker buildx bake -f docker-bake.hcl gateway --load
 
-  smoke:
+  smoke-tts:
     desc: Integration smoke TTS
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). TTS through the Cloudflare mock. Alias: smoke."
+    aliases: [smoke]
     cmds:
-      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeTTS
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeTTS$'
 
   smoke-local:
     desc: Integration smoke TTS (MLX local)
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). TTS through the local MLX mock."
     cmds:
       - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeTTSLocal$'
 
   smoke-chat:
     desc: Integration smoke chat
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). Chat."
     cmds:
-      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeChat
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeChat$'
 
   smoke-router:
     desc: Integration smoke router
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). A named router through the Switchyard mock."
     cmds:
       - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeRouter$'
 
   smoke-landing:
     desc: Integration smoke gateway landing
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). The gateway landing page."
     cmds:
       - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestGatewayLanding$'
 
   smoke-batch:
     desc: Integration smoke batch
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). Batch create, poll and output."
     cmds:
-      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeBatch
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeBatch$'
 
   smoke-higgs:
     desc: Integration smoke Higgs TTS
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). Higgs TTS; writes /tmp/polypus-higgs-smoke.mp3."
     env:
       POLYPUS_SMOKE_OUT: /tmp/polypus-higgs-smoke.mp3
     cmds:
@@ -152,30 +176,35 @@ tasks:
 
   smoke-stt:
     desc: Integration smoke STT
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). STT through the Cloudflare mock."
     cmds:
-      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeSTT
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeSTT$'
 
   smoke-stt-local:
     desc: Integration smoke STT (MLX local)
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). STT through the local MLX mock."
     cmds:
       - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeSTTLocal$'
 
   smoke-systemone:
     desc: Integration smoke systemone
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). SystemOne decisions."
     cmds:
-      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeSystemOne
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeSystemOne$'
 
   smoke-all:
     desc: Run all integration smokes
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). Every channel in one run."
     cmds:
-      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeAll
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeAll$'
 
   smoke-otel:
     desc: Integration smoke OTLP fan-out
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). OTLP fan-out (POLYPUS_SMOKE_OTEL=1)."
     env:
       POLYPUS_SMOKE_OTEL: "1"
     cmds:
-      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run TestSmokeOtelFanout
+      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeOtelFanout$'
 
   sync-config-example:
     internal: true

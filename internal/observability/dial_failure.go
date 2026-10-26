@@ -18,12 +18,12 @@ func EndDialSpan(span trace.Span, err error, upstreamName string) {
 		span.End()
 		return
 	}
-	AnnotateDialFailure(span, err, upstreamName)
+	annotateDialFailure(span, err, upstreamName)
 	span.End()
 }
 
-// AnnotateDialFailure sets OpenInference-friendly failure attributes on span.
-func AnnotateDialFailure(span trace.Span, err error, upstreamName string) {
+// annotateDialFailure sets OpenInference-friendly failure attributes on span.
+func annotateDialFailure(span trace.Span, err error, upstreamName string) {
 	if span == nil || err == nil {
 		return
 	}

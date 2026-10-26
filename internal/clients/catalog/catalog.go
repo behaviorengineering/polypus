@@ -6,8 +6,11 @@ package catalog
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 const (
@@ -37,11 +40,20 @@ type Cache struct {
 	models []Model
 	at     time.Time
 	ttl    time.Duration
+	now    func() time.Time
 }
 
 // NewCache returns an empty cache that serves entries younger than ttl.
 func NewCache(ttl time.Duration) *Cache {
-	return &Cache{ttl: ttl}
+	return NewCacheClock(ttl, time.Now)
+}
+
+// NewCacheClock is NewCache with an injected clock (tests step past the TTL).
+func NewCacheClock(ttl time.Duration, now func() time.Time) *Cache {
+	if now == nil {
+		panic("catalog.NewCacheClock: nil clock")
+	}
+	return &Cache{ttl: ttl, now: now}
 }
 
 // Get returns a copy of the cached models when they are present and fresh.
@@ -51,7 +63,20 @@ func (c *Cache) Get() ([]Model, bool) {
 	if len(c.models) == 0 {
 		return nil, false
 	}
-	if time.Since(c.at) > c.ttl {
+	if c.now().Sub(c.at) > c.ttl {
+		return nil, false
+	}
+	out := make([]Model, len(c.models))
+	copy(out, c.models)
+	return out, true
+}
+
+// GetStale returns a copy of the cached models whatever their age: the fallback
+// when a fetch fails.
+func (c *Cache) GetStale() ([]Model, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.models) == 0 {
 		return nil, false
 	}
 	out := make([]Model, len(c.models))
@@ -64,22 +89,36 @@ func (c *Cache) Put(models []Model) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.models = append([]Model(nil), models...)
-	c.at = time.Now()
+	c.at = c.now()
+}
+
+// Source is one backend's model catalog: where it is cached and how it is fetched.
+type Source struct {
+	Provider string
+	Backend  string
+	Cache    *Cache
+	Fetch    func(context.Context) ([]Model, error)
+	// Log receives the stale-cache warning; nil discards it.
+	Log *slog.Logger
 }
 
 // ListStrict serves a fresh cache hit, else fetches and caches. When the fetch fails it
-// falls back to a cached copy, and returns the error only when none exists.
-func ListStrict(ctx context.Context, provider string, cache *Cache, fetch func(context.Context) ([]Model, error)) (ModelList, error) {
+// falls back to a cached copy (and warns), and returns the error only when none exists.
+func ListStrict(ctx context.Context, src Source) (ModelList, error) {
+	if src.Cache == nil || src.Fetch == nil {
+		return ModelList{Object: ObjectList}, derrors.New(derrors.CodeInternal, "catalog.ListStrict", "cache and fetch required")
+	}
+	cache := src.Cache
 	if cached, ok := cache.Get(); ok {
 		return ModelList{Object: ObjectList, Data: cached}, nil
 	}
-	models, err := fetch(ctx)
+	models, err := src.Fetch(ctx)
 	if err != nil {
-		if cached, ok := cache.Get(); ok {
-			slog.Warn(provider+": models catalog fetch failed; using stale cache",
-				"err", err,
-				"cached_models", len(cached),
-			)
+		if cached, ok := cache.GetStale(); ok {
+			if src.Log != nil {
+				src.Log.Warn("polypus: models catalog fetch failed; using stale cache",
+					"provider", src.Provider, "backend", src.Backend, "cached_models", len(cached), "err", err)
+			}
 			return ModelList{Object: ObjectList, Data: cached}, nil
 		}
 		return ModelList{Object: ObjectList}, err
@@ -117,6 +156,22 @@ func (r *Registry[T]) Reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.clients = nil
+}
+
+// StatusCode maps an upstream HTTP status to the closest domain code.
+func StatusCode(status int) derrors.Code {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return derrors.CodeRateLimited
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return derrors.CodeUnauthorized
+	case status == http.StatusNotFound || status == http.StatusGone:
+		return derrors.CodeNotFound
+	case status >= 400 && status < 500:
+		return derrors.CodeInvalid
+	default:
+		return derrors.CodeUnavailable
+	}
 }
 
 // Truncate shortens s to at most n bytes for error messages.

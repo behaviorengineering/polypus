@@ -109,7 +109,7 @@ func TestModelsListURL(t *testing.T) {
 }
 
 func TestNewClientRejectsOtherExtensions(t *testing.T) {
-	_, err := NewClient(config.BackendDef{ID: "g", Extension: config.ExtensionGemini})
+	_, err := newClientFromBackend(config.BackendDef{ID: "g", Extension: config.ExtensionGemini})
 	if !errors.Is(err, errNotAnthropicExtension) {
 		t.Fatalf("err: %v", err)
 	}

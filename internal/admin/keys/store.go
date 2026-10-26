@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"regexp"
 	"strings"
@@ -49,6 +51,11 @@ type filePayload struct {
 }
 
 // CreateStore opens the key store at cfg.Path.
+
+// tokenPrefix starts every gateway access key: ppk.<id>.<secret>. parseToken must
+// match it exactly.
+const tokenPrefix = "ppk."
+
 func (cfg Config) CreateStore() (*Store, error) {
 	if strings.TrimSpace(cfg.Path) == "" {
 		return nil, derrors.New(derrors.CodeInvalid, "keys.CreateStore", "path required")
@@ -93,14 +100,14 @@ func (s *Store) Generate(name string) (GenerateResult, error) {
 		if err != nil {
 			return err
 		}
-		hash, err := hashSecret([]byte(secret))
+		hash, err := hashSecret(s.rand, []byte(secret))
 		if err != nil {
 			return derrors.Wrap(err, derrors.CodeInternal, "keys.Generate", "hash")
 		}
 		rec := Record{
 			ID:        id,
 			Name:      name,
-			Prefix:    "ppk." + id,
+			Prefix:    tokenPrefix + id,
 			Hash:      hash,
 			CreatedAt: s.clock().UTC().Format(time.RFC3339),
 		}
@@ -133,12 +140,11 @@ func (s *Store) Rotate(name string) (GenerateResult, error) {
 		if idx < 0 {
 			return derrors.New(derrors.CodeNotFound, "keys.Rotate", "key not found")
 		}
-		secret, err := s.newSecretBytes()
+		secret, token, err := s.secretForID(file.Keys[idx].ID)
 		if err != nil {
 			return err
 		}
-		token := "ppk." + file.Keys[idx].ID + "." + secret
-		hash, err := hashSecret([]byte(secret))
+		hash, err := hashSecret(s.rand, []byte(secret))
 		if err != nil {
 			return derrors.Wrap(err, derrors.CodeInternal, "keys.Rotate", "hash")
 		}
@@ -180,7 +186,7 @@ func (s *Store) Delete(name string) error {
 
 // List returns metadata for all keys.
 func (s *Store) List() ([]Record, error) {
-	file, err := s.readFresh()
+	file, err := s.read()
 	if err != nil {
 		return nil, err
 	}
@@ -189,13 +195,32 @@ func (s *Store) List() ([]Record, error) {
 
 // Verify checks a bearer token against the on-disk store (re-reads each call).
 func (s *Store) Verify(token string) (Record, error) {
+	file, err := s.read()
+	if err != nil {
+		return Record{}, err
+	}
+	return verifyIn(file, token)
+}
+
+// Authorize reads the store once for a request: open is true when no keys exist
+// (the gateway is unlocked); otherwise token must verify, and a bad or missing
+// token is CodeUnauthorized.
+func (s *Store) Authorize(token string) (open bool, err error) {
+	file, err := s.read()
+	if err != nil {
+		return false, err
+	}
+	if len(file.Keys) == 0 {
+		return true, nil
+	}
+	_, err = verifyIn(file, token)
+	return false, err
+}
+
+func verifyIn(file filePayload, token string) (Record, error) {
 	id, secret, ok := parseToken(token)
 	if !ok {
 		return Record{}, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
-	}
-	file, err := s.readFresh()
-	if err != nil {
-		return Record{}, err
 	}
 	for _, k := range file.Keys {
 		if k.ID != id {
@@ -209,14 +234,10 @@ func (s *Store) Verify(token string) (Record, error) {
 	return Record{}, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
 }
 
-func (s *Store) readFresh() (filePayload, error) {
-	return s.read()
-}
-
 func (s *Store) read() (filePayload, error) {
 	raw, err := os.ReadFile(s.path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return filePayload{Version: 1, Keys: nil}, nil
 		}
 		return filePayload{}, derrors.Wrap(err, derrors.CodeInternal, "keys.read", "read")
@@ -250,30 +271,22 @@ func (s *Store) newToken() (id string, secret string, token string, err error) {
 	return id, secret, token, err
 }
 
-func (s *Store) newSecretBytes() (secret string, err error) {
-	secretBytes := make([]byte, 32)
-	if _, err := io.ReadFull(s.rand, secretBytes); err != nil {
-		return "", derrors.Wrap(err, derrors.CodeInternal, "keys.newSecretBytes", "secret rand")
-	}
-	return base64.RawURLEncoding.EncodeToString(secretBytes), nil
-}
-
 func (s *Store) secretForID(id string) (secret string, token string, err error) {
 	secretBytes := make([]byte, 32)
 	if _, err := io.ReadFull(s.rand, secretBytes); err != nil {
 		return "", "", derrors.Wrap(err, derrors.CodeInternal, "keys.secretForID", "secret rand")
 	}
 	secret = base64.RawURLEncoding.EncodeToString(secretBytes)
-	token = "ppk." + id + "." + secret
+	token = tokenPrefix + id + "." + secret
 	return secret, token, nil
 }
 
 func parseToken(token string) (id, secret string, ok bool) {
 	token = strings.TrimSpace(token)
-	if !strings.HasPrefix(token, "ppk.") {
+	if !strings.HasPrefix(token, tokenPrefix) {
 		return "", "", false
 	}
-	rest := strings.TrimPrefix(token, "ppk.")
+	rest := strings.TrimPrefix(token, tokenPrefix)
 	parts := strings.SplitN(rest, ".", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", false

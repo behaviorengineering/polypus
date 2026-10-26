@@ -1,10 +1,11 @@
 package keys
 
 import (
-	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -18,9 +19,11 @@ const (
 	saltLen      = 16
 )
 
-func hashSecret(secret []byte) (string, error) {
+// hashSecret hashes secret with argon2id under a salt drawn from r (the store's
+// injected source, so tests can make the stored hash deterministic).
+func hashSecret(r io.Reader, secret []byte) (string, error) {
 	salt := make([]byte, saltLen)
-	if _, err := rand.Read(salt); err != nil {
+	if _, err := io.ReadFull(r, salt); err != nil {
 		return "", err
 	}
 	dk := argon2.IDKey(secret, salt, argonTime, argonMemory, argonThreads, argonKeyLen)
@@ -31,48 +34,72 @@ func hashSecret(secret []byte) (string, error) {
 	), nil
 }
 
+// Bounds for the cost settings read back from a stored hash. argon2.IDKey panics
+// on zero time or threads, and the memory setting is an allocation per check, so
+// a corrupt or hostile row must fail verification instead.
+const (
+	maxArgonTime   = 10
+	maxArgonMemory = 1 << 20 // KiB (1 GiB).
+	maxArgonKeyLen = 64
+)
+
 func verifyHash(encoded string, secret []byte) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 5 || parts[0] != "argon2id" || parts[1] != "v=19" {
 		return false
 	}
-	var memory uint32
-	var time uint32
-	var threads uint8
-	for _, p := range strings.Split(parts[2], ",") {
-		kv := strings.SplitN(p, "=", 2)
-		if len(kv) != 2 {
-			return false
-		}
-		switch kv[0] {
-		case "m":
-			var m uint64
-			if _, err := fmt.Sscanf(kv[1], "%d", &m); err != nil {
-				return false
-			}
-			memory = uint32(m)
-		case "t":
-			var t uint64
-			if _, err := fmt.Sscanf(kv[1], "%d", &t); err != nil {
-				return false
-			}
-			time = uint32(t)
-		case "p":
-			var p uint64
-			if _, err := fmt.Sscanf(kv[1], "%d", &p); err != nil {
-				return false
-			}
-			threads = uint8(p)
-		}
+	memory, passes, threads, ok := parseArgonParams(parts[2])
+	if !ok {
+		return false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[3])
 	if err != nil {
 		return false
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
+	if err != nil || len(want) == 0 || len(want) > maxArgonKeyLen {
 		return false
 	}
-	got := argon2.IDKey(secret, salt, time, memory, threads, uint32(len(want)))
+	got := argon2.IDKey(secret, salt, passes, memory, threads, uint32(len(want))) //nolint:gosec // G115: len(want) is at most maxArgonKeyLen
 	return subtle.ConstantTimeCompare(got, want) == 1
+}
+
+// parseArgonParams reads "m=..,t=..,p=..". All three are required and each must
+// be within the bounds above; ok is false otherwise.
+func parseArgonParams(s string) (memory, passes uint32, threads uint8, ok bool) {
+	seen := map[string]bool{}
+	for _, kv := range strings.Split(s, ",") {
+		key, val, found := strings.Cut(kv, "=")
+		if !found || seen[key] {
+			return 0, 0, 0, false
+		}
+		seen[key] = true
+		switch key {
+		case "m":
+			n, err := strconv.ParseUint(val, 10, 32)
+			if err != nil {
+				return 0, 0, 0, false
+			}
+			memory = uint32(n)
+		case "t":
+			n, err := strconv.ParseUint(val, 10, 32)
+			if err != nil {
+				return 0, 0, 0, false
+			}
+			passes = uint32(n)
+		case "p":
+			n, err := strconv.ParseUint(val, 10, 8)
+			if err != nil {
+				return 0, 0, 0, false
+			}
+			threads = uint8(n)
+		default:
+			return 0, 0, 0, false
+		}
+	}
+	if len(seen) != 3 || passes < 1 || passes > maxArgonTime || threads < 1 ||
+		memory < 8*uint32(threads) || memory > maxArgonMemory {
+		return 0, 0, 0, false
+	}
+	return memory, passes, threads, true
 }

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync/atomic"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -18,7 +20,7 @@ type Registry struct {
 // NewRegistry validates backend URLs and builds the routing table.
 func NewRegistry(cfg config.RouterConfig) (*Registry, error) {
 	for id, b := range cfg.Backends {
-		if err := ValidateBackend(b, cfg.Policy); err != nil {
+		if err := validateBackend(b, cfg.Policy); err != nil {
 			return nil, fmt.Errorf("backends.%s: %w", id, err)
 		}
 		if b.IsCloudflareExtension() {
@@ -44,12 +46,14 @@ func (r *Registry) ProxyBackendURL() string {
 
 // ResolveEmbed picks backend and model for text embeddings.
 func (r *Registry) ResolveEmbed(model string) (string, string, error) {
-	return r.resolveCapability(config.CapEmbed, r.loadCfg().EffectiveEmbedBackend(), model)
+	cfg := r.loadCfg()
+	return resolveCapability(cfg, config.CapEmbed, cfg.EffectiveEmbedBackend(), model)
 }
 
 // ResolveChat picks backend and model for text chat completions.
 func (r *Registry) ResolveChat(model string) (string, string, error) {
-	return r.resolveCapability(config.CapChat, r.loadCfg().EffectiveChatBackend(), model)
+	cfg := r.loadCfg()
+	return resolveCapability(cfg, config.CapChat, cfg.EffectiveChatBackend(), model)
 }
 
 // ResolveVision picks backend and model for multimodal chat completions.
@@ -59,12 +63,13 @@ func (r *Registry) ResolveVision(model string) (string, string, error) {
 	if defaultBackend == "" {
 		defaultBackend = cfg.EffectiveChatBackend()
 	}
-	return r.resolveCapability(config.CapVision, defaultBackend, model)
+	return resolveCapability(cfg, config.CapVision, defaultBackend, model)
 }
 
 // ResolveTTS picks provider and model for speech synthesis.
 func (r *Registry) ResolveTTS(model string) (schemas.ModelProvider, string, error) {
-	id, downstream, err := r.resolveCapability(config.CapTTS, r.loadCfg().EffectiveTTSBackend(), model)
+	cfg := r.loadCfg()
+	id, downstream, err := resolveCapability(cfg, config.CapTTS, cfg.EffectiveTTSBackend(), model)
 	if err != nil {
 		return "", "", err
 	}
@@ -73,7 +78,8 @@ func (r *Registry) ResolveTTS(model string) (schemas.ModelProvider, string, erro
 
 // ResolveSTT picks provider and model for transcription.
 func (r *Registry) ResolveSTT(model string) (schemas.ModelProvider, string, error) {
-	id, downstream, err := r.resolveCapability(config.CapSTT, r.loadCfg().EffectiveSTTBackend(), model)
+	cfg := r.loadCfg()
+	id, downstream, err := resolveCapability(cfg, config.CapSTT, cfg.EffectiveSTTBackend(), model)
 	if err != nil {
 		return "", "", err
 	}
@@ -89,58 +95,67 @@ func (r *Registry) ResolveSystemOne(model string) (string, string, error) {
 	if model == "" {
 		model = DefaultSystemOneModel
 	}
-	return r.resolveCapability(config.CapSystemOne, r.loadCfg().EffectiveSystemOneBackend(), model)
+	cfg := r.loadCfg()
+	return resolveCapability(cfg, config.CapSystemOne, cfg.EffectiveSystemOneBackend(), model)
 }
 
 // ResolveBatch picks backend and downstream model for OpenAI Batch (Cloudflare extension).
 func (r *Registry) ResolveBatch(model string) (string, string, error) {
-	return r.resolveCapability(config.CapBatch, r.loadCfg().EffectiveBatchBackend(), strings.TrimSpace(model))
+	cfg := r.loadCfg()
+	return resolveCapability(cfg, config.CapBatch, cfg.EffectiveBatchBackend(), strings.TrimSpace(model))
 }
 
-func (r *Registry) resolveCapability(cap config.Capability, defaultBackend, model string) (string, string, error) {
+// resolveCapability picks the backend and downstream model for cap from one config
+// snapshot. A "backend/model" prefix selects that backend; otherwise the default.
+// Errors are typed: a request the gateway cannot route is CodeInvalid, and a
+// default that the config does not provide is CodeNotReady.
+func resolveCapability(cfg config.RouterConfig, cap config.Capability, defaultBackend, model string) (string, string, error) {
+	const op = "router.resolve"
 	model = strings.TrimSpace(model)
 	if model == "" {
-		if cap == config.CapTTS || cap == config.CapSTT {
-			if defaultBackend == "" {
-				return "", "", fmt.Errorf("no default backend for %s", cap)
-			}
-			b, ok := r.loadCfg().Backends[defaultBackend]
-			if !ok {
-				return "", "", fmt.Errorf("default backend %q not found", defaultBackend)
-			}
-			if !b.HasCapability(cap) {
-				return "", "", fmt.Errorf("default backend %q does not support %s", defaultBackend, cap)
-			}
-			return defaultBackend, "", nil
+		if cap != config.CapTTS && cap != config.CapSTT {
+			return "", "", derrors.New(derrors.CodeInvalid, op, "model required").With("capability", string(cap))
 		}
-		return "", "", fmt.Errorf("model required")
+		// Speech may omit the model: the default backend picks its own.
+		if err := checkDefaultBackend(cfg, cap, defaultBackend); err != nil {
+			return "", "", err
+		}
+		return defaultBackend, "", nil
 	}
 	if i := strings.Index(model, "/"); i > 0 {
 		prefix := model[:i]
-		cfg := r.loadCfg()
 		if b, ok := cfg.Backends[prefix]; ok {
 			if !b.HasCapability(cap) {
-				return "", "", fmt.Errorf("backend %q does not support %s", prefix, cap)
+				return "", "", derrors.New(derrors.CodeInvalid, op, fmt.Sprintf("backend %q does not support %s", prefix, cap)).
+					With("backend", prefix)
 			}
 			rest := strings.TrimSpace(model[i+1:])
 			if rest == "" {
-				return "", "", fmt.Errorf("model required after backend prefix")
+				return "", "", derrors.New(derrors.CodeInvalid, op, "model required after backend prefix").With("backend", prefix)
 			}
 			return prefix, rest, nil
 		}
 	}
-	if defaultBackend == "" {
-		return "", "", fmt.Errorf("no default backend for %s", cap)
-	}
-	cfg := r.loadCfg()
-	b, ok := cfg.Backends[defaultBackend]
-	if !ok {
-		return "", "", fmt.Errorf("default backend %q not found", defaultBackend)
-	}
-	if !b.HasCapability(cap) {
-		return "", "", fmt.Errorf("default backend %q does not support %s", defaultBackend, cap)
+	if err := checkDefaultBackend(cfg, cap, defaultBackend); err != nil {
+		return "", "", err
 	}
 	return defaultBackend, model, nil
+}
+
+// checkDefaultBackend reports whether defaultBackend exists and serves cap.
+func checkDefaultBackend(cfg config.RouterConfig, cap config.Capability, defaultBackend string) error {
+	const op = "router.resolve"
+	if defaultBackend == "" {
+		return derrors.New(derrors.CodeInvalid, op, fmt.Sprintf("no default backend for %s; prefix the model with a backend id", cap))
+	}
+	b, ok := cfg.Backends[defaultBackend]
+	if !ok {
+		return derrors.New(derrors.CodeNotReady, op, fmt.Sprintf("default backend %q not found", defaultBackend))
+	}
+	if !b.HasCapability(cap) {
+		return derrors.New(derrors.CodeNotReady, op, fmt.Sprintf("default backend %q does not support %s", defaultBackend, cap))
+	}
+	return nil
 }
 
 // BackendURL returns the base URL for a backend id.

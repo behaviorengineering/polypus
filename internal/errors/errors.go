@@ -8,6 +8,7 @@
 package errors
 
 import (
+	stderrors "errors"
 	"fmt"
 	"io"
 	"maps"
@@ -91,14 +92,6 @@ func Wrap(cause error, code Code, op, message string) *Error {
 		code = CodeInternal
 	}
 	return &Error{code: code, op: op, message: message, cause: cause}
-}
-
-// NewDomainError is the pack-compatible constructor: code, message, optional cause.
-func NewDomainError(code Code, message string, cause error) *Error {
-	if cause == nil {
-		return New(code, "", message)
-	}
-	return Wrap(cause, code, "", message)
 }
 
 // Code returns the machine-readable class.
@@ -212,19 +205,54 @@ func (e *Error) Format(f fmt.State, verb rune) {
 	_, _ = io.WriteString(f, e.Error())
 }
 
-// CodeOf returns the outermost domain Code, or CodeInternal if err is not *Error.
+// CodeOr returns the outermost domain Code in err's chain, or fallback when the
+// chain holds no *Error. Wraps use it to keep an inner rate-limit or invalid-input
+// code instead of masking it with their own.
+func CodeOr(err error, fallback Code) Code {
+	var de *Error
+	if stderrors.As(err, &de) && de != nil {
+		return de.code
+	}
+	return fallback
+}
+
+// CodeOf returns the outermost domain Code, or CodeInternal if err holds no *Error.
+// errors.As also follows multi-%w wraps such as fmt.Errorf("%w: %w", de, sentinel).
 func CodeOf(err error) Code {
-	for err != nil {
-		if e, ok := err.(*Error); ok {
-			return e.code
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			break
-		}
-		err = u.Unwrap()
+	var de *Error
+	if stderrors.As(err, &de) && de != nil {
+		return de.code
 	}
 	return CodeInternal
+}
+
+// PublicMessage is the error text safe to return to an HTTP client: the domain
+// messages along the chain, without op names. Foreign causes (dial errors, URLs,
+// parser output) are kept only for caller errors (4xx), where they describe the
+// request; for 5xx they stay in the server log.
+func PublicMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	callerError := HTTPStatus(err) < http.StatusInternalServerError
+	var parts []string
+	for e := err; e != nil; {
+		var de *Error
+		if !stderrors.As(e, &de) || de == nil {
+			if callerError {
+				parts = append(parts, strings.TrimSpace(e.Error()))
+			}
+			break
+		}
+		if m := strings.TrimSpace(de.message); m != "" {
+			parts = append(parts, m)
+		}
+		e = de.cause
+	}
+	if len(parts) == 0 {
+		return http.StatusText(HTTPStatus(err))
+	}
+	return strings.Join(parts, ": ")
 }
 
 // HTTPStatus maps a domain code to an HTTP status for gateway handlers.
@@ -253,30 +281,53 @@ func HTTPStatus(err error) int {
 		return http.StatusNotImplemented
 	case CodeInternal:
 		return http.StatusInternalServerError
+	case CodeUnavailable:
+		return http.StatusBadGateway
 	default:
 		return http.StatusBadGateway
 	}
 }
 
-// Field walks the unwrap chain and returns the first metadata value for key.
+// Field returns the first metadata value for key, outermost first, anywhere in err's
+// tree.
 func Field(err error, key string) string {
 	key = strings.TrimSpace(key)
-	if err == nil || key == "" {
+	if key == "" {
 		return ""
 	}
-	for err != nil {
-		if de, ok := err.(*Error); ok && de != nil {
-			if v := strings.TrimSpace(de.fields[key]); v != "" {
-				return v
-			}
-			err = de.cause
-			continue
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return ""
-		}
-		err = u.Unwrap()
+	var out string
+	Walk(err, func(de *Error) bool {
+		out = strings.TrimSpace(de.fields[key])
+		return out == ""
+	})
+	return out
+}
+
+// Walk calls fn for every *Error in err's tree, outermost first and depth first,
+// following both Unwrap() error and the Unwrap() []error of joined errors. It stops
+// when fn returns false.
+func Walk(err error, fn func(*Error) bool) {
+	walk(err, fn)
+}
+
+func walk(err error, fn func(*Error) bool) bool {
+	if err == nil {
+		return true
 	}
-	return ""
+	if de, ok := err.(*Error); ok && de != nil { //nolint:errorlint // Walk visits each node itself.
+		if !fn(de) {
+			return false
+		}
+	}
+	switch u := err.(type) { //nolint:errorlint // Walk follows each unwrap itself.
+	case interface{ Unwrap() []error }:
+		for _, e := range u.Unwrap() {
+			if !walk(e, fn) {
+				return false
+			}
+		}
+	case interface{ Unwrap() error }:
+		return walk(u.Unwrap(), fn)
+	}
+	return true
 }

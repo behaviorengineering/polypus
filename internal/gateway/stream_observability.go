@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -16,18 +18,27 @@ import (
 type streamChunkCounterKey struct{}
 
 type streamChunkCounter struct {
-	mu    sync.Mutex
-	index int
+	mu     sync.Mutex
+	index  int
+	dumped int  // dropped-chunk dumps written for this stream.
+	warned bool // a dump write failure was already logged for this stream.
+	log    *slog.Logger
+	// dumpDir receives dropped-chunk dumps; empty turns them off.
+	dumpDir string
 }
 
-func withStreamChunkCounter(ctx context.Context) context.Context {
+// maxChunkDumpsPerStream caps dropped-chunk dumps for one stream: an upstream that
+// keeps streaming after finish_reason would otherwise write a file per chunk.
+const maxChunkDumpsPerStream = 5
+
+func withStreamChunkCounter(ctx context.Context, log *slog.Logger, dumpDir string) context.Context {
 	if ctx == nil {
 		return ctx
 	}
 	if _, ok := ctx.Value(streamChunkCounterKey{}).(*streamChunkCounter); ok {
 		return ctx
 	}
-	return context.WithValue(ctx, streamChunkCounterKey{}, &streamChunkCounter{})
+	return context.WithValue(ctx, streamChunkCounterKey{}, &streamChunkCounter{log: log, dumpDir: dumpDir})
 }
 
 func nextStreamChunkIndex(ctx context.Context) int {
@@ -44,19 +55,58 @@ func nextStreamChunkIndex(ctx context.Context) int {
 	return c.index
 }
 
-func recordBifrostStreamChunk(ctx context.Context, openaiJSON, rawProviderJSON, outbound []byte, action StreamSSEAction, emit bool) {
+func recordBifrostStreamChunk(ctx context.Context, chunk router.ChatStreamChunk, action streamSSEAction, emit bool) {
 	idx := nextStreamChunkIndex(ctx)
-	observability.RecordChatStreamChunk(ctx, idx, openaiJSON, rawProviderJSON, string(action), emit)
-	if action == StreamSSEDrop {
-		dumpIllegalStreamChunk(ctx, idx, openaiJSON, rawProviderJSON)
+	observability.RecordChatStreamChunk(ctx, observability.StreamChunk{
+		Index: idx, OpenAIJSON: chunk.OpenAIJSON, RawProviderJSON: chunk.RawProviderJSON, SSEAction: string(action), Emitted: emit,
+	})
+	if action == streamSSEDrop {
+		dumpIllegalStreamChunk(ctx, idx, chunk.OpenAIJSON, chunk.RawProviderJSON)
 	}
 }
 
-func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProviderJSON []byte) {
-	dir := observability.FailureDumpDir()
-	if dir == "" {
+// streamCounter returns the stream's counter, or nil outside a counted stream.
+func streamCounter(ctx context.Context) *streamChunkCounter {
+	if ctx == nil {
+		return nil
+	}
+	c, _ := ctx.Value(streamChunkCounterKey{}).(*streamChunkCounter)
+	return c
+}
+
+// claimChunkDump reports whether this stream may write another dump. Only counted
+// streams dump, so every dump is capped and its failure has a logger.
+func claimChunkDump(c *streamChunkCounter) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.dumped >= maxChunkDumpsPerStream {
+		return false
+	}
+	c.dumped++
+	return true
+}
+
+// warnChunkDumpOnce logs a failed dump write, once per stream.
+func warnChunkDumpOnce(c *streamChunkCounter, path, traceID string, err error) {
+	c.mu.Lock()
+	already := c.warned
+	c.warned = true
+	c.mu.Unlock()
+	if already {
 		return
 	}
+	c.log.Warn("polypus: stream chunk dump not written", "path", path, "trace_id", traceID, "err", err)
+}
+
+func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProviderJSON []byte) {
+	counter := streamCounter(ctx)
+	if counter == nil || counter.dumpDir == "" || !claimChunkDump(counter) {
+		return
+	}
+	dir := counter.dumpDir
 	traceID := "unknown"
 	sc := trace.SpanFromContext(ctx).SpanContext()
 	if sc.HasTraceID() {
@@ -65,14 +115,16 @@ func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProvide
 	name := fmt.Sprintf("stream-chunk-%s-%d-%d.json", traceID, idx, time.Now().UnixNano())
 	path := filepath.Join(dir, name)
 	payload := map[string]json.RawMessage{
-		"openai": openaiJSON,
+		apiFlavorOpenAI: openaiJSON,
 	}
 	if len(rawProviderJSON) > 0 {
 		payload["raw_provider"] = rawProviderJSON
 	}
 	body, err := json.Marshal(payload)
-	if err != nil {
-		return
+	if err == nil {
+		err = os.WriteFile(path, []byte(observability.RedactDumpText(string(body))), 0o600)
 	}
-	_ = os.WriteFile(path, body, 0o600)
+	if err != nil {
+		warnChunkDumpOnce(counter, path, traceID, err)
+	}
 }

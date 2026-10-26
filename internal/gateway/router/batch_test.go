@@ -134,7 +134,7 @@ func TestNewAccountAllowsClaudeBatchesWithCapability(t *testing.T) {
 	t.Setenv(anthropicTestKeyEnv, "secret-key-at-least-twenty-ch")
 	b := anthropicBackend("")
 	b.Capabilities = []config.Capability{config.CapChat, config.CapBatch}
-	pc, err := NewAccount(config.RouterConfig{
+	pc, err := newAccount(config.RouterConfig{
 		Timeouts: config.DefaultTimeouts(),
 		Backends: map[string]config.BackendDef{"claude_team": b},
 	}).GetConfigForProvider("claude_team")

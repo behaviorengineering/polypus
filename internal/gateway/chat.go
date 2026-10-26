@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,12 +24,12 @@ const (
 	errBackendNotFound = "polypus: backend not found"
 )
 
-func newChatProxyClient(max time.Duration) *http.Client {
-	if max <= 0 {
-		max = config.DefaultTimeouts().Max
+func newChatProxyClient(limit time.Duration) *http.Client {
+	if limit <= 0 {
+		limit = config.DefaultTimeouts().Max
 	}
 	return &http.Client{
-		Timeout:   max,
+		Timeout:   limit,
 		Transport: observability.WrapTransport(http.DefaultTransport),
 	}
 }
@@ -50,70 +52,6 @@ func streamSafeClient(client *http.Client) *http.Client {
 	return &http.Client{Transport: client.Transport}
 }
 
-func extractChatModel(body []byte) (string, error) {
-	var payload struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", derrors.Wrap(err, derrors.CodeInvalid, "gateway.extractChatModel", "invalid json")
-	}
-	model := strings.TrimSpace(payload.Model)
-	if model == "" {
-		return "", derrors.New(derrors.CodeInvalid, "gateway.extractChatModel", "model required")
-	}
-	return model, nil
-}
-
-func rewriteChatModel(body []byte, model string) ([]byte, error) {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteChatModel", "invalid json")
-	}
-	payload["model"] = model
-	out, err := json.Marshal(payload)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteChatModel", "marshal")
-	}
-	return out, nil
-}
-
-func chatBodyIsStream(body []byte) bool {
-	var payload struct {
-		Stream bool `json:"stream"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return false
-	}
-	return payload.Stream
-}
-
-func chatBodyHasVision(body []byte) bool {
-	var payload struct {
-		Messages []struct {
-			Content any `json:"content"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return false
-	}
-	for _, msg := range payload.Messages {
-		parts, ok := msg.Content.([]any)
-		if !ok {
-			continue
-		}
-		for _, part := range parts {
-			m, ok := part.(map[string]any)
-			if !ok {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(fmt.Sprint(m["type"])), "image_url") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // chatCompletionsURL joins base (with or without trailing /v1 or /v1/openai) to the OpenAI chat path.
 func chatCompletionsURL(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
@@ -127,11 +65,6 @@ const (
 	headerRouterSelectedModel     = "x-model-router-selected-model"
 	headerSwitchyardSelectedModel = "x-switchyard-selected-model"
 )
-
-func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
-	model, _ := extractChatModel(body)
-	return proxyChatCompletionsOpts(w, r, backendURL, body, client, hopTimeout, backendAuth, true, "", model, false)
-}
 
 // extractRouterSelectedModel reads Switchyard routing metadata from response headers or JSON body.
 func extractRouterSelectedModel(hdr http.Header, body []byte) string {
@@ -149,69 +82,110 @@ func extractRouterSelectedModel(hdr http.Header, body []byte) string {
 	return strings.TrimSpace(root.Model)
 }
 
-func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string, patchThinking bool, thinkingExtension string, thinkingModel string, recordRouterSelectedModel bool) error {
-	if patchThinking {
-		if patched, ok := applyChatThinking(body, thinkingExtension, thinkingModel); ok {
-			body = patched
-		}
-	}
-	target := chatCompletionsURL(backendURL)
-	streaming := chatBodyIsStream(body)
-	observability.RecordProxyIO(r.Context(), target, streaming, 0, -1)
-	ctx := r.Context()
-	// Non-stream: hop wall-clock via context. Stream: only client cancel (r.Context);
-	// Client.Timeout must also stay unset for streams (see streamSafeClient).
-	if hopTimeout > 0 && !streaming {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hopTimeout)
-		defer cancel()
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
-	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "request")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if streaming {
-		req.Header.Set("Accept", "text/event-stream, application/json")
-	} else {
-		req.Header.Set("Accept", "application/json")
-	}
-	if backendAuth != "" {
-		req.Header.Set("Authorization", backendAuth)
-	} else if auth := r.Header.Get("Authorization"); auth != "" {
-		req.Header.Set("Authorization", auth)
-	}
-	if hopTimeout > 0 {
-		req.Header.Set(config.TimeoutHeader, hopTimeout.String())
-	}
+// chatDial is one chat completion sent to an OpenAI-shaped backend or Switchyard.
+type chatDial struct {
+	backendURL string
+	client     *http.Client
+	// hop bounds a non-stream call end to end, and a stream until its headers arrive.
+	hop time.Duration
+	// streamIdle is the longest gap allowed between stream chunks.
+	streamIdle  time.Duration
+	backendAuth string
+	// stream is whether the body asks for SSE.
+	stream bool
+	// recordRouterSelectedModel tags the span with the model a router picked.
+	recordRouterSelectedModel bool
+	log                       *slog.Logger
+	// dumpDir receives dropped stream chunks; empty turns the dumps off.
+	dumpDir string
+}
 
-	if streaming {
-		client = streamSafeClient(client)
-	} else if client == nil {
-		client = newChatProxyClient(0)
+func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) error {
+	if d.log == nil {
+		return derrors.New(derrors.CodeInternal, "gateway.proxyChat", "chat dial needs a logger")
 	}
-	var resp *http.Response
-	if streaming {
-		resp, err = client.Do(req)
+	target := chatCompletionsURL(d.backendURL)
+	observability.RecordProxyIO(r.Context(), target, d.stream, 0, -1)
+	hop := hopBudget(d.hop, config.DefaultTimeouts().Chat)
+	// Non-stream: the hop bounds the whole call. Stream: the hop bounds the wait for
+	// headers, then the idle limit bounds each gap between chunks.
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if d.stream {
+		ctx, cancel = context.WithCancel(r.Context())
 	} else {
-		resp, err = outbound.Do(ctx, outbound.DepGateway, client, req)
+		ctx, cancel = context.WithTimeout(r.Context(), hop)
 	}
+	defer cancel()
+	req, err := d.newRequest(ctx, r, target, body, hop)
+	if err != nil {
+		return err
+	}
+	resp, err := d.send(ctx, req, hop, cancel)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "post").
 			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
-
-	if streaming {
-		return writeChatStreamResponse(w, r, resp, target, streaming)
+	if d.stream {
+		resp.Body = newIdleTimeoutBody(resp.Body, d.streamIdle, cancel)
+		return d.writeStreamResponse(w, r, resp, target)
 	}
+	return d.writeResponse(w, r, resp, target)
+}
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, chatMaxBody))
+// newRequest builds the backend POST. The backend's own credential wins; without one
+// the caller's Authorization header is forwarded.
+func (d chatDial) newRequest(ctx context.Context, r *http.Request, target string, body []byte, hop time.Duration) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
-		observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, -1)
-		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "read response")
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "request")
 	}
-	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, len(raw))
+	req.Header.Set("Content-Type", "application/json")
+	if d.stream {
+		req.Header.Set("Accept", "text/event-stream, application/json")
+	} else {
+		req.Header.Set("Accept", "application/json")
+	}
+	if d.backendAuth != "" {
+		req.Header.Set("Authorization", d.backendAuth)
+	} else if auth := r.Header.Get("Authorization"); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+	req.Header.Set(config.TimeoutHeader, hop.String())
+	return req, nil
+}
+
+// send dials once. A stream must get its headers within hop (cancel ends it
+// otherwise); a non-stream call is bounded by ctx.
+func (d chatDial) send(ctx context.Context, req *http.Request, hop time.Duration, cancel context.CancelFunc) (*http.Response, error) {
+	if d.stream {
+		firstByte := time.AfterFunc(hop, cancel)
+		resp, err := streamSafeClient(d.client).Do(req) //nolint:gosec // G704: target is the operator-configured backend URL
+		if !firstByte.Stop() && err != nil {
+			err = derrors.Wrap(err, derrors.CodeTimeout, "gateway.proxyChat", "no response headers within the hop budget").
+				With("hop", hop.String())
+		}
+		return resp, err
+	}
+	client := d.client
+	if client == nil {
+		client = newChatProxyClient(0)
+	}
+	// Sent once: retries belong to the caller and the fallback router, which get the
+	// first 429 or 5xx with its Retry-After.
+	return outbound.DoOnce(ctx, outbound.DepGateway, client, req)
+}
+
+// writeResponse relays a non-stream answer: a rate limit becomes an OpenAI 429 body,
+// and a success has reasoning merged into content (and the router's pick recorded).
+func (d chatDial) writeResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string) error {
+	raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
+	if err != nil {
+		observability.RecordProxyIO(r.Context(), target, false, resp.StatusCode, -1)
+		return err
+	}
+	observability.RecordProxyIO(r.Context(), target, false, resp.StatusCode, len(raw))
 	status := resp.StatusCode
 	if rewritten, ok := openaiRateLimitBody(resp.StatusCode, resp.Header, raw); ok {
 		raw = rewritten
@@ -220,27 +194,26 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 		if fixed, changed := mergeReasoningIntoContent(raw); changed {
 			raw = fixed
 		}
-		if recordRouterSelectedModel {
+		if d.recordRouterSelectedModel {
 			observability.RecordDownstreamModel(r.Context(), extractRouterSelectedModel(resp.Header, raw))
 		}
 	}
-
 	copyChatResponseHeaders(w, resp.Header)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(raw)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 	w.WriteHeader(status)
-	_, err = w.Write(raw)
-	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "write response")
+	if _, err := w.Write(raw); err != nil {
+		return afterHeaders(r.Context(), err, true, "gateway.proxyChat", "write response")
 	}
 	return upstream.StatusFailure(status)
 }
 
-func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string, streaming bool) error {
+func (d chatDial) writeStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string) error {
+	streaming, log := d.stream, d.log
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, err := io.ReadAll(io.LimitReader(resp.Body, chatMaxBody))
+		raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
 		if err != nil {
 			observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, -1)
-			return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "read stream")
+			return err
 		}
 		status := resp.StatusCode
 		if rewritten, ok := openaiRateLimitBody(resp.StatusCode, resp.Header, raw); ok {
@@ -248,21 +221,21 @@ func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.
 			status = http.StatusTooManyRequests
 		}
 		copyChatResponseHeaders(w, resp.Header)
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(raw)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 		w.WriteHeader(status)
 		_, err = w.Write(raw)
 		observability.RecordProxyIO(r.Context(), target, streaming, status, len(raw))
 		if err != nil {
-			return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "write stream")
+			return afterHeaders(r.Context(), err, true, "gateway.proxyChat", "write stream")
 		}
 		return upstream.StatusFailure(status)
 	}
 	copyChatResponseHeaders(w, resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	n, err := copyOpenAIChatStream(withStreamChunkCounter(r.Context()), w, io.LimitReader(resp.Body, chatMaxBody), false)
+	n, err := copyOpenAIChatStream(withStreamChunkCounter(r.Context(), log, d.dumpDir), w, io.LimitReader(resp.Body, chatMaxBody), false)
 	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, int(n))
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "write stream")
+		return afterHeaders(r.Context(), err, false, "gateway.proxyChat", "copy stream")
 	}
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
@@ -286,16 +259,13 @@ func copyChatResponseHeaders(w http.ResponseWriter, header http.Header) {
 	}
 }
 
-// applyChatThinking maps inbound OpenAI reasoning to backend-specific outbound fields.
-func applyChatThinking(body []byte, extension string, model string) ([]byte, bool) {
-	var root map[string]any
-	if err := json.Unmarshal(body, &root); err != nil {
-		return body, false
-	}
+// applyChatThinkingRoot maps inbound OpenAI reasoning to the backend's own fields in
+// root, and reports whether it changed anything.
+func applyChatThinkingRoot(root map[string]any, extension string, model string) bool {
 	wants := chatMapWantsThinking(root)
 	model = strings.ToLower(strings.TrimSpace(model))
 	if model == "" {
-		model = strings.ToLower(strings.TrimSpace(fmt.Sprint(root["model"])))
+		model = strings.ToLower(strings.TrimSpace(fmt.Sprint(root[keyModel])))
 	}
 	ext := strings.ToLower(strings.TrimSpace(extension))
 	var changed bool
@@ -308,14 +278,7 @@ func applyChatThinking(body []byte, extension string, model string) ([]byte, boo
 	default:
 		changed = stripCloudflareThinkingFields(root)
 	}
-	if !changed {
-		return body, false
-	}
-	out, err := json.Marshal(root)
-	if err != nil {
-		return body, false
-	}
-	return out, true
+	return changed
 }
 
 func stripCloudflareThinkingFields(root map[string]any) bool {
@@ -331,11 +294,15 @@ func stripCloudflareThinkingFields(root map[string]any) bool {
 	return changed
 }
 
+// reasoningEffortMinimal is the lowest OpenAI reasoning effort; Polypus treats it as
+// thinking off.
+const reasoningEffortMinimal = "minimal"
+
 func applyGeminiThinkingEmit(root map[string]any, model string, wants bool) bool {
 	changed := false
 	switch {
 	case strings.Contains(model, "gemma-4"):
-		effort := "minimal"
+		effort := reasoningEffortMinimal
 		if wants {
 			effort = "high"
 		}
@@ -349,7 +316,7 @@ func applyGeminiThinkingEmit(root map[string]any, model string, wants bool) bool
 		changed = setNestedReasoningMaxTokens(root, tokens) || changed
 		changed = deleteNestedReasoningField(root, "effort") || changed
 	case strings.Contains(model, "gemini-3"):
-		effort := "minimal"
+		effort := reasoningEffortMinimal
 		if wants {
 			effort = strings.ToLower(strings.TrimSpace(chatMapReasoningEffort(root)))
 			if effort == "" || chatReasoningEffortIsOff(effort) {
@@ -402,11 +369,23 @@ func applyCloudflareThinkingEmit(root map[string]any, model string, wants bool) 
 	return changed
 }
 
-func setNestedReasoningEffort(root map[string]any, effort string) bool {
-	reasoning, _ := root["reasoning"].(map[string]any)
-	if reasoning == nil {
-		reasoning = map[string]any{}
+// reasoningObject returns root["reasoning"], creating it when absent. ok is false
+// when the caller sent a non-object reasoning value, which is left untouched.
+func reasoningObject(root map[string]any) (map[string]any, bool) {
+	raw, present := root["reasoning"]
+	if !present || raw == nil {
+		reasoning := map[string]any{}
 		root["reasoning"] = reasoning
+		return reasoning, true
+	}
+	reasoning, ok := raw.(map[string]any)
+	return reasoning, ok
+}
+
+func setNestedReasoningEffort(root map[string]any, effort string) bool {
+	reasoning, ok := reasoningObject(root)
+	if !ok {
+		return false
 	}
 	if cur, ok := reasoning["effort"]; ok && strings.EqualFold(strings.TrimSpace(fmt.Sprint(cur)), effort) {
 		return false
@@ -416,10 +395,9 @@ func setNestedReasoningEffort(root map[string]any, effort string) bool {
 }
 
 func setNestedReasoningMaxTokens(root map[string]any, tokens int) bool {
-	reasoning, _ := root["reasoning"].(map[string]any)
-	if reasoning == nil {
-		reasoning = map[string]any{}
-		root["reasoning"] = reasoning
+	reasoning, ok := reasoningObject(root)
+	if !ok {
+		return false
 	}
 	cur, ok := reasoning["max_tokens"]
 	if ok {
@@ -511,50 +489,8 @@ func mergeReasoningIntoContent(body []byte) ([]byte, bool) {
 	return out, true
 }
 
-// ensureStreamChoiceFinishReason adds "finish_reason":null on each stream choice
-// that omits the key. Bifrost marshals nil finish reasons with omitempty, which
-// breaks OpenAI-compat clients (llm-go) that require the field on every chunk.
-func ensureStreamChoiceFinishReason(body []byte) ([]byte, bool) {
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(body, &root); err != nil {
-		return body, false
-	}
-	rawChoices, ok := root["choices"]
-	if !ok {
-		return body, false
-	}
-	var choices []map[string]json.RawMessage
-	if err := json.Unmarshal(rawChoices, &choices); err != nil || len(choices) == 0 {
-		return body, false
-	}
-	changed := false
-	for i := range choices {
-		if _, has := choices[i]["finish_reason"]; has {
-			continue
-		}
-		choices[i]["finish_reason"] = json.RawMessage("null")
-		changed = true
-	}
-	if !changed {
-		return body, false
-	}
-	updatedChoices, err := json.Marshal(choices)
-	if err != nil {
-		return body, false
-	}
-	root["choices"] = updatedChoices
-	out, err := json.Marshal(root)
-	if err != nil {
-		return body, false
-	}
-	return out, true
-}
-
 func jsonStringField(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	if string(raw) == "null" {
+	if isJSONNull(raw) {
 		return ""
 	}
 	var s string
@@ -562,14 +498,6 @@ func jsonStringField(raw json.RawMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(s)
-}
-
-func chatBodyWantsThinking(body []byte) bool {
-	var root map[string]any
-	if err := json.Unmarshal(body, &root); err != nil {
-		return false
-	}
-	return chatMapWantsThinking(root)
 }
 
 func chatMapReasoningEffort(root map[string]any) string {
@@ -589,7 +517,7 @@ func chatMapReasoningEffort(root map[string]any) string {
 
 func chatReasoningEffortIsOff(effort string) bool {
 	switch strings.ToLower(strings.TrimSpace(effort)) {
-	case "", "<nil>", "nil", "none", "off", "false", "0", "minimal":
+	case "", "<nil>", "nil", "none", "off", "false", "0", reasoningEffortMinimal:
 		return true
 	default:
 		return false

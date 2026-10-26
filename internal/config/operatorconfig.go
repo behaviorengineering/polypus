@@ -11,9 +11,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// appName names Polypus to the keyring (its service) and to the XDG config lookup.
+const appName = "polypus"
+
 func operatorConfigOptions() operatorconfig.Options {
 	return operatorconfig.Options{
-		App:        "polypus",
+		App:        appName,
 		ConfigEnv:  "POLYPUS_CONFIG",
 		ExtraPaths: polypusConfigExtraPaths(),
 	}
@@ -28,9 +31,9 @@ func polypusConfigExtraPaths() []string {
 	return out
 }
 
-// ResolvePolypusSecrets fills env vars from the keyring for secrets declared in config.yaml.
+// resolvePolypusSecrets fills env vars from the keyring for secrets declared in config.yaml.
 // When secrets is empty, no keyring lookups are performed.
-func ResolvePolypusSecrets(secrets []operatorconfig.Secret, kr operatorconfig.Keyring) error {
+func resolvePolypusSecrets(secrets []operatorconfig.Secret, kr operatorconfig.Keyring) error {
 	if len(secrets) == 0 {
 		return nil
 	}
@@ -59,7 +62,7 @@ func SetPolypusSecret(envName, value string, kr operatorconfig.Keyring) error {
 	if kr == nil {
 		kr = operatorconfig.DefaultKeyring()
 	}
-	return kr.Set("polypus", envName, operatorconfig.SanitizeSecret(value))
+	return kr.Set(appName, envName, operatorconfig.SanitizeSecret(value))
 }
 
 // RequireDeclaredSecret reports whether envName is listed under secrets: in the live config.
@@ -88,7 +91,7 @@ func declaredSecretEnvs() ([]string, error) {
 	if path == "" {
 		return nil, fmt.Errorf("no router config found; run polypus init and declare secrets: before secret set")
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -108,4 +111,10 @@ func declaredSecretEnvs() ([]string, error) {
 		out = append(out, n)
 	}
 	return out, nil
+}
+
+// UserConfigFilePath is where polypus init writes the user config
+// (~/.config/polypus/config.yaml, or under $XDG_CONFIG_HOME).
+func UserConfigFilePath() (string, error) {
+	return operatorconfig.UserConfigPath(appName, "config.yaml")
 }

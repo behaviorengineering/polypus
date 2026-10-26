@@ -19,6 +19,9 @@ const (
 	defaultTimeoutEmbed        = 60 * time.Second
 	defaultTimeoutSpeech       = 180 * time.Second
 	defaultTimeoutChatCF       = 60 * time.Second
+	// defaultStreamIdle is the longest gap allowed between chunks of a chat stream.
+	// Generous, so a long thinking pause is not cut off; Anthropic pings reset it.
+	defaultStreamIdle = 5 * time.Minute
 )
 
 // BackendTimeouts overrides capability buckets for one backend id.
@@ -26,6 +29,7 @@ type BackendTimeouts struct {
 	Chat         time.Duration
 	ChatThinking time.Duration
 	Vision       time.Duration
+	StreamIdle   time.Duration
 }
 
 // Timeouts are static per-hop budgets. Header overrides are clamped to Min..Max.
@@ -37,6 +41,7 @@ type Timeouts struct {
 	Vision       time.Duration
 	Embed        time.Duration
 	Speech       time.Duration
+	StreamIdle   time.Duration
 	Backends     map[string]BackendTimeouts
 }
 
@@ -48,6 +53,7 @@ type timeoutsFile struct {
 	Vision       string                   `yaml:"vision"`
 	Embed        string                   `yaml:"embed"`
 	Speech       string                   `yaml:"speech"`
+	StreamIdle   string                   `yaml:"stream_idle"`
 	Backends     map[string]backendTOFile `yaml:"backends"`
 }
 
@@ -55,6 +61,7 @@ type backendTOFile struct {
 	Chat         string `yaml:"chat"`
 	ChatThinking string `yaml:"chat_thinking"`
 	Vision       string `yaml:"vision"`
+	StreamIdle   string `yaml:"stream_idle"`
 }
 
 // DefaultTimeouts returns hang ceilings for chat (thinking off), vision, embed, and speech.
@@ -67,6 +74,7 @@ func DefaultTimeouts() Timeouts {
 		Vision:       defaultTimeoutVision,
 		Embed:        defaultTimeoutEmbed,
 		Speech:       defaultTimeoutSpeech,
+		StreamIdle:   defaultStreamIdle,
 		Backends: map[string]BackendTimeouts{
 			"cf_local": {Chat: defaultTimeoutChatCF},
 		},
@@ -97,6 +105,9 @@ func parseTimeoutsFile(file timeoutsFile) (Timeouts, error) {
 	if out.Speech, err = overlayDuration(file.Speech, out.Speech); err != nil {
 		return Timeouts{}, fmt.Errorf("timeouts.speech: %w", err)
 	}
+	if out.StreamIdle, err = overlayDuration(file.StreamIdle, out.StreamIdle); err != nil {
+		return Timeouts{}, fmt.Errorf("timeouts.stream_idle: %w", err)
+	}
 	if len(file.Backends) > 0 {
 		if out.Backends == nil {
 			out.Backends = map[string]BackendTimeouts{}
@@ -115,6 +126,9 @@ func parseTimeoutsFile(file timeoutsFile) (Timeouts, error) {
 			}
 			if cur.Vision, err = overlayDuration(entry.Vision, cur.Vision); err != nil {
 				return Timeouts{}, fmt.Errorf("timeouts.backends.%s.vision: %w", id, err)
+			}
+			if cur.StreamIdle, err = overlayDuration(entry.StreamIdle, cur.StreamIdle); err != nil {
+				return Timeouts{}, fmt.Errorf("timeouts.backends.%s.stream_idle: %w", id, err)
 			}
 			out.Backends[id] = cur
 		}
@@ -158,91 +172,115 @@ func ParseTimeoutValue(raw string) (time.Duration, error) {
 
 // Clamp bounds d to Min..Max.
 func (t Timeouts) Clamp(d time.Duration) time.Duration {
-	min := t.Min
-	max := t.Max
-	if min <= 0 {
-		min = defaultTimeoutMin
+	lo := t.Min
+	hi := t.Max
+	if lo <= 0 {
+		lo = defaultTimeoutMin
 	}
-	if max < min {
-		max = defaultTimeoutMax
+	if hi < lo {
+		hi = defaultTimeoutMax
 	}
-	if d < min {
-		return min
+	if d < lo {
+		return lo
 	}
-	if d > max {
-		return max
+	if d > hi {
+		return hi
 	}
 	return d
 }
 
 // ResolveChat picks a hop timeout: optional header, else vision / thinking / backend chat / chat.
-func (t Timeouts) ResolveChat(header, backendID string, vision, thinking bool) time.Duration {
+func (t Timeouts) ResolveChat(header, backendID string, kind ChatKind) time.Duration {
+	be := t.Backends[strings.TrimSpace(backendID)]
+	switch kind {
+	case ChatVision:
+		return t.headerOr(header, firstPositive(be.Vision, t.Vision))
+	case ChatThinking:
+		return t.headerOr(header, firstPositive(be.ChatThinking, t.ChatThinking))
+	case ChatPlain:
+		return t.headerOr(header, firstPositive(be.Chat, t.Chat))
+	default:
+		return t.headerOr(header, firstPositive(be.Chat, t.Chat))
+	}
+}
+
+// ChatKind picks which chat budget a request gets.
+type ChatKind int
+
+// Chat budgets.
+const (
+	ChatPlain ChatKind = iota
+	ChatVision
+	ChatThinking
+)
+
+// ChatKindOf is the budget for a chat request; vision wins over thinking.
+func ChatKindOf(vision, thinking bool) ChatKind {
+	switch {
+	case vision:
+		return ChatVision
+	case thinking:
+		return ChatThinking
+	default:
+		return ChatPlain
+	}
+}
+
+// headerOr is the caller's timeout header when it parses, else fallback, clamped.
+func (t Timeouts) headerOr(header string, fallback time.Duration) time.Duration {
 	if raw := strings.TrimSpace(header); raw != "" {
 		if d, err := ParseTimeoutValue(raw); err == nil {
 			return t.Clamp(d)
 		}
 	}
-	be := t.Backends[strings.TrimSpace(backendID)]
-	switch {
-	case vision:
-		if be.Vision > 0 {
-			return t.Clamp(be.Vision)
+	return t.Clamp(fallback)
+}
+
+func firstPositive(ds ...time.Duration) time.Duration {
+	for _, d := range ds {
+		if d > 0 {
+			return d
 		}
-		return t.Clamp(t.Vision)
-	case thinking:
-		if be.ChatThinking > 0 {
-			return t.Clamp(be.ChatThinking)
-		}
-		return t.Clamp(t.ChatThinking)
 	}
-	if be.Chat > 0 {
-		return t.Clamp(be.Chat)
+	return 0
+}
+
+// ResolveStreamIdle returns the longest gap allowed between chunks of a chat stream
+// for backendID: its own stream_idle, else the global one, else the default.
+func (t Timeouts) ResolveStreamIdle(backendID string) time.Duration {
+	if be := t.Backends[strings.TrimSpace(backendID)]; be.StreamIdle > 0 {
+		return be.StreamIdle
 	}
-	return t.Clamp(t.Chat)
+	if t.StreamIdle > 0 {
+		return t.StreamIdle
+	}
+	return defaultStreamIdle
 }
 
 // ResolveEmbed returns the embeddings hop timeout (header or embed bucket).
 func (t Timeouts) ResolveEmbed(header string) time.Duration {
-	if raw := strings.TrimSpace(header); raw != "" {
-		if d, err := ParseTimeoutValue(raw); err == nil {
-			return t.Clamp(d)
-		}
-	}
-	return t.Clamp(t.Embed)
+	return t.headerOr(header, t.Embed)
 }
 
 // ResolveSpeech returns the TTS/STT hop timeout (header or speech bucket).
 func (t Timeouts) ResolveSpeech(header string) time.Duration {
-	if raw := strings.TrimSpace(header); raw != "" {
-		if d, err := ParseTimeoutValue(raw); err == nil {
-			return t.Clamp(d)
-		}
-	}
-	return t.Clamp(t.Speech)
+	return t.headerOr(header, t.Speech)
 }
 
 // SpeechSeconds is the Bifrost per-provider request timeout for speech-only configs.
 func (t Timeouts) SpeechSeconds() int {
-	d := t.Speech
-	if d <= 0 {
-		d = defaultTimeoutSpeech
-	}
-	sec := int(t.Clamp(d).Seconds())
-	if sec < 1 {
-		return 1
-	}
-	return sec
+	return t.seconds(t.Speech, defaultTimeoutSpeech)
 }
 
 // ProviderSeconds is the Bifrost network timeout covering chat/embed/speech hops.
 func (t Timeouts) ProviderSeconds() int {
-	d := t.Max
+	return t.seconds(t.Max, defaultTimeoutMax)
+}
+
+// seconds is d (or def when d is unset), clamped, in whole seconds of at least one.
+func (t Timeouts) seconds(d, def time.Duration) int {
 	if d <= 0 {
-		d = defaultTimeoutMax
+		d = def
 	}
-	sec := int(t.Clamp(d).Seconds())
-	if sec < 1 {
-		return 1
-	}
-	return sec
+	return max(1, int(t.Clamp(d).Seconds()))
 }

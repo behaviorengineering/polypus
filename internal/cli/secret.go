@@ -2,102 +2,85 @@ package cli
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
 const secretCLIInsecureWarning = "WARNING! Passing the secret on the command line is insecure. Use a hidden prompt or --stdin."
 
-func printSecretUsage() {
-	fmt.Fprintf(os.Stderr, `usage:
-  polypus secret set <ENV>              # hidden prompt on a TTY
-  polypus secret set --stdin <ENV>      # read value from stdin (scripts)
-  polypus secret set <ENV> --stdin      # same; trailing --stdin also works
-
-options:
-  --stdin              Read secret from stdin
-  --password string    Secret on CLI (insecure; prefer prompt or --stdin)
-  -p string            Synonym for --password
-
-examples:
-  polypus secret set CF_AI_API_KEY
-  printf %%s "$TOKEN" | polypus secret set --stdin CF_AI_API_KEY
-  printf %%s "$TOKEN" | polypus secret set CF_AI_API_KEY --stdin
-
-`)
+type secretSetOpts struct {
+	fromStdin bool
+	password  string
+	dryRun    bool
 }
 
-// normalizeSecretSetArgs moves known flags ahead of the ENV name so Go's
-// flag.Parse does not stop at the first non-flag. Without this,
-// "secret set CF_ACCOUNT_ID --stdin" stores the literal "--stdin".
-func normalizeSecretSetArgs(args []string) []string {
-	var flags, positionals []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--stdin" || a == "-stdin":
-			flags = append(flags, "--stdin")
-		case a == "--password" || a == "-password" || a == "-p":
-			flags = append(flags, a)
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				flags = append(flags, args[i+1])
-				i++
+func newSecretCmd() *cobra.Command {
+	secret := &cobra.Command{
+		Use:   "secret",
+		Short: "Store secrets in the OS keyring",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := cmd.Help(); err != nil {
+				return err
 			}
-		case strings.HasPrefix(a, "--password="), strings.HasPrefix(a, "-p="):
-			flags = append(flags, a)
-		default:
-			positionals = append(positionals, a)
-		}
+			return exitStatus(2)
+		},
 	}
-	return append(flags, positionals...)
+	var o secretSetOpts
+	setCmd := &cobra.Command{
+		Use:     "set <ENV> [value]",
+		Short:   "Store CF_AI_API_KEY / CF_ACCOUNT_ID in OS keyring",
+		GroupID: groupSetup,
+		Args:    cobra.MinimumNArgs(1),
+		Example: `  polypus secret set CF_AI_API_KEY                          # hidden prompt on a TTY
+  printf %s "$TOKEN" | polypus secret set --stdin CF_AI_API_KEY
+  printf %s "$TOKEN" | polypus secret set CF_AI_API_KEY --stdin`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return exitStatus(runSecretSet(args, o))
+		},
+	}
+	setCmd.Flags().BoolVar(&o.fromStdin, "stdin", false, "read the secret from stdin")
+	setCmd.Flags().StringVarP(&o.password, "password", "p", "", "secret value on the command line (insecure; prefer the prompt or --stdin)")
+	setCmd.Flags().BoolVar(&o.dryRun, "dry-run", false, "check the name is declared under secrets: and write nothing")
+	secret.AddCommand(setCmd)
+	return secret
 }
 
-func runSecretSet(args []string) int {
-	fs := flag.NewFlagSet("secret set", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	var fromStdin bool
-	var password string
-	var passwordShort string
-	fs.BoolVar(&fromStdin, "stdin", false, "read secret from stdin")
-	fs.StringVar(&password, "password", "", "secret value (insecure on CLI)")
-	fs.StringVar(&passwordShort, "p", "", "synonym for --password")
-	if err := fs.Parse(normalizeSecretSetArgs(args)); err != nil {
-		return 2
-	}
-	rest := fs.Args()
-	if len(rest) < 1 {
-		printSecretUsage()
-		return 2
-	}
-	envName := strings.TrimSpace(rest[0])
-	if passwordShort != "" {
-		password = passwordShort
+func runSecretSet(args []string, o secretSetOpts) int {
+	envName := strings.TrimSpace(args[0])
+	if o.dryRun {
+		if err := config.RequireDeclaredSecret(envName); err != nil {
+			fmt.Fprintf(os.Stderr, "polypus secret set: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "polypus secret set: dry-run: would store %s in keyring (service polypus)\n", envName)
+		return 0
 	}
 
 	var value string
 	switch {
-	case len(rest) >= 2:
-		if password != "" || fromStdin {
+	case len(args) >= 2:
+		if o.password != "" || o.fromStdin {
 			fmt.Fprintln(os.Stderr, "polypus secret set: provide only one of: command-line value, --password, or --stdin")
 			return 2
 		}
-		joined := strings.Join(rest[1:], " ")
+		joined := strings.Join(args[1:], " ")
 		if looksLikeCLIFlag(joined) {
 			fmt.Fprintf(os.Stderr, "polypus secret set: refusing to store %q as a secret (looks like a flag); use --stdin or a hidden prompt\n", joined)
 			return 2
 		}
 		warnSecretOnCLI()
 		value = joined
-	case password != "":
+	case o.password != "":
 		warnSecretOnCLI()
-		value = password
-	case fromStdin:
+		value = o.password
+	case o.fromStdin:
 		line, err := readLineStdin(os.Stdin)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "polypus secret set: %v\n", err)

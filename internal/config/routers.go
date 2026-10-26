@@ -10,17 +10,43 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// RouterIDPrefix starts every public router model id.
+const RouterIDPrefix = "router/"
+
+// reservedBackendID cannot name a backend: router/<name> model ids would be ambiguous.
+const reservedBackendID = "router"
+
+// RouteType is how a named router picks its leaf.
+type RouteType string
+
+// Route types.
 const (
-	RouterIDPrefix       = "router/"
-	RoutePassthrough     = "passthrough"
-	RouteStageRouter     = "stage_router"
-	RouteLLMClassifier   = "llm_classifier"
-	RouteFallback        = "fallback"
-	PickerEfficientFirst = "efficient_first"
-	PickerCapableFirst   = "capable_first"
-	ClassifierModeCustom = "custom"
-	PolicyTargetSelector = "target_selector"
+	RoutePassthrough   RouteType = "passthrough"
+	RouteStageRouter   RouteType = "stage_router"
+	RouteLLMClassifier RouteType = "llm_classifier"
+	RouteFallback      RouteType = "fallback"
 )
+
+// Picker is the order a stage_router tries its leaves in.
+type Picker string
+
+// Stage router pickers.
+const (
+	PickerEfficientFirst Picker = "efficient_first"
+	PickerCapableFirst   Picker = "capable_first"
+)
+
+// ClassifierMode is how an llm_classifier route is configured.
+type ClassifierMode string
+
+// ClassifierModeCustom is the one supported llm_classifier mode.
+const ClassifierModeCustom ClassifierMode = "custom"
+
+// PolicyType is how an llm_classifier reads the judge's decision.
+type PolicyType string
+
+// PolicyTargetSelector reads the chosen target from a JSON pointer.
+const PolicyTargetSelector PolicyType = "target_selector"
 
 // NamedRouter is one configured router/<name> entry.
 type NamedRouter struct {
@@ -37,20 +63,20 @@ type ClassifierTarget struct {
 
 // RouterRoute holds passthrough or composed routing policy.
 type RouterRoute struct {
-	Type                string
+	Type                RouteType
 	Target              string
 	Capable             string
 	Efficient           string
-	Picker              string
+	Picker              Picker
 	ConfidenceThreshold float64
 	RecentTurnWindow    *int
-	Mode                string
+	Mode                ClassifierMode
 	Classifier          string
 	Targets             []ClassifierTarget
 	DefaultTarget       string
 	Prompt              string
 	ResponseSchema      string
-	PolicyType          string
+	PolicyType          PolicyType
 	PolicySelector      string
 	SessionAffinity     *bool
 	MessageHashFallback *bool
@@ -78,6 +104,13 @@ func (r NamedRouter) IsComposed() bool {
 // FallbackTargetName returns the Switchyard target table name for a fallback leaf.
 func FallbackTargetName(routerName string, index int) string {
 	return fmt.Sprintf("%s_%d", strings.TrimSpace(routerName), index)
+}
+
+// StageTargetNames returns the Switchyard target names of a stage_router's capable and
+// efficient leaves.
+func StageTargetNames(routerName string) (capable, efficient string) {
+	n := strings.TrimSpace(routerName)
+	return n + "_capable", n + "_efficient"
 }
 
 // ClassifierTargetName returns the Switchyard target table name for the route judge.
@@ -186,7 +219,7 @@ func defaultSwitchyardConfig() SwitchyardConfig {
 		path = ""
 	}
 	return SwitchyardConfig{
-		BaseURL:    "http://127.0.0.1:4000",
+		BaseURL:    DefaultSwitchyardBaseURL,
 		ConfigPath: path,
 	}
 }
@@ -236,7 +269,7 @@ func parseNamedRouters(raw map[string]namedRouterFile) (map[string]NamedRouter, 
 }
 
 func parseRouterRoute(name string, file routerRouteFile) (RouterRoute, error) {
-	routeType := strings.TrimSpace(file.Type)
+	routeType := RouteType(strings.TrimSpace(file.Type))
 	if routeType == "" {
 		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.type required", name)
 	}
@@ -256,7 +289,7 @@ func parseRouterRoute(name string, file routerRouteFile) (RouterRoute, error) {
 		}
 		capable := strings.TrimSpace(file.Capable)
 		efficient := strings.TrimSpace(file.Efficient)
-		picker := strings.TrimSpace(file.Picker)
+		picker := Picker(strings.TrimSpace(file.Picker))
 		if capable == "" {
 			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.capable required for stage_router", name)
 		}
@@ -324,8 +357,80 @@ func parseFallbackRoute(name string, file routerRouteFile) (RouterRoute, error) 
 	return RouterRoute{Type: RouteFallback, FallbackTargets: leaves}, nil
 }
 
+// parseClassifierTargets reads the named targets in sorted order. seen holds every
+// target name, for checking default_target.
+func parseClassifierTargets(name string, named map[string]string) ([]ClassifierTarget, map[string]struct{}, error) {
+	keys := make([]string, 0, len(named))
+	for k := range named {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	targets := make([]ClassifierTarget, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	classifierTable := ClassifierTargetName(name)
+	for _, rawKey := range keys {
+		key := strings.TrimSpace(rawKey)
+		if key == "" {
+			return nil, nil, fmt.Errorf("router: routers.%s.route.targets key must not be empty", name)
+		}
+		if err := validateRouterName(key); err != nil {
+			return nil, nil, fmt.Errorf("router: routers.%s.route.targets.%s: %w", name, key, err)
+		}
+		if key == classifierTable {
+			return nil, nil, fmt.Errorf("router: routers.%s.route.targets.%s collides with classifier target name", name, key)
+		}
+		if _, ok := seen[key]; ok {
+			return nil, nil, fmt.Errorf("router: routers.%s.route.targets.%s duplicate", name, key)
+		}
+		seen[key] = struct{}{}
+		model := strings.TrimSpace(named[rawKey])
+		if model == "" {
+			return nil, nil, fmt.Errorf("router: routers.%s.route.targets.%s leaf required", name, key)
+		}
+		targets = append(targets, ClassifierTarget{Name: key, Model: model})
+	}
+	return targets, seen, nil
+}
+
+// classifierSelector checks the target_selector policy and returns its JSON Pointer.
+func classifierSelector(name string, policy *classifierRoutePolicyFile) (string, error) {
+	if policy == nil {
+		return "", fmt.Errorf("router: routers.%s.route.policy required for llm_classifier custom", name)
+	}
+	policyType := PolicyType(strings.TrimSpace(policy.Type))
+	if policyType == "" {
+		return "", fmt.Errorf("router: routers.%s.route.policy.type required for llm_classifier custom", name)
+	}
+	if policyType != PolicyTargetSelector {
+		return "", fmt.Errorf("router: routers.%s.route.policy.type %q unsupported (v1: target_selector)", name, policyType)
+	}
+	selector := strings.TrimSpace(policy.Selector)
+	if selector == "" {
+		return "", fmt.Errorf("router: routers.%s.route.policy.selector required for llm_classifier custom", name)
+	}
+	if !strings.HasPrefix(selector, "/") {
+		return "", fmt.Errorf("router: routers.%s.route.policy.selector must be a JSON Pointer starting with /", name)
+	}
+	return selector, nil
+}
+
+// validateClassifierKnobs checks the optional numeric and affinity settings.
+func validateClassifierKnobs(name string, file routerRouteFile) error {
+	if file.RecentTurnWindow != nil && *file.RecentTurnWindow < 0 {
+		return fmt.Errorf("router: routers.%s.route.recent_turn_window must be >= 0", name)
+	}
+	if file.MaxOutputTokens != nil && *file.MaxOutputTokens < 1 {
+		return fmt.Errorf("router: routers.%s.route.max_output_tokens must be >= 1", name)
+	}
+	if file.MessageHashFallback != nil && *file.MessageHashFallback &&
+		(file.SessionAffinity == nil || !*file.SessionAffinity) {
+		return fmt.Errorf("router: routers.%s.route.message_hash_fallback requires session_affinity: true", name)
+	}
+	return nil
+}
+
 func parseLLMClassifierRoute(name string, file routerRouteFile) (RouterRoute, error) {
-	mode := strings.TrimSpace(file.Mode)
+	mode := ClassifierMode(strings.TrimSpace(file.Mode))
 	if mode == "" {
 		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.mode required for llm_classifier", name)
 	}
@@ -339,34 +444,9 @@ func parseLLMClassifierRoute(name string, file routerRouteFile) (RouterRoute, er
 	if len(file.Targets.Named) < 2 {
 		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.targets requires at least 2 entries for llm_classifier custom", name)
 	}
-	keys := make([]string, 0, len(file.Targets.Named))
-	for k := range file.Targets.Named {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	targets := make([]ClassifierTarget, 0, len(keys))
-	seen := make(map[string]struct{}, len(keys))
-	classifierTable := ClassifierTargetName(name)
-	for _, rawKey := range keys {
-		key := strings.TrimSpace(rawKey)
-		if key == "" {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.targets key must not be empty", name)
-		}
-		if err := validateRouterName(key); err != nil {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.targets.%s: %w", name, key, err)
-		}
-		if key == classifierTable {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.targets.%s collides with classifier target name", name, key)
-		}
-		if _, ok := seen[key]; ok {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.targets.%s duplicate", name, key)
-		}
-		seen[key] = struct{}{}
-		model := strings.TrimSpace(file.Targets.Named[rawKey])
-		if model == "" {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.targets.%s leaf required", name, key)
-		}
-		targets = append(targets, ClassifierTarget{Name: key, Model: model})
+	targets, seen, err := parseClassifierTargets(name, file.Targets.Named)
+	if err != nil {
+		return RouterRoute{}, err
 	}
 	defaultTarget := strings.TrimSpace(file.DefaultTarget)
 	if defaultTarget == "" {
@@ -389,33 +469,12 @@ func parseLLMClassifierRoute(name string, file routerRouteFile) (RouterRoute, er
 	if err := validateClassifierResponseSchema(name, schema); err != nil {
 		return RouterRoute{}, err
 	}
-	if file.Policy == nil {
-		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.policy required for llm_classifier custom", name)
+	selector, err := classifierSelector(name, file.Policy)
+	if err != nil {
+		return RouterRoute{}, err
 	}
-	policyType := strings.TrimSpace(file.Policy.Type)
-	if policyType == "" {
-		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.policy.type required for llm_classifier custom", name)
-	}
-	if policyType != PolicyTargetSelector {
-		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.policy.type %q unsupported (v1: target_selector)", name, policyType)
-	}
-	selector := strings.TrimSpace(file.Policy.Selector)
-	if selector == "" {
-		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.policy.selector required for llm_classifier custom", name)
-	}
-	if !strings.HasPrefix(selector, "/") {
-		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.policy.selector must be a JSON Pointer starting with /", name)
-	}
-	if file.RecentTurnWindow != nil && *file.RecentTurnWindow < 0 {
-		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.recent_turn_window must be >= 0", name)
-	}
-	if file.MaxOutputTokens != nil && *file.MaxOutputTokens < 1 {
-		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.max_output_tokens must be >= 1", name)
-	}
-	if file.MessageHashFallback != nil && *file.MessageHashFallback {
-		if file.SessionAffinity == nil || !*file.SessionAffinity {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.message_hash_fallback requires session_affinity: true", name)
-		}
+	if err := validateClassifierKnobs(name, file); err != nil {
+		return RouterRoute{}, err
 	}
 	return RouterRoute{
 		Type:                RouteLLMClassifier,
@@ -425,7 +484,7 @@ func parseLLMClassifierRoute(name string, file routerRouteFile) (RouterRoute, er
 		DefaultTarget:       defaultTarget,
 		Prompt:              prompt,
 		ResponseSchema:      schema,
-		PolicyType:          policyType,
+		PolicyType:          PolicyTargetSelector, // classifierSelector accepts no other type.
 		PolicySelector:      selector,
 		RecentTurnWindow:    file.RecentTurnWindow,
 		SessionAffinity:     file.SessionAffinity,
@@ -450,76 +509,83 @@ func validateClassifierResponseSchema(name, schema string) error {
 }
 
 func validateRouters(cfg *RouterConfig) error {
-	if _, ok := cfg.Backends["router"]; ok {
-		return fmt.Errorf("router: backend id %q is reserved", "router")
+	if _, ok := cfg.Backends[reservedBackendID]; ok {
+		return fmt.Errorf("router: backend id %q is reserved", reservedBackendID)
 	}
+	// Switchyard target names a router emits must be unique across routers.
 	targetOwners := make(map[string]string)
-	claim := func(table, owner, field string) error {
-		if other, ok := targetOwners[table]; ok && other != owner {
-			return fmt.Errorf("router: %s Switchyard target %q conflicts with routers.%s (emitted target names must be unique)", field, table, other)
-		}
-		targetOwners[table] = owner
-		return nil
-	}
 	for name, router := range cfg.Routers {
 		if router.Capability != CapChat {
 			return fmt.Errorf("router: routers.%s.capability must be chat (v1)", name)
 		}
-		switch router.Route.Type {
-		case RoutePassthrough:
-			if err := validateChatLeaf(cfg, router.Route.Target, fmt.Sprintf("routers.%s.route.target", name)); err != nil {
+		leaves, err := routeLeaves(name, router.Route)
+		if err != nil {
+			return err
+		}
+		for _, l := range leaves {
+			if err := validateChatLeaf(cfg, l.leaf, l.field); err != nil {
 				return err
 			}
-		case RouteStageRouter:
-			if err := validateChatLeaf(cfg, router.Route.Capable, fmt.Sprintf("routers.%s.route.capable", name)); err != nil {
-				return err
+			if l.target == "" {
+				continue
 			}
-			if err := validateChatLeaf(cfg, router.Route.Efficient, fmt.Sprintf("routers.%s.route.efficient", name)); err != nil {
-				return err
+			if other, ok := targetOwners[l.target]; ok && other != name {
+				return fmt.Errorf("router: %s Switchyard target %q conflicts with routers.%s (emitted target names must be unique)", l.field, l.target, other)
 			}
-			if err := claim(name+"_capable", name, fmt.Sprintf("routers.%s.route.capable", name)); err != nil {
-				return err
-			}
-			if err := claim(name+"_efficient", name, fmt.Sprintf("routers.%s.route.efficient", name)); err != nil {
-				return err
-			}
-		case RouteLLMClassifier:
-			if err := validateChatLeaf(cfg, router.Route.Classifier, fmt.Sprintf("routers.%s.route.classifier", name)); err != nil {
-				return err
-			}
-			if err := claim(ClassifierTargetName(name), name, fmt.Sprintf("routers.%s.route.classifier", name)); err != nil {
-				return err
-			}
-			for _, t := range router.Route.Targets {
-				if err := validateChatLeaf(cfg, t.Model, fmt.Sprintf("routers.%s.route.targets.%s", name, t.Name)); err != nil {
-					return err
-				}
-				if err := claim(t.Name, name, fmt.Sprintf("routers.%s.route.targets.%s", name, t.Name)); err != nil {
-					return err
-				}
-			}
-		case RouteFallback:
-			for i, leaf := range router.Route.FallbackTargets {
-				field := fmt.Sprintf("routers.%s.route.targets[%d]", name, i)
-				if err := validateChatLeaf(cfg, leaf, field); err != nil {
-					return err
-				}
-				if err := claim(FallbackTargetName(name, i), name, field); err != nil {
-					return err
-				}
-			}
-		default:
-			return fmt.Errorf("router: routers.%s.route.type %q unsupported", name, router.Route.Type)
+			targetOwners[l.target] = name
 		}
 	}
-	if cfg.Switchyard.BaseURL == "" && cfg.HasComposedRouters() {
+	return nil
+}
+
+// fillSwitchyardDefaults gives composed routers the default Switchyard URL and
+// routes.toml path when the config names none.
+func fillSwitchyardDefaults(cfg *RouterConfig) {
+	if !cfg.HasComposedRouters() {
+		return
+	}
+	if cfg.Switchyard.BaseURL == "" {
 		cfg.Switchyard.BaseURL = defaultSwitchyardConfig().BaseURL
 	}
-	if cfg.Switchyard.ConfigPath == "" && cfg.HasComposedRouters() {
-		def := defaultSwitchyardConfig()
-		cfg.Switchyard.ConfigPath = def.ConfigPath
+	if cfg.Switchyard.ConfigPath == "" {
+		cfg.Switchyard.ConfigPath = defaultSwitchyardConfig().ConfigPath
 	}
-	return nil
+}
+
+// routeLeaf is one chat leaf a route dials.
+type routeLeaf struct {
+	field  string // config path, for errors.
+	leaf   string // backend_id/downstream.
+	target string // Switchyard target name it emits; empty for passthrough.
+}
+
+// routeLeaves lists the leaves of route by type, with the target names each emits.
+func routeLeaves(name string, route RouterRoute) ([]routeLeaf, error) {
+	field := func(suffix string) string { return fmt.Sprintf("routers.%s.route.%s", name, suffix) }
+	switch route.Type {
+	case RoutePassthrough:
+		return []routeLeaf{{field: field("target"), leaf: route.Target}}, nil
+	case RouteStageRouter:
+		capable, efficient := StageTargetNames(name)
+		return []routeLeaf{
+			{field: field("capable"), leaf: route.Capable, target: capable},
+			{field: field("efficient"), leaf: route.Efficient, target: efficient},
+		}, nil
+	case RouteLLMClassifier:
+		out := []routeLeaf{{field: field("classifier"), leaf: route.Classifier, target: ClassifierTargetName(name)}}
+		for _, t := range route.Targets {
+			out = append(out, routeLeaf{field: field("targets." + t.Name), leaf: t.Model, target: t.Name})
+		}
+		return out, nil
+	case RouteFallback:
+		out := make([]routeLeaf, 0, len(route.FallbackTargets))
+		for i, leaf := range route.FallbackTargets {
+			out = append(out, routeLeaf{field: field(fmt.Sprintf("targets[%d]", i)), leaf: leaf, target: FallbackTargetName(name, i)})
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("router: routers.%s.route.type %q unsupported", name, route.Type)
+	}
 }
 
 func validateChatLeaf(cfg *RouterConfig, leaf, field string) error {
@@ -527,7 +593,7 @@ func validateChatLeaf(cfg *RouterConfig, leaf, field string) error {
 	if err != nil {
 		return fmt.Errorf("router: %s: %w", field, err)
 	}
-	if backendID == "router" {
+	if backendID == reservedBackendID {
 		return fmt.Errorf("router: %s: backend id router forbidden", field)
 	}
 	b, ok := cfg.Backends[backendID]
@@ -580,7 +646,7 @@ func rejectFallbackRouteExtras(name string, file routerRouteFile) error {
 	return rejectClassifierOnlyFields(name, RouteFallback, rest)
 }
 
-func rejectStageOnlyFields(name, routeType string, file routerRouteFile) error {
+func rejectStageOnlyFields(name string, routeType RouteType, file routerRouteFile) error {
 	if strings.TrimSpace(file.Capable) != "" {
 		return fmt.Errorf("router: routers.%s.route.capable not allowed for %s", name, routeType)
 	}
@@ -603,7 +669,7 @@ func rejectStageRouteExtras(name string, file routerRouteFile) error {
 	if strings.TrimSpace(file.Target) != "" {
 		return fmt.Errorf("router: routers.%s.route.target not allowed for stage_router", name)
 	}
-	return rejectClassifierOnlyFields(name, "stage_router", file)
+	return rejectClassifierOnlyFields(name, RouteStageRouter, file)
 }
 
 func rejectClassifierRouteExtras(name string, file routerRouteFile) error {
@@ -613,22 +679,14 @@ func rejectClassifierRouteExtras(name string, file routerRouteFile) error {
 	if strings.TrimSpace(file.Target) != "" {
 		return fmt.Errorf("router: routers.%s.route.target not allowed for llm_classifier", name)
 	}
-	if strings.TrimSpace(file.Capable) != "" {
-		return fmt.Errorf("router: routers.%s.route.capable not allowed for llm_classifier", name)
-	}
-	if strings.TrimSpace(file.Efficient) != "" {
-		return fmt.Errorf("router: routers.%s.route.efficient not allowed for llm_classifier", name)
-	}
-	if strings.TrimSpace(file.Picker) != "" {
-		return fmt.Errorf("router: routers.%s.route.picker not allowed for llm_classifier", name)
-	}
-	if file.ConfidenceThreshold != nil {
-		return fmt.Errorf("router: routers.%s.route.confidence_threshold not allowed for llm_classifier", name)
-	}
-	return nil
+	// llm_classifier shares recent_turn_window with stage_router; every other
+	// stage-only field is refused.
+	stageOnly := file
+	stageOnly.RecentTurnWindow = nil
+	return rejectStageOnlyFields(name, RouteLLMClassifier, stageOnly)
 }
 
-func rejectClassifierOnlyFields(name, routeType string, file routerRouteFile) error {
+func rejectClassifierOnlyFields(name string, routeType RouteType, file routerRouteFile) error {
 	if strings.TrimSpace(file.Mode) != "" {
 		return fmt.Errorf("router: routers.%s.route.mode not allowed for %s", name, routeType)
 	}

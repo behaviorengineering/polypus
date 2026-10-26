@@ -8,15 +8,23 @@ import (
 	"github.com/behaviorengineering/polypus/internal/config"
 )
 
-// ModelSurface is a gateway API flavor for model catalog partitioning.
-type ModelSurface int
+// modelSurface is a gateway API flavor for model catalog partitioning.
+type modelSurface int
 
 const (
-	surfaceOpenAI ModelSurface = iota
+	surfaceOpenAI modelSurface = iota
 	surfaceSystemOne
 )
 
-const openAIModelsCanonicalPath = "/v1/apis/openai/models"
+// Model list paths of the two API surfaces.
+const (
+	pathOpenAIModels    = "/v1/apis/openai/models"
+	pathSystemOneModels = "/v1/apis/systemone/models"
+	pathFiles           = "/v1/files"
+	pathBatches         = "/v1/batches"
+)
+
+const openAIModelsCanonicalPath = pathOpenAIModels
 
 // apiOperation describes one HTTP operation for discovery clients.
 type apiOperation struct {
@@ -51,23 +59,26 @@ func buildAPICatalog(cfg config.RouterConfig) apiCatalog {
 	}
 }
 
+// apiFlavorOpenAI names the OpenAI-compatible API in the catalog.
+const apiFlavorOpenAI = "openai"
+
 func openAICatalogEntry() apiCatalogEntry {
 	return apiCatalogEntry{
-		ID:     "openai",
+		ID:     apiFlavorOpenAI,
 		Title:  "OpenAI-compatible",
-		Flavor: "openai",
-		Models: "/v1/apis/openai/models",
+		Flavor: apiFlavorOpenAI,
+		Models: pathOpenAIModels,
 		Schema: "/v1/apis/openai/openapi.yaml",
 		Operations: map[string]apiOperation{
-			"list_models":          {Method: "GET", Path: "/v1/apis/openai/models"},
-			"retrieve_model":       {Method: "GET", Path: "/v1/apis/openai/models/{id}"},
-			"chat_completions":     {Method: "POST", Path: "/v1/chat/completions"},
-			"embeddings":           {Method: "POST", Path: "/v1/embeddings"},
-			"audio_speech":         {Method: "POST", Path: "/v1/audio/speech"},
-			"audio_transcriptions": {Method: "POST", Path: "/v1/audio/transcriptions"},
-			"audio_voices":         {Method: "GET", Path: "/v1/audio/voices"},
-			"files":                {Method: "GET", Path: "/v1/files"},
-			"batches":              {Method: "POST", Path: "/v1/batches"},
+			"list_models":          {Method: http.MethodGet, Path: pathOpenAIModels},
+			"retrieve_model":       {Method: http.MethodGet, Path: "/v1/apis/openai/models/{id}"},
+			"chat_completions":     {Method: http.MethodPost, Path: "/v1/chat/completions"},
+			"embeddings":           {Method: http.MethodPost, Path: "/v1/embeddings"},
+			"audio_speech":         {Method: http.MethodPost, Path: "/v1/audio/speech"},
+			"audio_transcriptions": {Method: http.MethodPost, Path: "/v1/audio/transcriptions"},
+			"audio_voices":         {Method: http.MethodGet, Path: "/v1/audio/voices"},
+			"files":                {Method: http.MethodGet, Path: pathFiles},
+			"batches":              {Method: http.MethodPost, Path: pathBatches},
 		},
 	}
 }
@@ -77,12 +88,12 @@ func systemOneCatalogEntry() apiCatalogEntry {
 		ID:     "systemone",
 		Title:  "SystemOne",
 		Flavor: "systemone",
-		Models: "/v1/apis/systemone/models",
+		Models: pathSystemOneModels,
 		Schema: "/v1/apis/systemone/schema.json",
 		Operations: map[string]apiOperation{
-			"list_models":    {Method: "GET", Path: "/v1/apis/systemone/models"},
-			"retrieve_model": {Method: "GET", Path: "/v1/apis/systemone/models/{id}"},
-			"evaluate":       {Method: "POST", Path: "/v1/systemone"},
+			"list_models":    {Method: http.MethodGet, Path: pathSystemOneModels},
+			"retrieve_model": {Method: http.MethodGet, Path: "/v1/apis/systemone/models/{id}"},
+			"evaluate":       {Method: http.MethodPost, Path: "/v1/systemone"},
 		},
 	}
 }
@@ -104,7 +115,7 @@ func (h apiCatalogHandler) serveCatalog(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	encodeJSON(w, cat)
+	h.writeJSON(w, http.StatusOK, cat)
 }
 
 func setOpenAIModelsCanonicalLink(w http.ResponseWriter) {
@@ -154,7 +165,7 @@ func backendAndDownstreamForPublicID(cfg config.RouterConfig, publicID string) (
 	return "", publicID
 }
 
-func partitionModels(cfg config.RouterConfig, all []openaiModel, surface ModelSurface) []openaiModel {
+func partitionModels(cfg config.RouterConfig, all []openaiModel, surface modelSurface) []openaiModel {
 	out := make([]openaiModel, 0, len(all))
 	for _, m := range all {
 		sys := isSystemOneListedModel(cfg, m.ID)
@@ -172,13 +183,13 @@ func partitionModels(cfg config.RouterConfig, all []openaiModel, surface ModelSu
 	return out
 }
 
-func modelsForSurface(cfg config.RouterConfig, all []openaiModel, surface ModelSurface) []openaiModel {
+func modelsForSurface(cfg config.RouterConfig, all []openaiModel, surface modelSurface) []openaiModel {
 	part := partitionModels(cfg, all, surface)
 	return dedupeModelsByBackendDownstream(cfg, part)
 }
 
 // lookupModelForSurface finds a model by public id or an equivalent default-backend alias.
-func lookupModelForSurface(cfg config.RouterConfig, all []openaiModel, surface ModelSurface, id string) (openaiModel, bool) {
+func lookupModelForSurface(cfg config.RouterConfig, all []openaiModel, surface modelSurface, id string) (openaiModel, bool) {
 	models := modelsForSurface(cfg, all, surface)
 	wantKey := catalogModelKey(cfg, id)
 	for _, m := range models {

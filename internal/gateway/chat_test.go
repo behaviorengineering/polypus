@@ -118,7 +118,30 @@ func TestProxyChatCompletionsStream(t *testing.T) {
 	t.Cleanup(up.Close)
 	rec := httptest.NewRecorder()
 	body := []byte(`{"model":"test","messages":[],"stream":true}`)
-	if err := proxyChatCompletions(rec, httptest.NewRequest(http.MethodPost, "/", nil), up.URL, body, up.Client(), 0, ""); err != nil {
+	if err := proxyChat(rec, httptest.NewRequest(http.MethodPost, "/", nil), body,
+		chatDial{backendURL: up.URL, client: up.Client(), stream: true, log: testShared.log}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// applyChatThinking runs applyChatThinkingRoot over a JSON body.
+func applyChatThinking(body []byte, extension, model string) ([]byte, bool) {
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return body, false
+	}
+	if !applyChatThinkingRoot(root, extension, model) {
+		return body, false
+	}
+	out, err := json.Marshal(root)
+	if err != nil {
+		return body, false
+	}
+	return out, true
+}
+
+// chatBodyWantsThinking reports whether a JSON body asks for reasoning.
+func chatBodyWantsThinking(body []byte) bool {
+	var root map[string]any
+	return json.Unmarshal(body, &root) == nil && chatMapWantsThinking(root)
 }

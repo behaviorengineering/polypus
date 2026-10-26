@@ -148,14 +148,14 @@ func landingModelLinks(cfg config.RouterConfig) []landingLink {
 			Description: "Discovery index with model list URLs for each API surface.",
 		},
 		{
-			Href:        "/v1/apis/openai/models",
+			Href:        pathOpenAIModels,
 			Title:       "OpenAI models (enabled)",
 			Description: "Chat, vision, embed, audio, and router models allowed on this gateway.",
 		},
 	}
 	if cfg.EffectiveSystemOneBackend() != "" {
 		links = append(links, landingLink{
-			Href:        "/v1/apis/systemone/models",
+			Href:        pathSystemOneModels,
 			Title:       "SystemOne models",
 			Description: "TypeSafe and JEV decider models (POST /v1/systemone).",
 		})
@@ -189,15 +189,23 @@ func landingOTLPEndpointURL(r *http.Request, port string) string {
 	return requestScheme(r) + "://" + requestHostname(r) + ":" + port
 }
 
+// Ports of the local observability stack the landing page links to.
+const (
+	phoenixUIPort = "6006"
+	hyperdxUIPort = "8080"
+	otlpGRPCPort  = "4317"
+	otlpHTTPPort  = "4318"
+)
+
 func landingObservabilityUILinks(r *http.Request) []landingLink {
 	return []landingLink{
 		{
-			Href:        landingHostPortURL(r, "6006") + "/",
+			Href:        landingHostPortURL(r, phoenixUIPort) + "/",
 			Title:       "Phoenix (Arize)",
 			Description: "OpenInference LLM traces for chat and router spans.",
 		},
 		{
-			Href:        landingHostPortURL(r, "8080") + "/",
+			Href:        landingHostPortURL(r, hyperdxUIPort) + "/",
 			Title:       "HyperDX (OpenTelemetry)",
 			Description: "APM traces and logs.",
 		},
@@ -205,29 +213,35 @@ func landingObservabilityUILinks(r *http.Request) []landingLink {
 }
 
 func landingOTLPNote(r *http.Request) string {
-	grpc := landingOTLPEndpointURL(r, "4317")
-	httpURL := landingOTLPEndpointURL(r, "4318")
+	grpc := landingOTLPEndpointURL(r, otlpGRPCPort)
+	httpURL := landingOTLPEndpointURL(r, otlpHTTPPort)
 	return "OTEL_EXPORTER_OTLP_ENDPOINT\n" +
 		"grpc: " + grpc + "\n" +
 		"http: " + httpURL
 }
 
+// URL schemes a request can arrive on.
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 func requestScheme(r *http.Request) string {
 	if r == nil {
-		return "http"
+		return schemeHTTP
 	}
 	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
 		if i := strings.Index(proto, ","); i >= 0 {
 			proto = strings.TrimSpace(proto[:i])
 		}
-		if proto == "https" || proto == "http" {
+		if proto == schemeHTTPS || proto == schemeHTTP {
 			return proto
 		}
 	}
 	if r.TLS != nil {
-		return "https"
+		return schemeHTTPS
 	}
-	return "http"
+	return schemeHTTP
 }
 
 func requestHostname(r *http.Request) string {
@@ -270,7 +284,7 @@ func safeHostname(host string) bool {
 	return true
 }
 
-func (g *Gateway) serveLanding(w http.ResponseWriter, r *http.Request) {
+func (g *gatewayHandler) serveLanding(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -291,7 +305,7 @@ func (g *Gateway) serveLanding(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (g *Gateway) serveBannerWebP(w http.ResponseWriter, r *http.Request) {
+func (g *gatewayHandler) serveBannerWebP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

@@ -7,9 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/behaviorengineering/polypus/internal/batch"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -24,11 +21,7 @@ import (
 )
 
 // fakeRouter satisfies Router without bifrost.Init (UsesBifrost always false).
-// noBatchRouter stubs BatchRouter for test routers that never dial batches.
-type noBatchRouter struct{}
-
 type fakeRouter struct {
-	noBatchRouter
 	reg *router.Registry
 }
 
@@ -36,31 +29,15 @@ func (f *fakeRouter) Registry() *router.Registry { return f.reg }
 
 func (f *fakeRouter) UsesBifrost(string) bool { return false }
 
-func (noBatchRouter) ClaudeBatchCreate(context.Context, string, string, []batch.InputLine, time.Duration) (string, error) {
-	return "", fmt.Errorf("noBatchRouter: ClaudeBatchCreate not used")
-}
-
-func (noBatchRouter) ClaudeBatchStatus(context.Context, string, string, time.Duration) (router.BatchPoll, error) {
-	return router.BatchPoll{}, fmt.Errorf("noBatchRouter: ClaudeBatchStatus not used")
-}
-
-func (noBatchRouter) ClaudeBatchResults(context.Context, string, string, string, time.Duration) ([]router.BatchLineResult, error) {
-	return nil, fmt.Errorf("noBatchRouter: ClaudeBatchResults not used")
-}
-
-func (noBatchRouter) ClaudeBatchCancel(context.Context, string, string, time.Duration) error {
-	return fmt.Errorf("noBatchRouter: ClaudeBatchCancel not used")
-}
-
-func (f *fakeRouter) ChatCompletionRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
+func (f *fakeRouter) ChatCompletionRaw(context.Context, router.Call) ([]byte, error) {
 	return nil, fmt.Errorf("fakeRouter: ChatCompletionRaw not used when UsesBifrost is false")
 }
 
-func (f *fakeRouter) ChatCompletionStreamRaw(context.Context, string, string, []byte, time.Duration) (<-chan router.ChatStreamChunk, <-chan error, error) {
+func (f *fakeRouter) ChatCompletionStreamRaw(context.Context, router.Call) (<-chan router.ChatStreamChunk, <-chan error, error) {
 	return nil, nil, fmt.Errorf("fakeRouter: ChatCompletionStreamRaw not used when UsesBifrost is false")
 }
 
-func (f *fakeRouter) EmbeddingRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
+func (f *fakeRouter) EmbeddingRaw(context.Context, router.Call) ([]byte, error) {
 	return nil, fmt.Errorf("fakeRouter: EmbeddingRaw not used when UsesBifrost is false")
 }
 
@@ -72,7 +49,7 @@ func (f *fakeRouter) Transcribe(context.Context, router.TranscriptionRequest) ([
 	return nil, "", fmt.Errorf("fakeRouter: Transcribe not implemented")
 }
 
-func (f *fakeRouter) SystemOneDecisionRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
+func (f *fakeRouter) SystemOneDecisionRaw(context.Context, router.Call) ([]byte, error) {
 	return nil, fmt.Errorf("fakeRouter: SystemOneDecisionRaw not used when UsesBifrost is false")
 }
 
@@ -87,7 +64,6 @@ func (e *errSynthRouter) Synthesize(context.Context, router.SpeechRequest) ([]by
 
 // recordingRouter is a fake that can force Bifrost paths and record dials.
 type recordingRouter struct {
-	noBatchRouter
 	reg             *router.Registry
 	uses            map[string]bool
 	chatProviders   []string
@@ -106,13 +82,13 @@ func (r *recordingRouter) UsesBifrost(id string) bool {
 	return false
 }
 
-func (r *recordingRouter) ChatCompletionRaw(_ context.Context, backendID, model string, _ []byte, _ time.Duration) ([]byte, error) {
-	r.chatProviders = append(r.chatProviders, backendID+":"+model)
+func (r *recordingRouter) ChatCompletionRaw(_ context.Context, call router.Call) ([]byte, error) {
+	r.chatProviders = append(r.chatProviders, call.BackendID+":"+call.Model)
 	return []byte(`{"choices":[{"message":{"content":"via-bifrost"}}]}`), nil
 }
 
-func (r *recordingRouter) ChatCompletionStreamRaw(_ context.Context, backendID, model string, _ []byte, _ time.Duration) (<-chan router.ChatStreamChunk, <-chan error, error) {
-	r.streamProviders = append(r.streamProviders, backendID+":"+model)
+func (r *recordingRouter) ChatCompletionStreamRaw(_ context.Context, call router.Call) (<-chan router.ChatStreamChunk, <-chan error, error) {
+	r.streamProviders = append(r.streamProviders, call.BackendID+":"+call.Model)
 	chunks := make(chan router.ChatStreamChunk, 1)
 	errCh := make(chan error)
 	go func() {
@@ -123,8 +99,8 @@ func (r *recordingRouter) ChatCompletionStreamRaw(_ context.Context, backendID, 
 	return chunks, errCh, nil
 }
 
-func (r *recordingRouter) EmbeddingRaw(_ context.Context, backendID, model string, _ []byte, _ time.Duration) ([]byte, error) {
-	r.embedProviders = append(r.embedProviders, backendID+":"+model)
+func (r *recordingRouter) EmbeddingRaw(_ context.Context, call router.Call) ([]byte, error) {
+	r.embedProviders = append(r.embedProviders, call.BackendID+":"+call.Model)
 	return []byte(`{"data":[{"embedding":[0.1]}]}`), nil
 }
 
@@ -136,7 +112,7 @@ func (r *recordingRouter) Transcribe(context.Context, router.TranscriptionReques
 	return nil, "", fmt.Errorf("recordingRouter: Transcribe not implemented")
 }
 
-func (r *recordingRouter) SystemOneDecisionRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
+func (r *recordingRouter) SystemOneDecisionRaw(context.Context, router.Call) ([]byte, error) {
 	return nil, fmt.Errorf("recordingRouter: SystemOneDecisionRaw not implemented")
 }
 
@@ -154,9 +130,9 @@ func newFakeRouter(t *testing.T, opts config.ServeOptions) *fakeRouter {
 }
 
 // newTestGateway builds a handler with an injected Router (skips bifrost.Init).
-func newTestGateway(t *testing.T, opts config.ServeOptions, r Router, extra ...HandlerOption) http.Handler {
+func newTestGateway(t *testing.T, opts config.ServeOptions, r gatewayRouter, extra ...HandlerOption) http.Handler {
 	t.Helper()
-	options := append([]HandlerOption{WithRouter(r)}, extra...)
+	options := append([]HandlerOption{withRouter(r)}, extra...)
 	handler, err := NewHandler(opts, options...)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +140,7 @@ func newTestGateway(t *testing.T, opts config.ServeOptions, r Router, extra ...H
 	switch h := handler.(type) {
 	case *accessProtector:
 		t.Cleanup(h.Close)
-	case *Gateway:
+	case *gatewayHandler:
 		t.Cleanup(h.Close)
 	}
 	return handler
@@ -238,7 +214,7 @@ func TestWithRouterNilPanics(t *testing.T) {
 			t.Fatal("expected panic")
 		}
 	}()
-	_ = WithRouter(nil)
+	_ = withRouter(nil)
 }
 
 func TestSwitchyardNameAligned(t *testing.T) {
@@ -433,7 +409,7 @@ routers:
 		t.Fatal(err)
 	}
 	recRouter := &recordingRouter{reg: reg}
-	handler := observability.WrapHandler(newTestGateway(t, opts, recRouter))
+	handler := observability.WrapHandler(newTestGateway(t, opts, recRouter), nil)
 
 	ctx, root := tp.Tracer("client").Start(context.Background(), "test.client")
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(

@@ -15,51 +15,57 @@ func runChat(ctx context.Context, opts Options) ([]Result, error) {
 		}
 		return "health ok", nil
 	})
+	// One paid completion serves both the content and the selected-model probes.
+	var selected string
+	var chatErr error
 	content := timed(ChannelChat, "content_nonempty", opts.ChatModel, func() (string, error) {
-		text, _, _, err := chatPing(ctx, opts, opts.ChatModel)
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(text) == "" {
-			return "", fmt.Errorf("empty content")
+		var text string
+		text, _, selected, chatErr = chatPing(ctx, opts, opts.ChatModel)
+		if chatErr != nil {
+			return "", chatErr
 		}
 		d := strings.TrimSpace(text)
-		if len(d) > 60 {
-			d = d[:57] + "..."
+		if d == "" {
+			return "", fmt.Errorf("empty content")
 		}
-		return d, nil
+		return truncate(d, 60), nil
 	})
 	out := []Result{ping, content}
 	if opts.RequireSelectedModel || len(opts.AllowedSelectedModels) > 0 {
-		selected := timedSelected(ChannelChat, "selected_model", opts.ChatModel, func() (string, string, error) {
-			_, _, selected, err := chatPing(ctx, opts, opts.ChatModel)
-			if err != nil {
+		out = append(out, timedSelected(ChannelChat, "selected_model", opts.ChatModel, func() (string, string, error) {
+			if chatErr != nil {
+				return "", "", chatErr
+			}
+			sel := strings.TrimSpace(selected)
+			if err := checkSelectedModel(opts, sel); err != nil {
 				return "", "", err
 			}
-			selected = strings.TrimSpace(selected)
-			if opts.RequireSelectedModel && selected == "" {
-				return "", "", fmt.Errorf("missing selected model (routing header or body model)")
-			}
-			if len(opts.AllowedSelectedModels) > 0 && selected != "" {
-				if !selectedModelAllowed(selected, opts.AllowedSelectedModels) {
-					return "", "", fmt.Errorf("selected model %q not in allow-list", selected)
-				}
-			}
-			if len(opts.AllowedSelectedModels) > 0 && selected == "" {
-				return "", "", fmt.Errorf("missing selected model for allow-list check")
-			}
-			return selected, selected, nil
-		})
-		out = append(out, selected)
+			return sel, sel, nil
+		}))
 	}
-	var err error
 	for _, r := range out {
-		if r.Status == "fail" {
-			err = fmt.Errorf("chat smoke failed")
-			break
+		if r.Status == StatusFail {
+			return out, fmt.Errorf("chat smoke failed")
 		}
 	}
-	return out, err
+	return out, nil
+}
+
+// checkSelectedModel applies RequireSelectedModel and AllowedSelectedModels.
+func checkSelectedModel(opts Options, selected string) error {
+	if selected == "" {
+		if opts.RequireSelectedModel {
+			return fmt.Errorf("missing selected model (routing header or body model)")
+		}
+		if len(opts.AllowedSelectedModels) > 0 {
+			return fmt.Errorf("missing selected model for allow-list check")
+		}
+		return nil
+	}
+	if len(opts.AllowedSelectedModels) > 0 && !selectedModelAllowed(selected, opts.AllowedSelectedModels) {
+		return fmt.Errorf("selected model %q not in allow-list", selected)
+	}
+	return nil
 }
 
 func selectedModelAllowed(selected string, allowed []string) bool {
@@ -73,11 +79,11 @@ func selectedModelAllowed(selected string, allowed []string) bool {
 
 func timedSelected(channel, probe, model string, fn func() (string, string, error)) Result {
 	start := time.Now()
-	row := Result{Channel: channel, Probe: probe, Model: model, Status: "pass"}
+	row := Result{Channel: channel, Probe: probe, Model: model, Status: StatusPass}
 	detail, selected, err := fn()
 	row.Ms = time.Since(start).Milliseconds()
 	if err != nil {
-		row.Status = "fail"
+		row.Status = StatusFail
 		row.Detail = err.Error()
 		return row
 	}
@@ -97,7 +103,7 @@ func pingHealth(ctx context.Context, baseURL string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("health status %d", resp.StatusCode)
+		return &statusError{what: "health", status: resp.StatusCode}
 	}
 	return nil
 }
@@ -107,10 +113,34 @@ const (
 	smokeHeaderSwitchyardSelected = "x-switchyard-selected-model"
 )
 
+// pingRequest is the one-word chat request the chat and batch probes send.
+type pingRequest struct {
+	Model       string        `json:"model"`
+	Messages    []pingMessage `json:"messages"`
+	MaxTokens   int           `json:"max_tokens"`
+	Temperature float64       `json:"temperature"`
+}
+
+type pingMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+func newPingRequest(model string, opts Options) pingRequest {
+	return pingRequest{
+		Model:       model,
+		Messages:    []pingMessage{{Role: "user", Content: "Reply with the single word: ok"}},
+		MaxTokens:   opts.MaxTokens,
+		Temperature: opts.Temperature,
+	}
+}
+
 func chatPing(ctx context.Context, opts Options, model string) (content, reasoning, selectedModel string, err error) {
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":%d,"temperature":%g}`,
-		model, opts.MaxTokens, opts.Temperature)
-	req, err := httpNewPost(ctx, opts.BaseURL+"/v1/chat/completions", body)
+	body, err := json.Marshal(newPingRequest(model, opts))
+	if err != nil {
+		return "", "", "", err
+	}
+	req, err := httpNewPost(ctx, opts.BaseURL+"/v1/chat/completions", string(body))
 	if err != nil {
 		return "", "", "", err
 	}
@@ -119,9 +149,12 @@ func chatPing(ctx context.Context, opts Options, model string) (content, reasoni
 		return "", "", "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, _ := ioReadAllLimit(resp.Body, 1<<20)
+	raw, err := ioReadAllLimit(resp.Body, 1<<20)
+	if err != nil {
+		return "", "", "", fmt.Errorf("chat: read body: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", "", fmt.Errorf("chat status %d: %s", resp.StatusCode, string(raw))
+		return "", "", "", &statusError{what: "chat", status: resp.StatusCode, body: string(raw)}
 	}
 	selectedModel = extractSmokeSelectedModel(resp.Header, raw)
 	var parsed struct {

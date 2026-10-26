@@ -48,7 +48,7 @@ func TestSmokeAllChannels(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	results, err := smoke.Run(context.Background(), smoke.Options{
+	results, err := smoke.Run(smokeCtx(t), smoke.Options{
 		BaseURL:   srv.URL,
 		RequireCF: true,
 	})
@@ -81,7 +81,7 @@ func TestSystemOneDialsWithoutShellCFKey(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	results, err := smoke.Run(context.Background(), smoke.Options{
+	results, err := smoke.Run(smokeCtx(t), smoke.Options{
 		BaseURL:  srv.URL,
 		Channels: []string{smoke.ChannelSystemOne},
 	})
@@ -108,7 +108,7 @@ func TestSystemOneSkipInsufficientBalanceLocal(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	results, err := smoke.Run(context.Background(), smoke.Options{
+	results, err := smoke.Run(smokeCtx(t), smoke.Options{
 		BaseURL:   srv.URL,
 		Channels:  []string{smoke.ChannelSystemOne},
 		RequireCF: false,
@@ -132,7 +132,7 @@ func TestSystemOneFailInsufficientBalanceWhenRequireCF(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := smoke.Run(context.Background(), smoke.Options{
+	_, err := smoke.Run(smokeCtx(t), smoke.Options{
 		BaseURL:   srv.URL,
 		Channels:  []string{smoke.ChannelSystemOne},
 		RequireCF: true,
@@ -155,7 +155,7 @@ func TestTTSWritesAudioOutPath(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := smoke.Run(context.Background(), smoke.Options{
+	_, err := smoke.Run(smokeCtx(t), smoke.Options{
 		BaseURL:      srv.URL,
 		Channels:     []string{smoke.ChannelTTS},
 		AudioOutPath: out,
@@ -231,7 +231,7 @@ func TestBatchRequiresDeadline(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := smoke.Run(context.Background(), smoke.Options{
+	_, err := smoke.Run(smokeCtx(t), smoke.Options{
 		BaseURL:  srv.URL,
 		Channels: []string{smoke.ChannelBatch},
 	})
@@ -246,4 +246,18 @@ func bytesRepeat(n int, b byte) []byte {
 		out[i] = b
 	}
 	return out
+}
+
+// smokeCtx is the run budget a caller gives smoke.Run (it fails closed without one).
+func smokeCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func TestRunRequiresADeadline(t *testing.T) {
+	if _, err := smoke.Run(context.Background(), smoke.Options{BaseURL: "http://127.0.0.1:9", Channels: []string{"chat"}}); err == nil {
+		t.Fatal("smoke.Run without a deadline must fail closed")
+	}
 }

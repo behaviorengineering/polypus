@@ -1,10 +1,16 @@
 package observability
 
 import (
+	"errors"
+	"log/slog"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 const (
@@ -25,27 +31,70 @@ type Config struct {
 	DumpMaxAgeH  int
 	// SkipPaths are HTTP paths that must not create SERVER spans (probes).
 	SkipPaths []string
+	// Logger receives the dump writer's diagnostics. Init requires it; the process
+	// entrypoint sets it.
+	Logger *slog.Logger
 }
 
-// LoadConfig reads POLYPUS_OTEL_* and POLYPUS_PHOENIX from the environment.
-// Tracing is on by default so gateway spans join client traces in Phoenix.
-func LoadConfig() Config {
+// LoadConfig reads the tracing settings from the environment: POLYPUS_OTEL and
+// POLYPUS_OTEL_ENABLED (on/off), POLYPUS_SERVICE_NAME, POLYPUS_OTLP_ENDPOINT (then
+// OTEL_EXPORTER_OTLP_ENDPOINT, then the local Phoenix unless POLYPUS_PHOENIX is off),
+// POLYPUS_FAILURE_DUMP_DIR, POLYPUS_FAILURE_DUMP_MAX_FILES,
+// POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS and POLYPUS_OTEL_SKIP_PATHS. Tracing is on by
+// default so gateway spans join client traces in Phoenix. A value that does not
+// parse is an error naming the variable, not a silent default.
+func LoadConfig() (Config, error) {
+	var errs []error
+	boolEnv := func(key string, fallback bool) bool {
+		v, err := config.ParseEnvBool(key, fallback)
+		errs = append(errs, err)
+		return v
+	}
+	intEnv := func(key string, fallback int) int {
+		v, err := envInt(key, fallback)
+		errs = append(errs, err)
+		return v
+	}
 	cfg := Config{
-		Enabled:      envTruthy("POLYPUS_OTEL", true),
+		Enabled:      boolEnv("POLYPUS_OTEL", true),
 		ServiceName:  envOr("POLYPUS_SERVICE_NAME", defaultServiceName),
 		OTLPEndpoint: strings.TrimSpace(os.Getenv("POLYPUS_OTLP_ENDPOINT")),
 		DumpDir:      envOr("POLYPUS_FAILURE_DUMP_DIR", defaultDumpDir),
-		DumpMaxFiles: envInt("POLYPUS_FAILURE_DUMP_MAX_FILES", 20),
-		DumpMaxAgeH:  envInt("POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS", 48),
+		DumpMaxFiles: intEnv("POLYPUS_FAILURE_DUMP_MAX_FILES", 20),
+		DumpMaxAgeH:  intEnv("POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS", 48),
 		SkipPaths:    parseSkipPaths(os.Getenv("POLYPUS_OTEL_SKIP_PATHS")),
 	}
-	if cfg.OTLPEndpoint == "" && envTruthy("POLYPUS_PHOENIX", true) {
+	// POLYPUS_OTLP_ENDPOINT, then the standard OTEL_EXPORTER_OTLP_ENDPOINT, then the
+	// local Phoenix default.
+	if cfg.OTLPEndpoint == "" {
+		cfg.OTLPEndpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	}
+	if cfg.OTLPEndpoint == "" && boolEnv("POLYPUS_PHOENIX", true) {
 		cfg.OTLPEndpoint = defaultOTLPEndpoint
 	}
-	if v := strings.TrimSpace(os.Getenv("POLYPUS_OTEL_ENABLED")); v != "" {
-		cfg.Enabled = envTruthy("POLYPUS_OTEL_ENABLED", cfg.Enabled)
+	cfg.Enabled = boolEnv("POLYPUS_OTEL_ENABLED", cfg.Enabled)
+	// Dumps must be findable after the process exits: resolve the root against the
+	// working directory now, so the logged path is the real one.
+	if cfg.DumpDir != "" {
+		abs, err := filepath.Abs(cfg.DumpDir)
+		errs = append(errs, err)
+		if err == nil {
+			cfg.DumpDir = abs
+		}
 	}
-	return cfg
+	if err := errors.Join(errs...); err != nil {
+		return cfg, derrors.Wrap(err, derrors.CodeInvalid, "observability.LoadConfig", "environment")
+	}
+	return cfg, nil
+}
+
+// ActiveDumpDir is where failure dumps go: DumpDir when tracing is on, else "" (no
+// dumps).
+func (c Config) ActiveDumpDir() string {
+	if !c.Enabled {
+		return ""
+	}
+	return c.DumpDir
 }
 
 func envOr(key, fallback string) string {
@@ -53,19 +102,6 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func envTruthy(key string, fallback bool) bool {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	switch strings.ToLower(raw) {
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return true
-	}
 }
 
 func parseSkipPaths(raw string) []string {
@@ -122,14 +158,17 @@ func pathIsSkipped(requestPath string, skip []string) bool {
 	return false
 }
 
-func envInt(key string, fallback int) int {
+// envInt reads a non-negative integer env var: fallback when unset, an error when
+// it does not parse.
+func envInt(key string, fallback int) (int, error) {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
-		return fallback
+		return fallback, nil
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 0 {
-		return fallback
+		return fallback, derrors.New(derrors.CodeInvalid, "observability.envInt", "not a non-negative integer").
+			With("env", key).With("value", raw)
 	}
-	return n
+	return n, nil
 }

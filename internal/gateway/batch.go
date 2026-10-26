@@ -3,15 +3,16 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
-	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
+	"github.com/behaviorengineering/polypus/internal/batch/service"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
@@ -30,7 +31,7 @@ type batchListResponse struct {
 
 func (h batchesHandler) serveBatches(w http.ResponseWriter, r *http.Request) {
 	if h.batchStore == nil {
-		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatches", "batch store not configured"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatches", "batch store not configured"))
 		return
 	}
 	switch r.Method {
@@ -45,7 +46,7 @@ func (h batchesHandler) serveBatches(w http.ResponseWriter, r *http.Request) {
 
 func (h batchesHandler) serveBatchByID(w http.ResponseWriter, r *http.Request) {
 	if h.batchStore == nil {
-		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatchByID", "batch store not configured"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatchByID", "batch store not configured"))
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/v1/batches/")
@@ -68,20 +69,20 @@ func (h batchesHandler) serveBatchByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request) {
+	const op = "gateway.serveBatchCreate"
 	reg := h.router.Registry()
-	cfg := reg.Config()
-	if cfg.EffectiveBatchBackend() == "" {
-		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatchCreate", "no batch backend configured"))
+	if reg.Config().EffectiveBatchBackend() == "" {
+		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, op, "no batch backend configured"))
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, batchMaxInputBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, batchMaxInputBytes))
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveBatchCreate", "read body"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "read body"))
 		return
 	}
 	var req createBatchRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveBatchCreate", "parse json"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "parse json"))
 		return
 	}
 	if strings.TrimSpace(req.CompletionWindow) == "" {
@@ -89,22 +90,22 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 	}
 	inputID := strings.TrimSpace(req.InputFileID)
 	if inputID == "" {
-		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveBatchCreate", "input_file_id required"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, op, "input_file_id required"))
 		return
 	}
 	raw, err := h.batchStore.ReadFileContent(inputID)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	parsed, err := batch.ParseBatchJSONL(raw, req.Endpoint)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	backendID, downstream, err := reg.ResolveBatch(parsed.Model)
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveBatchCreate", "resolve backend"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "resolve backend"))
 		return
 	}
 	publicModel := parsed.Model
@@ -112,284 +113,122 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		publicModel = prefixModelID(backendID, downstream)
 	}
 	if !h.ensureModelAllowed(backendID, publicModel) {
-		writeModelNotAllowed(w, publicModel)
+		h.writeModelNotAllowed(w, publicModel)
 		return
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveBatchCreate", errBackendNotFound).
-			With("backend", backendID))
-		return
-	}
-	if err := validateBatchBackend(backend, req.Endpoint, downstream); err != nil {
-		writeHandlerError(w, err)
-		return
-	}
-	if backend.IsOpenRouter() {
-		if err := rejectInlineMedia(parsed.Lines); err != nil {
-			writeHandlerError(w, err)
-			return
-		}
-	}
-	now := h.batchNowTime().Unix()
-	expiresAt, err := batch.ExpiresAtUnix(now, req.CompletionWindow)
-	if err != nil {
-		writeHandlerError(w, err)
-		return
-	}
-	meta := &batch.BatchMeta{
-		Endpoint:         req.Endpoint,
-		InputFileID:      inputID,
-		CompletionWindow: req.CompletionWindow,
-		Status:           batch.BatchStatusValidating,
-		BackendID:        backendID,
-		PublicModel:      publicModel,
-		RequestCounts: batch.RequestCounts{
-			Total: len(parsed.Lines),
-		},
-		CreatedAt: now,
-		ExpiresAt: expiresAt,
-	}
-	if err := h.batchStore.SaveBatch(meta); err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, op, errBackendNotFound).With("backend", backendID))
 		return
 	}
 
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.batch.create", publicModel, backendID, backend.BaseURL, downstream)
-	var submitErr error
-	dialUpstream := backendID
-	defer func() { observability.EndDialSpan(span, submitErr, dialUpstream) }()
-	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, false)
-	if hop > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hop)
-		defer cancel()
-	}
-	if backend.IsCloudflareExtension() {
-		meta.CFModel = cloudflare.NormalizeModel(downstream)
-	}
-	var upstreamID string
-	submitErr = h.upstreams.Execute(backendID, func() error {
-		var err error
-		upstreamID, err = h.submitBatch(ctx, backend, downstream, req.Endpoint, parsed.Lines, hop)
-		return err
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.batch.create", observability.LLMSpanAttrs{
+		Model: publicModel, BackendID: backendID, BackendURL: backend.BaseURL, Downstream: downstream,
 	})
-	if submitErr != nil {
-		meta.Status = batch.BatchStatusFailed
-		meta.FailedAt = h.batchNowTime().Unix()
-		if err := h.batchStore.UpdateBatch(*meta); err != nil {
-			writeHandlerError(w, err)
-			return
-		}
-		writeUpstreamDialError(w, submitErr, "", backendID, nil)
+	var createErr error
+	defer func() { observability.EndDialSpan(span, createErr, backendID) }()
+	ctx, cancel := h.batchHopContext(ctx, r.Header.Get(config.TimeoutHeader), backendID)
+	defer cancel()
+	meta, createErr := h.batches.Create(ctx, service.CreateRequest{
+		Backend:          backend,
+		PublicModel:      publicModel,
+		InputFileID:      inputID,
+		CompletionWindow: req.CompletionWindow,
+		Job:              service.Job{Downstream: downstream, Endpoint: req.Endpoint, Lines: parsed.Lines},
+	})
+	if createErr != nil {
+		h.writeUpstreamDialError(w, createErr, "", backendID, nil)
 		return
 	}
-	if backend.IsCloudflareExtension() {
-		meta.CFRequestID = upstreamID
-	} else {
-		meta.UpstreamBatchID = upstreamID
-	}
-	meta.Status = batch.BatchStatusInProgress
-	meta.InProgressAt = h.batchNowTime().Unix()
-	if err := h.batchStore.UpdateBatch(*meta); err != nil {
-		writeHandlerError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, meta.Public())
+	h.writeJSON(w, http.StatusOK, meta.Public())
+}
+
+// batchHopContext bounds one batch call to the provider by the chat hop budget.
+// timeoutHeader is the caller's requested timeout, if any.
+func (h batchesHandler) batchHopContext(ctx context.Context, timeoutHeader, backendID string) (context.Context, context.CancelFunc) {
+	hop := h.timeouts.ResolveChat(timeoutHeader, backendID, config.ChatPlain)
+	return context.WithTimeout(ctx, hopBudget(hop, config.DefaultTimeouts().Chat))
 }
 
 func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Request, id string) {
 	meta, err := h.batchStore.GetBatch(id)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
-	}
-	if meta.Status == batch.BatchStatusCancelled || meta.Status == batch.BatchStatusCompleted || meta.Status == batch.BatchStatusFailed || meta.Status == batch.BatchStatusExpired {
-		writeJSON(w, http.StatusOK, meta.Public())
-		return
-	}
-	meta, expired, err := h.applyBatchExpiry(meta)
-	if err != nil {
-		writeHandlerError(w, err)
-		return
-	}
-	if expired {
-		writeJSON(w, http.StatusOK, meta.Public())
-		return
-	}
-	meta, err = h.refreshBatch(r, meta)
-	if err != nil {
-		if isBatchRefreshMiss(err) {
-			slog.Warn("polypus: batch refresh failed; returning last-known", "batch_id", meta.ID, "err", err)
-			writeJSON(w, http.StatusOK, meta.Public())
-			return
-		}
-		writeHandlerError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, meta.Public())
-}
-
-func (h batchesHandler) applyBatchExpiry(meta batch.BatchMeta) (batch.BatchMeta, bool, error) {
-	if meta.ExpiresAt <= 0 || h.batchNowTime().Unix() <= meta.ExpiresAt {
-		return meta, false, nil
-	}
-	switch meta.Status {
-	case batch.BatchStatusValidating, batch.BatchStatusInProgress:
-		meta.Status = batch.BatchStatusExpired
-		if err := h.batchStore.UpdateBatch(meta); err != nil {
-			return meta, false, err
-		}
-		return meta, true, nil
-	case batch.BatchStatusCancelling, batch.BatchStatusCompleted, batch.BatchStatusFailed,
-		batch.BatchStatusCancelled, batch.BatchStatusExpired:
-		return meta, false, nil
-	default:
-		return meta, false, nil
-	}
-}
-
-// refreshBatch polls the upstream batch for its backend and finalizes it once finished.
-func (h batchesHandler) refreshBatch(r *http.Request, meta batch.BatchMeta) (batch.BatchMeta, error) {
-	if meta.Status == batch.BatchStatusCancelled {
-		return meta, nil
 	}
 	backend, ok := h.router.Registry().Backend(meta.BackendID)
-	if !ok {
-		return meta, derrors.New(derrors.CodeUnavailable, "gateway.refreshBatch", errBackendNotFound)
+	if !ok && !batchTerminal(meta.Status) {
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveBatchRetrieve", errBackendNotFound).
+			With("backend", meta.BackendID))
+		return
 	}
-	ctx := r.Context()
-	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), meta.BackendID, false, false)
-	if hop > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hop)
-		defer cancel()
-	}
-	if backend.IsAnthropicExtension() {
-		return h.refreshClaudeBatch(ctx, meta, hop)
-	}
-	if backend.IsOpenRouter() {
-		return h.refreshOpenRouterBatch(ctx, backend, meta)
-	}
-	return h.refreshBatchFromCloudflare(ctx, backend, meta)
-}
-
-func (h batchesHandler) refreshBatchFromCloudflare(ctx context.Context, backend config.BackendDef, meta batch.BatchMeta) (batch.BatchMeta, error) {
-	var poll cloudflare.BatchPollResult
-	err := h.upstreams.Execute(meta.BackendID, func() error {
-		client, err := h.cloudflareClient(backend)
-		if err != nil {
-			return err
-		}
-		poll, err = client.PollBatch(ctx, meta.CFModel, meta.CFRequestID)
-		return err
-	})
+	ctx, cancel := h.batchHopContext(r.Context(), r.Header.Get(config.TimeoutHeader), meta.BackendID)
+	defer cancel()
+	updated, err := h.batches.Refresh(ctx, backend, meta)
 	if err != nil {
-		return meta, err
-	}
-	switch poll.State {
-	case cloudflare.BatchPollQueued, cloudflare.BatchPollRunning:
-		meta.Status = batch.BatchStatusInProgress
-		if err := h.batchStore.UpdateBatch(meta); err != nil {
-			return meta, err
+		if isBatchRefreshMiss(err) {
+			h.log.Warn("polypus: batch refresh failed; returning last-known", "batch_id", meta.ID, "err", err)
+			h.writeJSON(w, http.StatusOK, meta.Public())
+			return
 		}
-		return meta, nil
-	case cloudflare.BatchPollFailed:
-		now := h.batchNowTime().Unix()
-		meta.Status = batch.BatchStatusFailed
-		meta.FailedAt = now
-		if err := h.batchStore.UpdateBatch(meta); err != nil {
-			return meta, err
-		}
-		return meta, nil
-	case cloudflare.BatchPollCompleted:
-		return h.finalizeBatch(meta, poll)
-	default:
-		return meta, nil
+		h.writeHandlerError(w, err)
+		return
 	}
-}
-
-func (h batchesHandler) finalizeBatch(meta batch.BatchMeta, poll cloudflare.BatchPollResult) (batch.BatchMeta, error) {
-	createdUnix := h.batchNowTime().Unix()
-	okJSONL, errJSONL := buildBatchOutputLines(meta.Endpoint, meta.PublicModel, createdUnix, poll.Responses)
-	completed := 0
-	failed := 0
-	for _, item := range poll.Responses {
-		if item.Success {
-			completed++
-		} else {
-			failed++
-		}
-	}
-	return h.finalizeBatchOutput(meta, okJSONL, errJSONL, completed, failed)
-}
-
-// finalizeBatchOutput writes the output files and the terminal status. A batch that was
-// cancelling ends cancelled and keeps the lines that finished.
-func (h batchesHandler) finalizeBatchOutput(meta batch.BatchMeta, okJSONL, errJSONL []byte, completed, failed int) (batch.BatchMeta, error) {
-	createdUnix := h.batchNowTime().Unix()
-	patch := batch.FinalizePatch{
-		OkJSONL:  okJSONL,
-		ErrJSONL: errJSONL,
-		RequestCounts: batch.RequestCounts{
-			Total:     meta.RequestCounts.Total,
-			Completed: completed,
-			Failed:    failed,
-		},
-	}
-	switch {
-	case meta.Status == batch.BatchStatusCancelling:
-		patch.Status = batch.BatchStatusCancelled
-		patch.CancelledAt = createdUnix
-	case failed > 0 && completed == 0:
-		patch.Status = batch.BatchStatusFailed
-		patch.FailedAt = createdUnix
-	default:
-		patch.Status = batch.BatchStatusCompleted
-		patch.CompletedAt = createdUnix
-	}
-	updated, applied, err := h.batchStore.TryFinalizeBatch(meta.ID, patch)
-	if err != nil {
-		return meta, err
-	}
-	if !applied {
-		current, err := h.batchStore.GetBatch(meta.ID)
-		if err != nil {
-			return meta, err
-		}
-		return current, nil
-	}
-	return updated, nil
+	h.writeJSON(w, http.StatusOK, updated.Public())
 }
 
 func (h batchesHandler) serveBatchList(w http.ResponseWriter, r *http.Request) {
 	items, err := h.batchStore.ListBatches()
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	pub := make([]batch.PublicBatch, 0, len(items))
 	for _, m := range items {
 		pub = append(pub, m.Public())
 	}
-	writeJSON(w, http.StatusOK, batchListResponse{Object: "list", Data: pub})
+	h.writeJSON(w, http.StatusOK, batchListResponse{Object: objectList, Data: pub})
 }
 
 func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request, id string) {
 	meta, err := h.batchStore.GetBatch(id)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
-	backend, ok := h.router.Registry().Backend(meta.BackendID)
-	if !ok || !backend.IsAnthropicExtension() {
-		writeHandlerError(w, derrors.New(derrors.CodeUnimplemented, "gateway.serveBatchCancel", "batch cancel is not supported for this backend (cloudflare workers ai and openrouter have no cancel)"))
-		return
-	}
-	meta, err = h.cancelClaudeBatch(r, meta)
+	backend, _ := h.router.Registry().Backend(meta.BackendID)
+	ctx, cancel := h.batchHopContext(r.Context(), r.Header.Get(config.TimeoutHeader), meta.BackendID)
+	defer cancel()
+	updated, err := h.batches.Cancel(ctx, backend, meta)
 	if err != nil {
-		writeUpstreamDialError(w, err, "", meta.BackendID, nil)
+		h.writeUpstreamDialError(w, err, "", meta.BackendID, nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, meta.Public())
+	h.writeJSON(w, http.StatusOK, updated.Public())
+}
+
+// batchTerminal reports a batch that no refresh changes.
+func batchTerminal(status batch.Status) bool {
+	switch status {
+	case batch.StatusCompleted, batch.StatusFailed, batch.StatusCancelled, batch.StatusExpired:
+		return true
+	case batch.StatusValidating, batch.StatusInProgress, batch.StatusCancelling:
+		return false
+	default:
+		return false
+	}
+}
+
+// isBatchRefreshMiss reports a poll failure that should return the last-known batch
+// instead of an error: the provider is unreachable, slow or rate limiting.
+func isBatchRefreshMiss(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, derrors.ErrUnavailable) ||
+		errors.Is(err, derrors.ErrTimeout) ||
+		errors.Is(err, derrors.ErrRateLimited) {
+		return true
+	}
+	return upstream.Unavailable(err)
 }

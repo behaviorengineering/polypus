@@ -4,24 +4,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
 
 const (
 	batchMaxPayload = 10 << 20
-	batchHopTimeout = 120 * time.Second
 )
 
 // BatchPollState is the Workers AI async batch poll outcome.
 type BatchPollState int
 
+// Workers AI async batch states a poll reports.
 const (
 	BatchPollQueued    BatchPollState = 1
 	BatchPollRunning   BatchPollState = 2
@@ -71,6 +70,9 @@ func ModelSupportsBatch(model string) bool {
 
 // SubmitBatch queues an async Workers AI batch for the given model.
 func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string, lines []batch.InputLine) (string, error) {
+	if ctx == nil {
+		return "", derrors.New(derrors.CodeInvalid, "cloudflare.SubmitBatch", "context required")
+	}
 	if c == nil {
 		return "", derrors.New(derrors.CodeFailedPrecondition, "cloudflare.SubmitBatch", "not configured")
 	}
@@ -86,9 +88,9 @@ func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string,
 	if err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(map[string]interface{}{
-		"requests": requests,
-	})
+	payload, err := json.Marshal(struct {
+		Requests []map[string]json.RawMessage `json:"requests"`
+	}{requests})
 	if err != nil {
 		return "", derrors.Wrap(err, derrors.CodeInternal, "cloudflare.SubmitBatch", "marshal")
 	}
@@ -104,6 +106,9 @@ func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string,
 
 // PollBatch checks status or fetches completed responses for a queued batch.
 func (c *Client) PollBatch(ctx context.Context, model, cfRequestID string) (BatchPollResult, error) {
+	if ctx == nil {
+		return BatchPollResult{}, derrors.New(derrors.CodeInvalid, "cloudflare.PollBatch", "context required")
+	}
 	if c == nil {
 		return BatchPollResult{}, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.PollBatch", "not configured")
 	}
@@ -135,24 +140,18 @@ func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, batchHopTimeout)
-		defer cancel()
-		httpReq = httpReq.WithContext(ctx)
-	}
-	resp, err := c.speechClient.Do(httpReq)
+	resp, err := c.policies.DoOnce(ctx, c.dep(), c.speechClient, httpReq)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.postBatchRun", "post").
 			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
+	raw, err := readCapped(resp.Body, runMaxBody, "cloudflare.postBatchRun")
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.postBatchRun", "read body")
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if rl := ClassifyRateLimit("cloudflare.postBatchRun", resp.StatusCode, resp.Header, raw); rl != nil {
+		if rl := ratelimit.Classify("cloudflare.postBatchRun", resp.StatusCode, resp.Header, raw); rl != nil {
 			return nil, rl
 		}
 		msg := workersAIErrorMessage(raw)
@@ -167,10 +166,13 @@ func batchRunURL(apiBase, model string) string {
 	return runURL(apiBase, model) + "?queueRequest=true"
 }
 
-func translateBatchRequests(endpoint string, lines []batch.InputLine) ([]map[string]interface{}, error) {
-	out := make([]map[string]interface{}, 0, len(lines))
+// translateBatchRequests turns OpenAI batch lines into Workers AI batch requests.
+// Bodies stay as raw JSON, so fields the gateway does not touch (large integers such
+// as seed included) pass through byte for byte.
+func translateBatchRequests(endpoint string, lines []batch.InputLine) ([]map[string]json.RawMessage, error) {
+	out := make([]map[string]json.RawMessage, 0, len(lines))
 	for _, line := range lines {
-		var item map[string]interface{}
+		var item map[string]json.RawMessage
 		var err error
 		switch endpoint {
 		case batch.EndpointChatCompletions:
@@ -188,31 +190,46 @@ func translateBatchRequests(endpoint string, lines []batch.InputLine) ([]map[str
 	return out, nil
 }
 
-func chatLineToCF(body json.RawMessage, customID string) (map[string]interface{}, error) {
-	var m map[string]interface{}
+func chatLineToCF(body json.RawMessage, customID string) (map[string]json.RawMessage, error) {
+	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.chatLineToCF", "parse body")
 	}
 	delete(m, "model")
 	delete(m, "stream")
-	m["external_reference"] = customID
-	return m, nil
+	return withString(m, "external_reference", customID)
 }
 
-func embedLineToCF(body json.RawMessage, customID string) (map[string]interface{}, error) {
-	var m map[string]interface{}
+func embedLineToCF(body json.RawMessage, customID string) (map[string]json.RawMessage, error) {
+	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.embedLineToCF", "parse body")
 	}
 	delete(m, "model")
-	input := m["input"]
+	var input any
+	if raw, ok := m["input"]; ok {
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.embedLineToCF", "parse input")
+		}
+	}
 	delete(m, "input")
 	text, err := embeddingInputToText(input)
 	if err != nil {
 		return nil, err
 	}
-	m["text"] = text
-	m["external_reference"] = customID
+	if m, err = withString(m, "text", text); err != nil {
+		return nil, err
+	}
+	return withString(m, "external_reference", customID)
+}
+
+// withString sets key to the JSON string s.
+func withString(m map[string]json.RawMessage, key, s string) (map[string]json.RawMessage, error) {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "cloudflare.withString", "marshal").With("key", key)
+	}
+	m[key] = raw
 	return m, nil
 }
 
@@ -339,6 +356,8 @@ func unwrapBatchEnvelope(raw []byte) ([]byte, error) {
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
+		// Not an envelope: Workers AI can answer with the bare result, which the
+		// caller's own parser reads (and reports if it is malformed).
 		return raw, nil
 	}
 	if envelope.Success != nil && !*envelope.Success {

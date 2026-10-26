@@ -2,8 +2,6 @@ package gateway
 
 import (
 	"context"
-	"log/slog"
-	"net/http"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -39,10 +37,10 @@ func (h modelsHandler) liveCatalogLister(b config.BackendDef) catalogLister {
 
 // catalogInventory returns a backend's catalog models for /v1/models. Client and list errors
 // soft-fail to an empty slice (Warn only) so one backend outage does not fail the catalog.
-func (h modelsHandler) catalogInventory(r *http.Request, b config.BackendDef, list catalogLister) []openaiModel {
+func (h modelsHandler) catalogInventory(ctx context.Context, b config.BackendDef, list catalogLister) []openaiModel {
 	var out []openaiModel
 	if execErr := h.upstreams.Execute(b.ID, func() error {
-		models, listErr := list(r.Context())
+		models, listErr := list(ctx)
 		if listErr != nil {
 			return listErr
 		}
@@ -57,7 +55,7 @@ func (h modelsHandler) catalogInventory(r *http.Request, b config.BackendDef, li
 		}
 		return nil
 	}); execErr != nil {
-		slog.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
+		h.log.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
 	}
 	return out
 }

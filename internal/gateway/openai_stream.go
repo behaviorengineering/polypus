@@ -5,17 +5,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
-// StreamSSEAction describes how the gateway treated one OpenAI chat stream chunk.
-type StreamSSEAction string
+// streamSSEAction describes how the gateway treated one OpenAI chat stream chunk.
+type streamSSEAction string
 
 const (
-	StreamSSEForward      StreamSSEAction = "forward"
-	StreamSSEDrop         StreamSSEAction = "drop"
-	StreamSSERewriteUsage StreamSSEAction = "rewrite_usage"
+	streamSSEForward      streamSSEAction = "forward"
+	streamSSEDrop         streamSSEAction = "drop"
+	streamSSERewriteUsage streamSSEAction = "rewrite_usage"
 )
 
 // openAIStreamSanitizer tracks per-choice-index terminal finish_reason for one stream.
@@ -42,18 +45,17 @@ func (st *openAIStreamSanitizer) hasAnyFinished() bool {
 // sanitizeOpenAIStreamChunk enforces the public OpenAI stream contract on one JSON chunk.
 // stripExtraFields removes Bifrost-only extra_fields before emitting to clients.
 // On malformed JSON, fail open: emit the original bytes unchanged.
-func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtraFields bool) (out []byte, action StreamSSEAction, emit bool) {
+func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtraFields bool) ([]byte, streamSSEAction, bool) {
 	if st == nil {
 		st = newOpenAIStreamSanitizer()
 	}
-	action = StreamSSEForward
-	emit = true
+	action := streamSSEForward
 	changed := false
 
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(body, &root); err != nil {
 		if st.hasAnyFinished() {
-			return nil, StreamSSEDrop, false
+			return nil, streamSSEDrop, false
 		}
 		return body, action, true
 	}
@@ -78,12 +80,12 @@ func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtr
 	var choices []map[string]json.RawMessage
 	if err := json.Unmarshal(rawChoices, &choices); err != nil {
 		if st.hasAnyFinished() {
-			return nil, StreamSSEDrop, false
+			return nil, streamSSEDrop, false
 		}
 		return body, action, true
 	}
 
-	hasUsage := len(root["usage"]) > 0 && string(root["usage"]) != "null"
+	hasUsage := !isJSONNull(root["usage"])
 
 	for _, ch := range choices {
 		idx := streamChoiceIndex(ch)
@@ -92,11 +94,11 @@ func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtr
 		}
 		if hasUsage {
 			root["choices"] = json.RawMessage("[]")
-			action = StreamSSERewriteUsage
+			action = streamSSERewriteUsage
 			changed = true
 			break
 		}
-		return nil, StreamSSEDrop, false
+		return nil, streamSSEDrop, false
 	}
 
 	for _, ch := range choices {
@@ -156,7 +158,7 @@ func openAIStreamJSONEqual(a, b []byte) bool {
 }
 
 func isTerminalStreamFinishReason(raw json.RawMessage) bool {
-	if len(raw) == 0 || string(raw) == "null" {
+	if isJSONNull(raw) {
 		return false
 	}
 	var s string
@@ -180,7 +182,7 @@ func ensureStreamChoiceFinishReasonFromRoot(root map[string]json.RawMessage) (ma
 		if _, has := choices[i]["finish_reason"]; has {
 			continue
 		}
-		choices[i]["finish_reason"] = json.RawMessage("null")
+		choices[i]["finish_reason"] = json.RawMessage(jsonNull)
 		changed = true
 	}
 	if !changed {
@@ -194,8 +196,8 @@ func ensureStreamChoiceFinishReasonFromRoot(root map[string]json.RawMessage) (ma
 	return root, true
 }
 
-func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action StreamSSEAction) {
-	if action != StreamSSEDrop {
+func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action streamSSEAction) {
+	if action != streamSSEDrop {
 		return
 	}
 	idx := nextStreamChunkIndex(ctx)
@@ -204,92 +206,109 @@ func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action Strea
 
 // copyOpenAIChatStream applies sanitizeOpenAIStreamChunk to each SSE data frame from src.
 func copyOpenAIChatStream(ctx context.Context, dst io.Writer, src io.Reader, stripExtraFields bool) (int64, error) {
-	br := bufio.NewReader(src)
-	san := newOpenAIStreamSanitizer()
-	var written int64
-	var eventBuf bytes.Buffer
-	var seenDone bool
-
-	flushEvent := func() error {
-		if eventBuf.Len() == 0 {
-			return nil
-		}
-		payload := eventBuf.Bytes()
-		eventBuf.Reset()
-
-		lines := strings.Split(string(payload), "\n")
-		var outEvent strings.Builder
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			if !strings.HasPrefix(line, "data:") {
-				outEvent.WriteString(line)
-				outEvent.WriteByte('\n')
-				continue
-			}
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if data == "[DONE]" {
-				seenDone = true
-				outEvent.WriteString("data: [DONE]\n")
-				continue
-			}
-			original := []byte(data)
-			out, action, emit := sanitizeOpenAIStreamChunk(original, san, stripExtraFields)
-			if !emit || action == StreamSSEDrop {
-				recordProxyStreamChunk(ctx, original, action)
-				continue
-			}
-			if !stripExtraFields && action == StreamSSEForward && openAIStreamJSONEqual(original, out) {
-				out = original
-			}
-			outEvent.WriteString("data: ")
-			outEvent.Write(out)
-			outEvent.WriteByte('\n')
-		}
-		if outEvent.Len() == 0 {
-			return nil
-		}
-		outEvent.WriteByte('\n')
-		n, err := dst.Write([]byte(outEvent.String()))
-		written += int64(n)
-		return err
+	if ctx == nil {
+		return 0, derrors.New(derrors.CodeInvalid, "gateway.copyOpenAIChatStream", "context required")
 	}
-
+	c := &sseCopier{ctx: ctx, dst: dst, san: newOpenAIStreamSanitizer(), strip: stripExtraFields}
+	br := bufio.NewReader(src)
+	var event bytes.Buffer
 	for {
-		if ctx != nil {
-			if err := ctx.Err(); err != nil {
-				return written, err
-			}
+		if err := ctx.Err(); err != nil {
+			return c.written, err
 		}
 		line, err := br.ReadString('\n')
-		if len(line) > 0 {
-			if line == "\n" || line == "\r\n" {
-				if err := flushEvent(); err != nil {
-					return written, err
-				}
-				continue
+		switch {
+		case line == "\n" || line == "\r\n":
+			// A blank line ends an SSE event.
+			if ferr := c.flush(&event); ferr != nil {
+				return c.written, ferr
 			}
-			eventBuf.WriteString(line)
+			continue
+		case line != "":
+			event.WriteString(line)
+		}
+		if errors.Is(err, io.EOF) {
+			return c.written, c.finish(&event)
 		}
 		if err != nil {
-			if err == io.EOF {
-				if eventBuf.Len() > 0 {
-					if flushErr := flushEvent(); flushErr != nil {
-						return written, flushErr
-					}
-					return written, nil
-				}
-				if !seenDone && san.hasAnyFinished() {
-					n, werr := io.WriteString(dst, "data: [DONE]\n\n")
-					written += int64(n)
-					if werr != nil {
-						return written, werr
-					}
-				}
-				return written, nil
-			}
-			return written, err
+			return c.written, err
 		}
 	}
+}
+
+// sseCopier rewrites one OpenAI SSE stream event by event.
+type sseCopier struct {
+	ctx      context.Context
+	dst      io.Writer
+	san      *openAIStreamSanitizer
+	strip    bool
+	written  int64
+	seenDone bool
+}
+
+// flush rewrites the buffered event and writes it; an event that ends up empty is dropped.
+func (c *sseCopier) flush(event *bytes.Buffer) error {
+	if event.Len() == 0 {
+		return nil
+	}
+	payload := event.String()
+	event.Reset()
+	var out strings.Builder
+	for _, line := range strings.Split(payload, "\n") {
+		c.rewriteLine(line, &out)
+	}
+	if out.Len() == 0 {
+		return nil
+	}
+	out.WriteByte('\n')
+	return c.write(out.String())
+}
+
+// rewriteLine copies one event line to out: non-data lines as they are, [DONE] as
+// is, and data frames through the sanitizer (dropped frames are recorded, not sent).
+func (c *sseCopier) rewriteLine(line string, out *strings.Builder) {
+	if line == "" {
+		return
+	}
+	if !strings.HasPrefix(line, "data:") {
+		out.WriteString(line)
+		out.WriteByte('\n')
+		return
+	}
+	data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	if data == "[DONE]" {
+		c.seenDone = true
+		out.WriteString("data: [DONE]\n")
+		return
+	}
+	original := []byte(data)
+	sanitized, action, emit := sanitizeOpenAIStreamChunk(original, c.san, c.strip)
+	if !emit || action == streamSSEDrop {
+		recordProxyStreamChunk(c.ctx, original, action)
+		return
+	}
+	if !c.strip && action == streamSSEForward && openAIStreamJSONEqual(original, sanitized) {
+		sanitized = original
+	}
+	out.WriteString("data: ")
+	out.Write(sanitized)
+	out.WriteByte('\n')
+}
+
+// finish runs at EOF: it flushes a final event that had no blank line after it, or
+// closes a finished stream that never sent [DONE].
+func (c *sseCopier) finish(event *bytes.Buffer) error {
+	if event.Len() > 0 {
+		return c.flush(event)
+	}
+	if !c.seenDone && c.san.hasAnyFinished() {
+		return c.write("data: [DONE]\n\n")
+	}
+	return nil
+}
+
+func (c *sseCopier) write(s string) error {
+	n, err := io.WriteString(c.dst, s)
+	c.written += int64(n)
+	return err
 }

@@ -28,7 +28,7 @@ func routerCatalogModels(cfg config.RouterConfig) []openaiModel {
 	for _, name := range names {
 		out = append(out, openaiModel{
 			ID:      config.RouterPublicID(name),
-			Object:  "model",
+			Object:  keyModel,
 			Created: 0,
 			OwnedBy: "polypus",
 		})
@@ -91,7 +91,7 @@ func mergeBackendInventories(cfg config.RouterConfig, asInventory bool, results 
 			}
 			byID[down] = openaiModel{
 				ID:      down,
-				Object:  "model",
+				Object:  keyModel,
 				Created: m.Created,
 				OwnedBy: firstNonEmpty(m.OwnedBy, res.backend),
 			}
@@ -180,7 +180,7 @@ const (
 	dispatchSwitchyard
 )
 
-func classifyNamedRouterRoute(routeType string) namedRouterDispatch {
+func classifyNamedRouterRoute(routeType config.RouteType) namedRouterDispatch {
 	switch routeType {
 	case config.RoutePassthrough:
 		return dispatchPassthrough

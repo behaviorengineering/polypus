@@ -9,8 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
+	"github.com/behaviorengineering/polypus/internal/outbound"
+
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/maximhq/bifrost/core/schemas"
 )
@@ -18,30 +22,30 @@ import (
 type systemOneHandler struct{ *shared }
 
 func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, chatMaxBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, chatMaxBody))
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSystemOne", "read body"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSystemOne", "read body"))
 		return
 	}
 	if err := validateSystemOneBody(body); err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
-	model, err := extractSystemOneModel(body)
+	model, err := bodyModel("gateway.serveSystemOne", body, false)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	if cfg.EffectiveSystemOneBackend() == "" {
-		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveSystemOne", "no systemone backend configured"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveSystemOne", "no systemone backend configured"))
 		return
 	}
 	backendID, downstream, err := reg.ResolveSystemOne(model)
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSystemOne", "resolve backend"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSystemOne", "resolve backend"))
 		return
 	}
 	publicModel := model
@@ -49,104 +53,109 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		publicModel = prefixModelID(backendID, downstream)
 	}
 	if !h.ensureSystemOneAllowed(backendID, publicModel, downstream) {
-		writeModelNotAllowed(w, publicModel)
+		h.writeModelNotAllowed(w, publicModel)
 		return
 	}
-	backend, ok := reg.Backend(backendID)
-	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveSystemOne", errBackendNotFound).
-			With("backend", backendID))
-		return
-	}
-	backendURL, ok := reg.BackendURL(backendID)
-	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveSystemOne", errBackendNotFound).
-			With("backend", backendID))
+	// The credential is resolved later, only on the path that sends one.
+	backend, backendURL, err := h.lookupBackend("gateway.serveSystemOne", backendID)
+	if err != nil {
+		h.writeHandlerError(w, err)
 		return
 	}
 
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.systemone", publicModel, backendID, backendURL, downstream)
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.systemone", observability.LLMSpanAttrs{
+		Model: publicModel, BackendID: backendID, BackendURL: backendURL, Downstream: downstream,
+	})
 	dialUpstream := backendID
 	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
-	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, false)
-	if hop > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hop)
-		defer cancel()
-	}
+	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, config.ChatPlain)
+	hop = hopBudget(hop, config.DefaultTimeouts().Chat)
+	ctx, cancel := context.WithTimeout(ctx, hop)
+	defer cancel()
 	r = r.WithContext(ctx)
 
+	call := systemOneCall{backend: backend, url: backendURL, downstream: downstream, publicModel: publicModel, body: body, hop: hop}
 	err = h.upstreams.Execute(backendID, func() error {
 		if backend.IsCloudflareExtension() {
-			return h.proxyCloudflareSystemOne(w, r, backend, downstream, body, publicModel)
+			return h.proxyCloudflareSystemOne(w, r, call)
 		}
 		if usesBifrostSystemOne(backend) {
-			return h.proxyBifrostSystemOne(w, r, backendID, downstream, body, publicModel, hop)
+			return h.proxyBifrostSystemOne(w, r, call)
 		}
-		return h.proxySystemOnePassthrough(w, r, backend, backendURL, downstream, body)
+		return h.proxySystemOnePassthrough(w, r, call)
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "", backendID, nil)
+		h.writeUpstreamDialError(w, err, "", backendID, nil)
 	}
+}
+
+// systemOneCall is one SystemOne decision request for a resolved backend.
+type systemOneCall struct {
+	backend     config.BackendDef
+	url         string
+	downstream  string
+	publicModel string
+	body        []byte
+	hop         time.Duration
 }
 
 func usesBifrostSystemOne(b config.BackendDef) bool {
 	return b.ID == string(schemas.OpenRouter) && b.HasCapability(config.CapSystemOne)
 }
 
-func (h systemOneHandler) proxyBifrostSystemOne(w http.ResponseWriter, r *http.Request, backendID, downstream string, body []byte, publicModel string, hop time.Duration) error {
+func (h systemOneHandler) proxyBifrostSystemOne(w http.ResponseWriter, r *http.Request, c systemOneCall) error {
 	if h.router == nil {
 		return derrors.New(derrors.CodeNotReady, "gateway.proxyBifrostSystemOne", "router not configured")
 	}
-	raw, err := h.router.SystemOneDecisionRaw(r.Context(), backendID, downstream, body, hop)
+	raw, err := h.router.SystemOneDecisionRaw(r.Context(), router.Call{BackendID: c.backend.ID, Model: c.downstream, Body: c.body, Timeout: c.hop})
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.proxyBifrostSystemOne", "decision").With("backend", c.backend.ID)
 	}
-	raw, err = rewriteSystemOneResponseModel(raw, publicModel)
+	raw, err = rewriteSystemOneResponseModel(raw, c.publicModel)
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.proxyBifrostSystemOne", "rewrite model")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, writeErr := w.Write(raw)
 	if writeErr != nil {
-		return derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.proxyBifrostSystemOne", "write response")
+		return afterHeaders(r.Context(), writeErr, true, "gateway.proxyBifrostSystemOne", "write response")
 	}
 	return nil
 }
 
-func (h systemOneHandler) proxyCloudflareSystemOne(w http.ResponseWriter, r *http.Request, backend config.BackendDef, downstream string, body []byte, publicModel string) error {
-	client, err := h.cloudflareClient(backend)
+func (h systemOneHandler) proxyCloudflareSystemOne(w http.ResponseWriter, r *http.Request, c systemOneCall) error {
+	client, err := h.cloudflareClient(c.backend)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeNotReady, "gateway.proxyCloudflareSystemOne", "cloudflare client")
 	}
-	out, err := client.SystemOne(r.Context(), downstream, body)
+	out, err := client.SystemOne(r.Context(), c.downstream, c.body)
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.proxyCloudflareSystemOne", "decision").With("backend", c.backend.ID)
 	}
-	out, err = rewriteSystemOneResponseModel(out, publicModel)
+	out, err = rewriteSystemOneResponseModel(out, c.publicModel)
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.proxyCloudflareSystemOne", "rewrite model")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, writeErr := w.Write(out)
 	if writeErr != nil {
-		return derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.proxyCloudflareSystemOne", "write response")
+		return afterHeaders(r.Context(), writeErr, true, "gateway.proxyCloudflareSystemOne", "write response")
 	}
 	return nil
 }
 
-func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *http.Request, backend config.BackendDef, backendURL, downstream string, body []byte) error {
-	rewritten, err := rewriteSystemOneModel(body, downstream)
+func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *http.Request, c systemOneCall) error {
+	rewritten, err := withBodyModel("gateway.proxySystemOnePassthrough", c.body, c.downstream)
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.proxySystemOnePassthrough", "rewrite model")
 	}
-	auth, authErr := mustBackendAuth(backend)
+	auth, authErr := backendAuth(c.backend)
 	if authErr != nil {
-		return authErr
+		return gatewayErr(authErr, "gateway.proxySystemOnePassthrough", "backend auth").With("backend", c.backend.ID)
 	}
-	target := systemOneURL(backendURL)
+	target := systemOneURL(c.url)
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(rewritten))
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxySystemOnePassthrough", "request")
@@ -163,24 +172,27 @@ func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *ht
 	if client == nil {
 		client = newChatProxyClient(h.timeouts.Max)
 	}
-	resp, err := client.Do(req)
+	resp, err := outbound.DoOnce(r.Context(), outbound.DepGateway, client, req)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxySystemOnePassthrough", "dial").
 			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, chatMaxBody))
+	raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxySystemOnePassthrough")
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxySystemOnePassthrough", "read body")
+		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		w.Header().Set("Content-Type", firstNonEmpty(resp.Header.Get("Content-Type"), "application/json"))
 		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(raw)
-		return nil
+		if _, err := w.Write(raw); err != nil {
+			return afterHeaders(r.Context(), err, true, "gateway.proxySystemOnePassthrough", "write upstream error")
+		}
+		// A 5xx counts against the breaker like the chat and embeddings proxies.
+		return upstream.StatusFailure(resp.StatusCode)
 	}
-	publicID := prefixModelID(backend.ID, downstream)
+	publicID := prefixModelID(c.backend.ID, c.downstream)
 	raw, err = rewriteSystemOneResponseModel(raw, publicID)
 	if err != nil {
 		return err
@@ -189,7 +201,7 @@ func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusOK)
 	_, writeErr := w.Write(raw)
 	if writeErr != nil {
-		return derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.proxySystemOnePassthrough", "write response")
+		return afterHeaders(r.Context(), writeErr, true, "gateway.proxySystemOnePassthrough", "write response")
 	}
 	return nil
 }
@@ -202,10 +214,10 @@ func validateSystemOneBody(body []byte) error {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return derrors.Wrap(err, derrors.CodeInvalid, "gateway.validateSystemOneBody", "invalid json")
 	}
-	if len(bytes.TrimSpace(payload.State)) == 0 || string(bytes.TrimSpace(payload.State)) == "null" {
+	if isJSONNull(payload.State) {
 		return derrors.New(derrors.CodeInvalid, "gateway.validateSystemOneBody", "state required")
 	}
-	if len(bytes.TrimSpace(payload.Questions)) == 0 || string(bytes.TrimSpace(payload.Questions)) == "null" {
+	if isJSONNull(payload.Questions) {
 		return derrors.New(derrors.CodeInvalid, "gateway.validateSystemOneBody", "questions required")
 	}
 	var q map[string]json.RawMessage
@@ -218,29 +230,6 @@ func validateSystemOneBody(body []byte) error {
 	return nil
 }
 
-func extractSystemOneModel(body []byte) (string, error) {
-	var payload struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", derrors.Wrap(err, derrors.CodeInvalid, "gateway.extractSystemOneModel", "invalid json")
-	}
-	return strings.TrimSpace(payload.Model), nil
-}
-
-func rewriteSystemOneModel(body []byte, model string) ([]byte, error) {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteSystemOneModel", "invalid json")
-	}
-	payload["model"] = model
-	out, err := json.Marshal(payload)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteSystemOneModel", "marshal")
-	}
-	return out, nil
-}
-
 func rewriteSystemOneResponseModel(body []byte, publicModel string) ([]byte, error) {
 	publicModel = strings.TrimSpace(publicModel)
 	if publicModel == "" {
@@ -250,7 +239,7 @@ func rewriteSystemOneResponseModel(body []byte, publicModel string) ([]byte, err
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, nil
 	}
-	payload["model"] = publicModel
+	payload[keyModel] = publicModel
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteSystemOneResponseModel", "marshal")

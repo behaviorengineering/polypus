@@ -1,13 +1,13 @@
 package gateway
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 var traceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -27,7 +27,7 @@ func (h healthHandler) serveFailureDump(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid trace_id", http.StatusBadRequest)
 		return
 	}
-	dumpDir := observability.FailureDumpDir()
+	dumpDir := h.dumpDir
 	if strings.TrimSpace(dumpDir) == "" {
 		http.Error(w, "failure dumps disabled", http.StatusServiceUnavailable)
 		return
@@ -39,16 +39,18 @@ func (h healthHandler) serveFailureDump(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid trace_id", http.StatusBadRequest)
 		return
 	}
-	body, err := os.ReadFile(cleanPath)
+	body, err := os.ReadFile(cleanPath) //nolint:gosec // G703: traceID matched ^[0-9a-f]{32}$ and the path is checked to stay in the dump dir
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.log.Warn("polypus: read failure dump", "err", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	_, _ = w.Write(body) //nolint:gosec // G705: a JSON dump served as application/json with nosniff
 }

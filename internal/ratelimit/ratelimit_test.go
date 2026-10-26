@@ -1,4 +1,4 @@
-package cloudflare
+package ratelimit
 
 import (
 	"errors"
@@ -8,12 +8,12 @@ import (
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
-func TestClassifyRateLimitQuota3036(t *testing.T) {
+func TestClassifyQuota3036(t *testing.T) {
 	body := []byte(`{"success":false,"errors":[{"code":3036,"message":"You have used up your daily free allocation of 10,000 neurons."}]}`)
 	header := http.Header{}
 	header.Set("Retry-After", "3600")
 	header.Set("Cf-Ray", "abc123")
-	err := ClassifyRateLimit("cloudflare.Synthesize", http.StatusTooManyRequests, header, body)
+	err := Classify("cloudflare.Synthesize", http.StatusTooManyRequests, header, body)
 	if err == nil {
 		t.Fatal("expected rate limit error")
 	}
@@ -37,9 +37,9 @@ func TestClassifyRateLimitQuota3036(t *testing.T) {
 	}
 }
 
-func TestClassifyRateLimitCapacity3040(t *testing.T) {
+func TestClassifyCapacity3040(t *testing.T) {
 	body := []byte(`{"success":false,"errors":[{"code":"3040","message":"Capacity temporarily exceeded, please try again."}]}`)
-	err := ClassifyRateLimit("cloudflare.workers", 0, nil, body)
+	err := Classify("cloudflare.workers", 0, nil, body)
 	if err == nil {
 		t.Fatal("expected rate limit error")
 	}
@@ -51,8 +51,8 @@ func TestClassifyRateLimitCapacity3040(t *testing.T) {
 	}
 }
 
-func TestClassifyRateLimitEdgeHint(t *testing.T) {
-	err := ClassifyRateLimit("cloudflare.workers", http.StatusTooManyRequests, nil, []byte("error code: 1015"))
+func TestClassifyEdgeHint(t *testing.T) {
+	err := Classify("cloudflare.workers", http.StatusTooManyRequests, nil, []byte("error code: 1015"))
 	if err == nil {
 		t.Fatal("expected rate limit error")
 	}
@@ -61,8 +61,8 @@ func TestClassifyRateLimitEdgeHint(t *testing.T) {
 	}
 }
 
-func TestClassifyRateLimitGeneric429(t *testing.T) {
-	err := ClassifyRateLimit("cloudflare.workers", http.StatusTooManyRequests, nil, []byte(`{"error":"slow down"}`))
+func TestClassifyGeneric429(t *testing.T) {
+	err := Classify("cloudflare.workers", http.StatusTooManyRequests, nil, []byte(`{"error":"slow down"}`))
 	if err == nil {
 		t.Fatal("expected rate limit error")
 	}
@@ -74,11 +74,11 @@ func TestClassifyRateLimitGeneric429(t *testing.T) {
 	}
 }
 
-func TestClassifyRateLimitXRateLimitHeaders(t *testing.T) {
+func TestClassifyXRateLimitHeaders(t *testing.T) {
 	header := http.Header{}
 	header.Set("X-RateLimit-Limit", "100")
 	header.Set("X-RateLimit-Remaining", "0")
-	err := ClassifyRateLimit("cloudflare.workers", http.StatusTooManyRequests, header, nil)
+	err := Classify("cloudflare.workers", http.StatusTooManyRequests, header, nil)
 	if err == nil {
 		t.Fatal("expected rate limit error")
 	}
@@ -90,9 +90,25 @@ func TestClassifyRateLimitXRateLimitHeaders(t *testing.T) {
 	}
 }
 
-func TestClassifyRateLimitNotThrottle(t *testing.T) {
-	err := ClassifyRateLimit("cloudflare.workers", http.StatusBadGateway, nil, []byte(`{"success":false,"errors":[{"code":10000,"message":"auth"}]}`))
+func TestClassifyNotThrottle(t *testing.T) {
+	err := Classify("cloudflare.workers", http.StatusBadGateway, nil, []byte(`{"success":false,"errors":[{"code":10000,"message":"auth"}]}`))
 	if err != nil {
 		t.Fatalf("unexpected %v", err)
+	}
+}
+
+func TestClassifyStatusOnlyReads429AndAddsNoCloudflareMarkers(t *testing.T) {
+	if err := ClassifyStatus("gemini", http.StatusBadGateway, nil, []byte(`{"errors":[{"code":3036}]}`)); err != nil {
+		t.Fatalf("a non-429 is not a rate limit for a non-Cloudflare backend: %v", err)
+	}
+	header := http.Header{}
+	header.Set("Retry-After", "7")
+	header.Set("Cf-Ray", "ray")
+	err := ClassifyStatus("gemini", http.StatusTooManyRequests, header, nil, "slow down")
+	if err == nil || err.Fields()[FieldRetryAfter] != "7" {
+		t.Fatalf("a 429 keeps Retry-After: %v", err)
+	}
+	if err.Fields()[FieldKind] != "" || err.Fields()[FieldCFRay] != "" {
+		t.Fatalf("no Cloudflare markers: %v", err.Fields())
 	}
 }

@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -12,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/behaviorengineering/polypus/pkg/smoke/otelcol"
+	"github.com/behaviorengineering/polypus/internal/smoke/otelcol"
 )
 
 func TestSmokeOtelFanout(t *testing.T) {
@@ -41,12 +42,14 @@ func TestSmokeOtelFanout(t *testing.T) {
 	defer smokeCancel()
 	if err := otelcol.RunCollector(smokeCtx, otelcol.CollectorOptions{
 		OTLPEndpoint: "http://127.0.0.1:4317",
+		Logger:       slog.New(slog.NewTextHandler(t.Output(), nil)),
 	}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func dockerComposeUp(ctx context.Context, root string) error {
+	//nolint:gosec // G204: the compose file is this repository's own, found from the module root.
 	cmd := exec.CommandContext(ctx, "docker", "compose", "-f", filepath.Join(root, "docker-compose.yml"),
 		"up", "-d", "phoenix", "hyperdx", "otelcol")
 	cmd.Dir = root
@@ -66,7 +69,7 @@ func waitOtelcolReady(ctx context.Context) error {
 	for time.Now().Before(deadline) {
 		resp, err := client.Get("http://127.0.0.1:13133/")
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close() // a readiness probe reads only the status.
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}

@@ -2,6 +2,8 @@ package batch
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,6 +81,9 @@ func (s *DiskStore) prepareFileRecordLocked(rec *FileRecord, content []byte) err
 }
 
 func (s *DiskStore) saveFileUnlocked(rec *FileRecord, content []byte) error {
+	if _, err := checkID("batch.SaveFile", rec.ID); err != nil {
+		return err
+	}
 	contentPath := filepath.Join(s.root, fileContentDir, rec.ID)
 	if err := writeFileAtomic(contentPath, content); err != nil {
 		return err
@@ -99,9 +104,9 @@ func (s *DiskStore) GetFile(id string) (FileRecord, error) {
 	if s == nil {
 		return FileRecord{}, derrors.New(derrors.CodeFailedPrecondition, "batch.GetFile", "not configured")
 	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return FileRecord{}, derrors.New(derrors.CodeInvalid, "batch.GetFile", "id required")
+	id, err := checkID("batch.GetFile", id)
+	if err != nil {
+		return FileRecord{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -110,9 +115,9 @@ func (s *DiskStore) GetFile(id string) (FileRecord, error) {
 
 func (s *DiskStore) readFileMeta(id string) (FileRecord, error) {
 	metaPath := filepath.Join(s.root, fileMetaDir, id+".json")
-	raw, err := os.ReadFile(metaPath)
+	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return FileRecord{}, derrors.New(derrors.CodeNotFound, "batch.GetFile", "file not found")
 		}
 		return FileRecord{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetFile", "read meta")
@@ -129,16 +134,16 @@ func (s *DiskStore) ReadFileContent(id string) ([]byte, error) {
 	if s == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "batch.ReadFileContent", "not configured")
 	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return nil, derrors.New(derrors.CodeInvalid, "batch.ReadFileContent", "id required")
+	id, err := checkID("batch.ReadFileContent", id)
+	if err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	contentPath := filepath.Join(s.root, fileContentDir, id)
-	raw, err := os.ReadFile(contentPath)
+	raw, err := os.ReadFile(contentPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, derrors.New(derrors.CodeNotFound, "batch.ReadFileContent", "file not found")
 		}
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "batch.ReadFileContent", "read content")
@@ -151,19 +156,30 @@ func (s *DiskStore) DeleteFile(id string) error {
 	if s == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.DeleteFile", "not configured")
 	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return derrors.New(derrors.CodeInvalid, "batch.DeleteFile", "id required")
+	id, err := checkID("batch.DeleteFile", id)
+	if err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, err := s.readFileMeta(id); err != nil {
+		return err
+	}
 	if inUse, err := s.fileReferencedByBatchLocked(id); err != nil {
 		return err
 	} else if inUse {
 		return derrors.New(derrors.CodeConflict, "batch.DeleteFile", "file referenced by a batch")
 	}
-	_ = os.Remove(filepath.Join(s.root, fileMetaDir, id+".json"))
-	_ = os.Remove(filepath.Join(s.root, fileContentDir, id))
+	return s.removeFileUnlocked(id)
+}
+
+// removeFileUnlocked deletes a file's metadata and content; the caller holds s.mu.
+func (s *DiskStore) removeFileUnlocked(id string) error {
+	for _, path := range []string{filepath.Join(s.root, fileMetaDir, id+".json"), filepath.Join(s.root, fileContentDir, id)} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return derrors.Wrap(err, derrors.CodeInternal, "batch.removeFile", "remove").With("file_id", id)
+		}
+	}
 	return nil
 }
 
@@ -171,7 +187,7 @@ func (s *DiskStore) fileReferencedByBatchLocked(fileID string) (bool, error) {
 	dir := filepath.Join(s.root, batchMetaDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return false, nil
 		}
 		return false, derrors.Wrap(err, derrors.CodeInternal, "batch.fileReferencedByBatchLocked", "readdir")
@@ -183,7 +199,9 @@ func (s *DiskStore) fileReferencedByBatchLocked(fileID string) (bool, error) {
 		bid := e.Name()[:len(e.Name())-len(".json")]
 		meta, err := s.readBatchMetaUnlocked(bid)
 		if err != nil {
-			continue
+			// Fail closed: an unreadable batch may reference this file.
+			return false, derrors.Wrap(err, derrors.CodeInternal, "batch.fileReferencedByBatchLocked", "read batch meta").
+				With("batch_id", bid)
 		}
 		if meta.InputFileID == fileID || meta.OutputFileID == fileID || meta.ErrorFileID == fileID {
 			return true, nil
@@ -193,7 +211,7 @@ func (s *DiskStore) fileReferencedByBatchLocked(fileID string) (bool, error) {
 }
 
 // SaveBatch writes batch metadata.
-func (s *DiskStore) SaveBatch(meta *BatchMeta) error {
+func (s *DiskStore) SaveBatch(meta *Meta) error {
 	if s == nil || meta == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.SaveBatch", "not configured")
 	}
@@ -212,19 +230,22 @@ func (s *DiskStore) SaveBatch(meta *BatchMeta) error {
 }
 
 // UpdateBatch replaces batch metadata.
-func (s *DiskStore) UpdateBatch(meta BatchMeta) error {
+func (s *DiskStore) UpdateBatch(meta Meta) error {
 	if s == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.UpdateBatch", "not configured")
 	}
-	if strings.TrimSpace(meta.ID) == "" {
-		return derrors.New(derrors.CodeInvalid, "batch.UpdateBatch", "id required")
+	if _, err := checkID("batch.UpdateBatch", meta.ID); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.writeBatchMeta(&meta)
 }
 
-func (s *DiskStore) writeBatchMeta(meta *BatchMeta) error {
+func (s *DiskStore) writeBatchMeta(meta *Meta) error {
+	if _, err := checkID("batch.SaveBatch", meta.ID); err != nil {
+		return err
+	}
 	metaPath := filepath.Join(s.root, batchMetaDir, meta.ID+".json")
 	raw, err := json.Marshal(meta)
 	if err != nil {
@@ -234,44 +255,45 @@ func (s *DiskStore) writeBatchMeta(meta *BatchMeta) error {
 }
 
 // GetBatch loads batch metadata.
-func (s *DiskStore) GetBatch(id string) (BatchMeta, error) {
+func (s *DiskStore) GetBatch(id string) (Meta, error) {
 	if s == nil {
-		return BatchMeta{}, derrors.New(derrors.CodeFailedPrecondition, "batch.GetBatch", "not configured")
+		return Meta{}, derrors.New(derrors.CodeFailedPrecondition, "batch.GetBatch", "not configured")
 	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return BatchMeta{}, derrors.New(derrors.CodeInvalid, "batch.GetBatch", "id required")
+	id, err := checkID("batch.GetBatch", id)
+	if err != nil {
+		return Meta{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	metaPath := filepath.Join(s.root, batchMetaDir, id+".json")
-	raw, err := os.ReadFile(metaPath)
+	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
-		if os.IsNotExist(err) {
-			return BatchMeta{}, derrors.New(derrors.CodeNotFound, "batch.GetBatch", "batch not found")
+		if errors.Is(err, fs.ErrNotExist) {
+			return Meta{}, derrors.New(derrors.CodeNotFound, "batch.GetBatch", "batch not found")
 		}
-		return BatchMeta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "read")
+		return Meta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "read")
 	}
-	var meta BatchMeta
+	var meta Meta
 	if err := json.Unmarshal(raw, &meta); err != nil {
-		return BatchMeta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "parse")
+		return Meta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "parse")
 	}
 	return meta, nil
 }
 
 // ListBatches returns all batch metadata (unordered).
-func (s *DiskStore) ListBatches() ([]BatchMeta, error) {
+func (s *DiskStore) ListBatches() ([]Meta, error) {
 	if s == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "batch.ListBatches", "not configured")
 	}
+	// Read the directory under the lock, so a batch saved meanwhile is not missed.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	dir := filepath.Join(s.root, batchMetaDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "batch.ListBatches", "readdir")
 	}
-	out := make([]BatchMeta, 0, len(entries))
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	out := make([]Meta, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
@@ -279,22 +301,23 @@ func (s *DiskStore) ListBatches() ([]BatchMeta, error) {
 		id := e.Name()[:len(e.Name())-len(".json")]
 		meta, err := s.readBatchMetaUnlocked(id)
 		if err != nil {
-			continue
+			return nil, derrors.Wrap(err, derrors.CodeInternal, "batch.ListBatches", "read batch meta").
+				With("batch_id", id)
 		}
 		out = append(out, meta)
 	}
 	return out, nil
 }
 
-func (s *DiskStore) readBatchMetaUnlocked(id string) (BatchMeta, error) {
+func (s *DiskStore) readBatchMetaUnlocked(id string) (Meta, error) {
 	metaPath := filepath.Join(s.root, batchMetaDir, id+".json")
-	raw, err := os.ReadFile(metaPath)
+	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
-		return BatchMeta{}, err
+		return Meta{}, err
 	}
-	var meta BatchMeta
+	var meta Meta
 	if err := json.Unmarshal(raw, &meta); err != nil {
-		return BatchMeta{}, err
+		return Meta{}, err
 	}
 	return meta, nil
 }

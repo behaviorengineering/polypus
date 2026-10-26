@@ -24,11 +24,11 @@ func anthropicBackend(baseURL string) config.BackendDef {
 func TestValidateAnthropicBackendURL(t *testing.T) {
 	policy := config.DefaultRouterPolicy()
 	for _, base := range []string{"", "https://api.anthropic.com", "https://api.anthropic.com/v1"} {
-		if err := ValidateBackend(anthropicBackend(base), policy); err != nil {
+		if err := validateBackend(anthropicBackend(base), policy); err != nil {
 			t.Fatalf("base %q: %v", base, err)
 		}
 	}
-	if err := ValidateBackend(anthropicBackend("https://example.com"), policy); err == nil {
+	if err := validateBackend(anthropicBackend("https://example.com"), policy); err == nil {
 		t.Fatal("expected a non-anthropic host to be rejected")
 	}
 }
@@ -36,7 +36,7 @@ func TestValidateAnthropicBackendURL(t *testing.T) {
 func TestGenericRemoteStillBlocksAnthropicHost(t *testing.T) {
 	b := anthropicBackend("https://api.anthropic.com")
 	b.Extension = ""
-	if err := ValidateBackend(b, config.DefaultRouterPolicy()); err == nil {
+	if err := validateBackend(b, config.DefaultRouterPolicy()); err == nil {
 		t.Fatal("expected api.anthropic.com blocked for a generic remote backend")
 	}
 }
@@ -53,7 +53,7 @@ func TestNewAccountRegistersAnthropicChat(t *testing.T) {
 			Timeouts: config.DefaultTimeouts(),
 			Backends: map[string]config.BackendDef{"claude_team": anthropicBackend(base)},
 		}
-		pc, err := NewAccount(cfg).GetConfigForProvider("claude_team")
+		pc, err := newAccount(cfg).GetConfigForProvider("claude_team")
 		if err != nil {
 			t.Fatal(err)
 		}

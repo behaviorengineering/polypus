@@ -22,8 +22,8 @@ type Account struct {
 	timeouts config.Timeouts
 }
 
-// NewAccount returns a Bifrost account for leaf backends plus optional Switchyard.
-func NewAccount(cfg config.RouterConfig) *Account {
+// newAccount returns a Bifrost account for leaf backends plus optional Switchyard.
+func newAccount(cfg config.RouterConfig) *Account {
 	backends := make(map[schemas.ModelProvider]config.BackendDef, len(cfg.Backends)+1)
 	for id, b := range cfg.Backends {
 		backends[schemas.ModelProvider(id)] = b
@@ -45,6 +45,7 @@ func shouldRegisterSwitchyard(cfg config.RouterConfig) bool {
 	return config.SwitchyardEnabled()
 }
 
+// GetConfiguredProviders implements schemas.Account: one provider per registered backend.
 func (a *Account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
 	out := make([]schemas.ModelProvider, 0, len(a.backends))
 	for id := range a.backends {
@@ -53,6 +54,7 @@ func (a *Account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
 	return out, nil
 }
 
+// GetKeysForProvider implements schemas.Account: the backend's resolved credential.
 func (a *Account) GetKeysForProvider(_ context.Context, provider schemas.ModelProvider) ([]schemas.Key, error) {
 	b, ok := a.backends[provider]
 	if !ok {
@@ -73,6 +75,7 @@ func (a *Account) GetKeysForProvider(_ context.Context, provider schemas.ModelPr
 	}}, nil
 }
 
+// GetConfigForProvider implements schemas.Account: the backend's base URL, headers and limits.
 func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas.ProviderConfig, error) {
 	b, ok := a.backends[provider]
 	if !ok {
@@ -96,17 +99,9 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 		baseURL = anthropicBaseURL(b.BaseURL)
 	}
 	return &schemas.ProviderConfig{
-		NetworkConfig: schemas.NetworkConfig{
-			BaseURL:                        baseURL,
-			DefaultRequestTimeoutInSeconds: a.timeouts.ProviderSeconds(),
-			AllowPrivateNetwork:            true,
-			ExtraHeaders:                   secretExtraHeaders(b.ExtraHeaders),
-		},
-		ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
-			Concurrency: 8,
-			BufferSize:  32,
-		},
-		SendBackRawResponse: true,
+		NetworkConfig:            networkConfig(baseURL, b, a.timeouts),
+		ConcurrencyAndBufferSize: providerPool,
+		SendBackRawResponse:      true,
 		CustomProviderConfig: &schemas.CustomProviderConfig{
 			BaseProviderType: baseType,
 			AllowedRequests:  allowedRequestsForBackend(b),
@@ -121,19 +116,25 @@ func anthropicBaseURL(raw string) string {
 	return strings.TrimSuffix(base, "/v1")
 }
 
+// networkConfig is how Bifrost reaches a backend at baseURL.
+func networkConfig(baseURL string, b config.BackendDef, timeouts config.Timeouts) schemas.NetworkConfig {
+	return schemas.NetworkConfig{
+		BaseURL:                        baseURL,
+		DefaultRequestTimeoutInSeconds: timeouts.ProviderSeconds(),
+		AllowPrivateNetwork:            true,
+		ExtraHeaders:                   secretExtraHeaders(b.ExtraHeaders),
+	}
+}
+
+// providerPool is each backend's Bifrost worker pool: concurrent requests and the
+// queue behind them.
+var providerPool = schemas.ConcurrencyAndBufferSize{Concurrency: 8, BufferSize: 32}
+
 func openRouterProviderConfig(b config.BackendDef, timeouts config.Timeouts) *schemas.ProviderConfig {
 	return &schemas.ProviderConfig{
-		NetworkConfig: schemas.NetworkConfig{
-			BaseURL:                        openAIBaseURL(b.BaseURL),
-			DefaultRequestTimeoutInSeconds: timeouts.ProviderSeconds(),
-			AllowPrivateNetwork:            true,
-			ExtraHeaders:                   secretExtraHeaders(b.ExtraHeaders),
-		},
-		ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
-			Concurrency: 8,
-			BufferSize:  32,
-		},
-		SendBackRawResponse: true,
+		NetworkConfig:            networkConfig(openAIBaseURL(b.BaseURL), b, timeouts),
+		ConcurrencyAndBufferSize: providerPool,
+		SendBackRawResponse:      true,
 	}
 }
 

@@ -147,7 +147,7 @@ func SyntheticAllowModels(backendID string, allow []string) []string {
 	return out
 }
 
-// Validate models config is well-formed (optional fields).
+// validate reports whether the models config is well-formed (optional fields).
 func (m *BackendModels) validate(backendID string) error {
 	if m == nil {
 		return nil

@@ -3,8 +3,11 @@ package otelcol
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -136,5 +139,35 @@ func TestPickHyperDXTraceSource(t *testing.T) {
 	})
 	if id != "tr" {
 		t.Fatalf("expected trace source tr, got %q", id)
+	}
+}
+
+func TestJoinProbeErrorsNamesOnlyTheFailedProbes(t *testing.T) {
+	results := []probeResult{
+		{name: "gen_ai phoenix", want: ">0", count: 1},
+		{name: "plain phoenix", want: "0", count: 2},
+		{name: "gen_ai hyperdx", want: ">0", err: errors.New("down")},
+	}
+	err := joinProbeErrors(results)
+	if err == nil || strings.Contains(err.Error(), "gen_ai phoenix") ||
+		!strings.Contains(err.Error(), "plain phoenix want 0 got 2") || !strings.Contains(err.Error(), "gen_ai hyperdx") {
+		t.Fatalf("got %v", err)
+	}
+	if err := joinProbeErrors(results[:1]); err != nil {
+		t.Fatalf("all probes passed: %v", err)
+	}
+}
+
+func TestDockerExecRetryableReadsTheExitStatus(t *testing.T) {
+	daemonFailed := exec.Command("sh", "-c", "exit 125").Run()
+	queryFailed := exec.Command("sh", "-c", "exit 1").Run()
+	if !dockerExecRetryable(fmt.Errorf("wrapped: %w", daemonFailed)) {
+		t.Fatal("exit 125 means docker itself failed: retry")
+	}
+	if dockerExecRetryable(queryFailed) {
+		t.Fatal("a failed query is not retried")
+	}
+	if dockerExecRetryable(errors.New("connection timeout, says some text")) {
+		t.Fatal("text alone is not a docker failure")
 	}
 }

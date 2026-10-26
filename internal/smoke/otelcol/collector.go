@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,6 +38,9 @@ type CollectorOptions struct {
 	AllowHyperDXCH   bool
 	// SkipHyperDXVerify skips HyperDX routing checks (for example tailnet laptops without /api/v2 or Docker).
 	SkipHyperDXVerify bool
+	// Logger receives progress (endpoints, trace ids, probe counts). Nil discards it,
+	// so the smoke never writes to the host's stdout.
+	Logger *slog.Logger
 }
 
 // DefaultCollectorPollInterval is the delay between backend polls.
@@ -60,80 +64,118 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 	}
 	opts = opts.withCollectorDefaults()
 
-	fmt.Printf("collector smoke: otlp=%s phoenix=%s hyperdx=%s\n",
-		opts.OTLPEndpoint, opts.PhoenixBaseURL, opts.HyperDXBaseURL)
+	opts.Logger.Info("collector smoke", "otlp", opts.OTLPEndpoint, "phoenix", opts.PhoenixBaseURL, "hyperdx", opts.HyperDXBaseURL)
 
-	genAITrace, err := exportCollectorSpan(ctx, opts.OTLPEndpoint, "polypus-local-collector-smoke-genai",
-		attribute.String("gen_ai.system", "polypus-local-smoke"),
-		attribute.String("smoke.probe", "gen_ai"),
-	)
+	genAITrace, plainTrace, err := exportSmokeTraces(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("collector smoke: export gen_ai span: %w", err)
+		return err
 	}
-	plainTrace, err := exportCollectorSpan(ctx, opts.OTLPEndpoint, "polypus-local-collector-smoke-plain",
-		attribute.String("smoke.probe", "plain"),
-	)
-	if err != nil {
-		return fmt.Errorf("collector smoke: export plain span: %w", err)
-	}
-	genAITrace, err = normalizeTraceIDHex(genAITrace)
-	if err != nil {
-		return fmt.Errorf("collector smoke: gen_ai trace id: %w", err)
-	}
-	plainTrace, err = normalizeTraceIDHex(plainTrace)
-	if err != nil {
-		return fmt.Errorf("collector smoke: plain trace id: %w", err)
-	}
-	fmt.Printf("collector smoke: gen_ai trace_id=%s plain trace_id=%s\n", genAITrace, plainTrace)
-	fmt.Println("collector smoke: otlp export ok")
+	opts.Logger.Info("collector smoke: otlp export ok", "gen_ai_trace_id", genAITrace, "plain_trace_id", plainTrace)
 
 	deadline, _ := ctx.Deadline()
 	var lastErr error
 	for {
 		if err := ctx.Err(); err != nil {
 			if lastErr != nil {
-				return fmt.Errorf("collector smoke: %w (last probe: %v)", err, lastErr)
+				return fmt.Errorf("collector smoke: %w (last probe: %w)", err, lastErr)
 			}
 			return fmt.Errorf("collector smoke: %w", err)
 		}
-
-		genPhoenix, errGenPhoenix := phoenixSpanCount(ctx, opts, genAITrace)
-		plainPhoenix, errPlainPhoenix := phoenixSpanCount(ctx, opts, plainTrace)
-		var genHyper, plainHyper int
-		var errGenHyper, errPlainHyper error
-		if !opts.SkipHyperDXVerify {
-			genHyper, errGenHyper = hyperdxTraceCount(ctx, opts, genAITrace)
-			plainHyper, errPlainHyper = hyperdxTraceCount(ctx, opts, plainTrace)
-		}
-
-		fmt.Printf("collector smoke: probe counts gen_ai phoenix=%d hyperdx=%d plain phoenix=%d hyperdx=%d\n",
-			genPhoenix, genHyper, plainPhoenix, plainHyper)
-
-		okGenPhoenix := errGenPhoenix == nil && genPhoenix > 0
-		okPlainAbsentPhoenix := errPlainPhoenix == nil && plainPhoenix == 0
-		okGenHyper := opts.SkipHyperDXVerify || (errGenHyper == nil && genHyper > 0)
-		okPlainHyper := opts.SkipHyperDXVerify || (errPlainHyper == nil && plainHyper > 0)
-
-		if okGenPhoenix && okPlainAbsentPhoenix && okGenHyper && okPlainHyper {
-			if opts.SkipHyperDXVerify {
-				fmt.Println("collector smoke: routing ok (gen_ai -> Phoenix; HyperDX verify skipped)")
-			} else {
-				fmt.Println("collector smoke: routing ok (gen_ai -> Phoenix+HyperDX, plain -> HyperDX only)")
-			}
+		if lastErr = probeRouting(ctx, opts, genAITrace, plainTrace); lastErr == nil {
+			opts.Logger.Info("collector smoke: routing ok", "hyperdx_verified", !opts.SkipHyperDXVerify)
 			return nil
 		}
-
-		lastErr = joinProbeErrors(genPhoenix, plainPhoenix, genHyper, plainHyper,
-			errGenPhoenix, errPlainPhoenix, errGenHyper, errPlainHyper,
-			okGenPhoenix, okPlainAbsentPhoenix, okGenHyper, okPlainHyper)
-
 		if time.Now().Add(opts.PollInterval).After(deadline) {
-			return fmt.Errorf("collector smoke: timed out: %v", lastErr)
+			return fmt.Errorf("collector smoke: timed out: %w", lastErr)
 		}
 		if err := sleepContext(ctx, opts.PollInterval); err != nil {
 			return err
 		}
 	}
+}
+
+// exportSmokeTraces sends one gen_ai span and one plain span through the collector
+// and returns their normalised trace ids.
+func exportSmokeTraces(ctx context.Context, opts CollectorOptions) (genAI, plain string, err error) {
+	genAI, err = exportCollectorSpan(ctx, opts.OTLPEndpoint, "polypus-local-collector-smoke-genai",
+		attribute.String("gen_ai.system", "polypus-local-smoke"),
+		attribute.String("smoke.probe", "gen_ai"),
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("collector smoke: export gen_ai span: %w", err)
+	}
+	plain, err = exportCollectorSpan(ctx, opts.OTLPEndpoint, "polypus-local-collector-smoke-plain",
+		attribute.String("smoke.probe", "plain"),
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("collector smoke: export plain span: %w", err)
+	}
+	if genAI, err = normalizeTraceIDHex(genAI); err != nil {
+		return "", "", fmt.Errorf("collector smoke: gen_ai trace id: %w", err)
+	}
+	if plain, err = normalizeTraceIDHex(plain); err != nil {
+		return "", "", fmt.Errorf("collector smoke: plain trace id: %w", err)
+	}
+	return genAI, plain, nil
+}
+
+// probeResult is one routing check: how many spans a backend holds for a trace, and
+// whether that count is what routing should produce.
+type probeResult struct {
+	name  string // for example "gen_ai phoenix".
+	want  string // "0" or ">0".
+	count int
+	err   error
+}
+
+func (p probeResult) ok() bool {
+	if p.err != nil {
+		return false
+	}
+	if p.want == "0" {
+		return p.count == 0
+	}
+	return p.count > 0
+}
+
+// probeRouting checks the collector's routing once: the gen_ai trace reaches Phoenix
+// and the plain one does not, and (unless skipped) both reach HyperDX. It returns nil
+// when routing is right, else what is still missing.
+func probeRouting(ctx context.Context, opts CollectorOptions, genAITrace, plainTrace string) error {
+	results := make([]probeResult, 0, 4)
+	add := func(name, want string, count int, err error) {
+		results = append(results, probeResult{name: name, want: want, count: count, err: err})
+	}
+	n, err := phoenixSpanCount(ctx, opts, genAITrace)
+	add("gen_ai phoenix", ">0", n, err)
+	n, err = phoenixSpanCount(ctx, opts, plainTrace)
+	add("plain phoenix", "0", n, err)
+	if !opts.SkipHyperDXVerify {
+		n, err = hyperdxTraceCount(ctx, opts, genAITrace)
+		add("gen_ai hyperdx", ">0", n, err)
+		n, err = hyperdxTraceCount(ctx, opts, plainTrace)
+		add("plain hyperdx", ">0", n, err)
+	}
+	attrs := make([]any, 0, 2*len(results))
+	for _, r := range results {
+		attrs = append(attrs, strings.ReplaceAll(r.name, " ", "_"), r.count)
+	}
+	opts.Logger.Info("collector smoke: probe counts", attrs...)
+	return joinProbeErrors(results)
+}
+
+// joinProbeErrors describes every failed probe, or returns nil when all passed.
+func joinProbeErrors(results []probeResult) error {
+	var parts []string
+	for _, r := range results {
+		if !r.ok() {
+			parts = append(parts, fmt.Sprintf("%s want %s got %d err=%v", r.name, r.want, r.count, r.err))
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(parts, "; "))
 }
 
 func (o CollectorOptions) withCollectorDefaults() CollectorOptions {
@@ -161,6 +203,9 @@ func (o CollectorOptions) withCollectorDefaults() CollectorOptions {
 	}
 	if out.PollInterval <= 0 {
 		out.PollInterval = DefaultCollectorPollInterval
+	}
+	if out.Logger == nil {
+		out.Logger = slog.New(slog.DiscardHandler)
 	}
 	out.AllowHyperDXCH = true
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK"))) {
@@ -216,7 +261,7 @@ func exportCollectorSpan(ctx context.Context, endpoint, spanName string, attrs .
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 	defer func() {
-		_ = tp.Shutdown(context.Background())
+		_ = tp.Shutdown(ctx) // the caller's deadline bounds the final export.
 	}()
 
 	tracer := tp.Tracer("polypus-local-collector-smoke")
@@ -483,12 +528,12 @@ func hyperdxClickhouseDocker(ctx context.Context, container, traceID string) (in
 	query := fmt.Sprintf("SELECT count() FROM default.otel_traces WHERE TraceId = '%s'", traceID)
 	var out []byte
 	err = outbound.Run(ctx, outbound.DepDockerDaemon, func() error {
-		cmd := exec.CommandContext(ctx, "docker", "exec", container,
+		cmd := exec.CommandContext(ctx, "docker", "exec", container, //nolint:gosec // G204: traceID is normalised hex and container is the smoke's own name
 			"clickhouse-client", "--query", query)
 		b, err := cmd.CombinedOutput()
 		if err != nil {
 			if dockerExecRetryable(err) {
-				return fmt.Errorf("clickhouse exec: %w: %s", err, strings.TrimSpace(string(b)))
+				return outbound.Retry(fmt.Errorf("clickhouse exec: %w: %s", err, strings.TrimSpace(string(b))))
 			}
 			return outbound.Abort(fmt.Errorf("clickhouse exec: %w: %s", err, strings.TrimSpace(string(b))))
 		}
@@ -505,15 +550,16 @@ func hyperdxClickhouseDocker(ctx context.Context, container, traceID string) (in
 	return n, nil
 }
 
+// dockerExitDaemon is the exit status docker gives when docker itself failed (daemon
+// unreachable, container not running yet) rather than the command it ran.
+const dockerExitDaemon = 125
+
+// dockerExecRetryable reports a docker exec failure worth retrying: docker itself
+// failed, which a starting stack outgrows. A failed query (any other exit status) or
+// a missing docker binary is not retried.
 func dockerExecRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "connection") ||
-		strings.Contains(msg, "daemon") ||
-		strings.Contains(msg, "temporarily")
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == dockerExitDaemon
 }
 
 func parseCountOutput(out []byte) (int, error) {
@@ -526,26 +572,6 @@ func parseCountOutput(out []byte) (int, error) {
 		return 0, fmt.Errorf("hyperdx: parse clickhouse count %q: %w", s, err)
 	}
 	return n, nil
-}
-
-func joinProbeErrors(genPhoenix, plainPhoenix, genHyper, plainHyper int,
-	errGenPhoenix, errPlainPhoenix, errGenHyper, errPlainHyper error,
-	okGenPhoenix, okPlainAbsentPhoenix, okGenHyper, okPlainHyper bool,
-) error {
-	var parts []string
-	if !okGenPhoenix {
-		parts = append(parts, fmt.Sprintf("gen_ai phoenix want >0 got %d err=%v", genPhoenix, errGenPhoenix))
-	}
-	if !okPlainAbsentPhoenix {
-		parts = append(parts, fmt.Sprintf("plain phoenix want 0 got %d err=%v", plainPhoenix, errPlainPhoenix))
-	}
-	if !okGenHyper {
-		parts = append(parts, fmt.Sprintf("gen_ai hyperdx want >0 got %d err=%v", genHyper, errGenHyper))
-	}
-	if !okPlainHyper {
-		parts = append(parts, fmt.Sprintf("plain hyperdx want >0 got %d err=%v", plainHyper, errPlainHyper))
-	}
-	return errors.New(strings.Join(parts, "; "))
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {

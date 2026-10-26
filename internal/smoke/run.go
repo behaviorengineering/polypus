@@ -3,10 +3,17 @@ package smoke
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/config"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/observability"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // Channel names accepted by Run / Options.Channels.
@@ -32,7 +39,7 @@ const (
 // Options configures a multi-channel smoke run.
 type Options struct {
 	BaseURL        string
-	Channels       []string // empty means all
+	Channels       []string // empty means all.
 	ChatModel      string
 	TTSModel       string
 	STTModel       string
@@ -40,8 +47,8 @@ type Options struct {
 	BatchModel     string
 	TTSVoice       string
 	TTSText        string
-	AudioOutPath   string // optional TTS output file (POLYPUS_SMOKE_OUT)
-	RequireCF      bool   // when true, TypeSafe billing skips become failures (CI)
+	AudioOutPath   string // optional TTS output file (POLYPUS_SMOKE_OUT).
+	RequireCF      bool   // when true, TypeSafe billing skips become failures (CI).
 	// RequireSelectedModel fails chat when Switchyard routing metadata is missing.
 	RequireSelectedModel bool
 	// AllowedSelectedModels when non-empty requires chat selected leaf ∈ list.
@@ -50,15 +57,27 @@ type Options struct {
 	MaxTokens             int
 }
 
+// Status is a probe outcome.
+type Status string
+
+// Probe outcomes.
+const (
+	StatusPass Status = "pass"
+	StatusFail Status = "fail"
+	StatusSkip Status = "skip"
+)
+
 // Result is one probe outcome (JSONL-friendly).
 type Result struct {
 	Channel       string `json:"channel"`
 	Model         string `json:"model,omitempty"`
 	SelectedModel string `json:"selected_model,omitempty"`
 	Probe         string `json:"probe"`
-	Status        string `json:"status"` // pass | fail | skip
+	Status        Status `json:"status"`
 	Ms            int64  `json:"ms"`
 	Detail        string `json:"detail"`
+	// cause is the failed probe's error, for classifying it (Detail is its text).
+	cause error
 }
 
 // AllChannels is the default CI / smoke-all set.
@@ -73,7 +92,7 @@ func (o *Options) Normalize() {
 	}
 	o.BaseURL = strings.TrimRight(strings.TrimSpace(o.BaseURL), "/")
 	if o.BaseURL == "" {
-		o.BaseURL = envOr("POLYPUS_BASE_URL", "http://127.0.0.1:1320")
+		o.BaseURL = envOr("POLYPUS_BASE_URL", config.DefaultGatewayURL)
 	}
 	if len(o.Channels) == 0 {
 		o.Channels = AllChannels()
@@ -114,43 +133,63 @@ func (o *Options) Normalize() {
 // Skip is for TypeSafe billing locally when RequireCF is false. Credentials live
 // on the gateway (config secrets + keyring or env), not in the smoke CLI process.
 func Run(ctx context.Context, opts Options) ([]Result, error) {
+	if ctx == nil {
+		return nil, derrors.New(derrors.CodeInvalid, "smoke.Run", "context required")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return nil, derrors.New(derrors.CodeFailedPrecondition, "smoke.Run", "context deadline required")
+	}
 	opts.Normalize()
 
 	var out []Result
-	var failed bool
+	var errs []error
 	for _, ch := range opts.Channels {
 		ch = strings.ToLower(strings.TrimSpace(ch))
-		var results []Result
-		var err error
-		switch ch {
-		case ChannelChat:
-			results, err = runChat(ctx, opts)
-		case ChannelTTS:
-			results, err = runTTS(ctx, opts)
-		case ChannelSTT:
-			results, err = runSTT(ctx, opts)
-		case ChannelSystemOne:
-			results, err = runSystemOne(ctx, opts)
-		case ChannelBatch:
-			results, err = runBatch(ctx, opts)
-		default:
-			results = []Result{{Channel: ch, Probe: "unknown", Status: "fail", Detail: "unknown channel"}}
-			err = fmt.Errorf("unknown channel %q", ch)
-		}
+		results, err := runChannel(ctx, ch, opts)
 		out = append(out, results...)
 		if err != nil {
-			failed = true
+			errs = append(errs, fmt.Errorf("channel %s: %w", ch, err))
+			continue
 		}
 		for _, r := range results {
-			if r.Status == "fail" {
-				failed = true
+			if r.Status == StatusFail {
+				errs = append(errs, fmt.Errorf("channel %s: probe %s: %s", ch, r.Probe, r.Detail))
 			}
 		}
 	}
-	if failed {
-		return out, fmt.Errorf("smoke: one or more channels failed")
+	if len(errs) > 0 {
+		return out, derrors.Wrap(errors.Join(errs...), derrors.CodeUnavailable, "smoke.Run", "one or more channels failed")
 	}
 	return out, nil
+}
+
+// runChannel runs one channel under its own span, so the probes' client spans
+// share a parent and the gateway's server spans join the same trace.
+func runChannel(ctx context.Context, ch string, opts Options) ([]Result, error) {
+	ctx, span := observability.Tracer().Start(ctx, "polypus-smoke."+ch)
+	defer span.End()
+	var results []Result
+	var err error
+	switch ch {
+	case ChannelChat:
+		results, err = runChat(ctx, opts)
+	case ChannelTTS:
+		results, err = runTTS(ctx, opts)
+	case ChannelSTT:
+		results, err = runSTT(ctx, opts)
+	case ChannelSystemOne:
+		results, err = runSystemOne(ctx, opts)
+	case ChannelBatch:
+		results, err = runBatch(ctx, opts)
+	default:
+		results = []Result{{Channel: ch, Probe: "unknown", Status: StatusFail, Detail: "unknown channel"}}
+		err = fmt.Errorf("unknown channel %q", ch)
+	}
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return results, err
 }
 
 func envOr(key, def string) string {
@@ -162,12 +201,13 @@ func envOr(key, def string) string {
 
 func timed(channel, probe, model string, fn func() (string, error)) Result {
 	start := time.Now()
-	row := Result{Channel: channel, Probe: probe, Model: model, Status: "pass"}
+	row := Result{Channel: channel, Probe: probe, Model: model, Status: StatusPass}
 	detail, err := fn()
 	row.Ms = time.Since(start).Milliseconds()
 	if err != nil {
-		row.Status = "fail"
+		row.Status = StatusFail
 		row.Detail = err.Error()
+		row.cause = err
 		return row
 	}
 	row.Detail = detail

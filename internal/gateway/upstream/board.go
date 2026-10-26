@@ -20,13 +20,13 @@ const (
 // Gobreaker policy shared with HTTP Retry-After on breaker rejects.
 const (
 	OpenTimeout             = 30 * time.Second
-	HalfOpenMaxRequests     = uint32(1)
+	halfOpenMaxRequests     = uint32(1)
 	ConsecutiveFailuresTrip = uint32(3)
 )
 
 // ErrResponseWritten means the upstream HTTP status was already copied to the
-// client; callers must not write another error body. It still counts as a
-// breaker failure when status >= 500.
+// client; callers must not write another error body. Whether it counts against
+// the breaker follows the wrapped domain code (CodeCanceled: the client left).
 var ErrResponseWritten = errors.New("upstream: response already written")
 
 // Board holds lazily created circuit breakers keyed by upstream name
@@ -80,7 +80,7 @@ func (b *Board) breaker(name string) *gobreaker.CircuitBreaker {
 	}
 	c := gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:        name,
-		MaxRequests: HalfOpenMaxRequests,
+		MaxRequests: halfOpenMaxRequests,
 		Interval:    0,
 		Timeout:     OpenTimeout,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
@@ -98,9 +98,12 @@ func (b *Board) breaker(name string) *gobreaker.CircuitBreaker {
 	return c
 }
 
+// unknownUpstream names an upstream the error did not identify.
+const unknownUpstream = "unknown"
+
 func normalizeName(name string) string {
 	if name == "" {
-		return "unknown"
+		return unknownUpstream
 	}
 	return name
 }
@@ -110,18 +113,30 @@ func mapExecuteErr(name string, err error) error {
 		return nil
 	}
 	if Unavailable(err) {
-		return fmt.Errorf("upstream %s unavailable: %w", name, err)
+		return UnavailableError(name, err)
 	}
 	return err
 }
 
+// UnavailableError is the error for a call the breaker for name refused; err is the
+// breaker's (gobreaker.ErrOpenState or ErrTooManyRequests).
+func UnavailableError(name string, err error) error {
+	return derrors.Wrap(err, derrors.CodeUnavailable, "upstream.Execute", "upstream "+name+" unavailable").
+		With(FieldUpstream, name)
+}
+
+// FieldUpstream is the error field naming the upstream whose breaker refused a call.
+const FieldUpstream = "upstream"
+
 // callerVisible reports codes that describe the request, not the upstream's health.
+// CodeCanceled is the caller going away (closed stream, cancelled request), so it
+// never counts against the backend.
 func callerVisible(code derrors.Code) bool {
 	switch code {
 	case derrors.CodeRateLimited, derrors.CodeInvalid, derrors.CodeUnauthorized,
-		derrors.CodeNotFound, derrors.CodeConflict:
+		derrors.CodeNotFound, derrors.CodeConflict, derrors.CodeCanceled:
 		return true
-	case derrors.CodeTimeout, derrors.CodeCanceled, derrors.CodeFailedPrecondition,
+	case derrors.CodeTimeout, derrors.CodeFailedPrecondition,
 		derrors.CodeUnavailable, derrors.CodeNotReady, derrors.CodeInternal, derrors.CodeUnimplemented:
 		return false
 	default:

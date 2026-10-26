@@ -3,14 +3,41 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+	"text/template"
 )
 
-func writeHermeticConfig(path string, cfBaseV1 string) error {
-	cfBaseV1 = strings.TrimRight(strings.TrimSpace(cfBaseV1), "/")
-	content := fmt.Sprintf(`processes:
+// fixtureTemplates holds the config fixtures. The cf_local and mlx_local backend
+// blocks are written once and shared.
+const fixtureTemplates = `
+{{define "cf_local"}}  cf_local:
+    remote: true
+    extension: cloudflare
+    base_url: {{quote .CFBase}}
+    auth:
+      bearer_env: CF_AI_API_KEY
+    capabilities: [chat, tts, stt, voices, systemone, batch]
+    models:
+      sync: false
+      allow:
+{{- range .CFAllow}}
+        - {{quote .}}
+{{- end}}
+{{end}}
+{{define "mlx_local"}}  mlx_local:
+    base_url: {{quote .MLXBase}}
+    capabilities: [tts, stt, voices]
+    models:
+      sync: false
+      allow:
+{{- range .MLXAllow}}
+        - {{quote .}}
+{{- end}}
+{{end}}
+{{define "cf"}}processes:
   mlx: false
 
 chat_backend:
@@ -35,94 +62,15 @@ batch_backend:
 timeouts:
   min: 5s
   max: 900s
-  chat: 60s
+  chat: {{.ChatTimeout}}
   speech: 180s
   backends:
     cf_local:
-      chat: 60s
+      chat: {{.ChatTimeout}}
 
 backends:
-  cf_local:
-    remote: true
-    extension: cloudflare
-    base_url: %s
-    auth:
-      bearer_env: CF_AI_API_KEY
-    capabilities: [chat, tts, stt, voices, systemone, batch]
-    models:
-      sync: false
-      allow:
-        - "@cf/ibm-granite/granite-4.0-h-micro"
-        - "@cf/zai-org/glm-4.7-flash"
-        - "@cf/google/gemma-4-26b-a4b-it"
-        - "@cf/deepgram/aura-2-en"
-        - "@cf/deepgram/nova-3"
-        - "typesafe/jev"
-`, cfBaseV1)
-	return os.WriteFile(path, []byte(content), 0o600)
-}
-
-func writeLiveConfig(path string, accountID string) error {
-	accountID = strings.TrimSpace(accountID)
-	if accountID == "" {
-		return fmt.Errorf("integration: CF_ACCOUNT_ID required for live config")
-	}
-	base := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", accountID)
-	content := fmt.Sprintf(`processes:
-  mlx: false
-
-chat_backend:
-  enabled: true
-  default: cf_local
-tts_backend:
-  enabled: true
-  default: cf_local
-stt_backend:
-  enabled: true
-  default: cf_local
-proxy_backend:
-  enabled: true
-  default: cf_local
-systemone_backend:
-  enabled: true
-  default: cf_local
-batch_backend:
-  enabled: true
-  default: cf_local
-
-timeouts:
-  min: 5s
-  max: 900s
-  chat: 120s
-  speech: 180s
-  backends:
-    cf_local:
-      chat: 120s
-
-backends:
-  cf_local:
-    remote: true
-    extension: cloudflare
-    base_url: %s
-    auth:
-      bearer_env: CF_AI_API_KEY
-    capabilities: [chat, tts, stt, voices, systemone, batch]
-    models:
-      sync: false
-      allow:
-        - "@cf/ibm-granite/granite-4.0-h-micro"
-        - "@cf/zai-org/glm-4.7-flash"
-        - "@cf/google/gemma-4-26b-a4b-it"
-        - "@cf/deepgram/aura-2-en"
-        - "@cf/deepgram/nova-3"
-        - "typesafe/jev"
-`, base)
-	return os.WriteFile(path, []byte(content), 0o600)
-}
-
-func writeMlxConfig(path string, mlxBaseURL string) error {
-	mlxBaseURL = strings.TrimRight(strings.TrimSpace(mlxBaseURL), "/")
-	content := fmt.Sprintf(`processes:
+{{template "cf_local" .}}{{end}}
+{{define "mlx"}}processes:
   mlx: false
 
 chat_backend:
@@ -143,24 +91,8 @@ timeouts:
   speech: 180s
 
 backends:
-  mlx_local:
-    base_url: %s
-    capabilities: [tts, stt, voices]
-    models:
-      sync: false
-      allow:
-        - %s
-        - %s
-        - %s
-`, mlxBaseURL, DefaultMLXTTSModel, DefaultMLXSTTModel, DefaultHiggsTTSModel)
-	return os.WriteFile(path, []byte(content), 0o600)
-}
-
-func writeRouterConfig(path string, cfBaseV1, switchyardBase, mlxBaseURL, switchyardConfigPath string) error {
-	cfBaseV1 = strings.TrimRight(strings.TrimSpace(cfBaseV1), "/")
-	switchyardBase = strings.TrimRight(strings.TrimSpace(switchyardBase), "/")
-	mlxBaseURL = strings.TrimRight(strings.TrimSpace(mlxBaseURL), "/")
-	content := fmt.Sprintf(`processes:
+{{template "mlx_local" .}}{{end}}
+{{define "router"}}processes:
   mlx: false
 
 chat_backend:
@@ -177,43 +109,20 @@ proxy_backend:
   default: mlx_local
 
 switchyard:
-  base_url: %s
-  config_path: %s
+  base_url: {{quote .SwitchyardBase}}
+  config_path: {{quote .SwitchyardConfig}}
 
 timeouts:
   min: 5s
   max: 900s
-  chat: 60s
+  chat: {{.ChatTimeout}}
   speech: 180s
   backends:
     cf_local:
-      chat: 60s
+      chat: {{.ChatTimeout}}
 
 backends:
-  mlx_local:
-    base_url: %s
-    capabilities: [tts, stt, voices]
-    models:
-      sync: false
-      allow:
-        - %s
-  cf_local:
-    remote: true
-    extension: cloudflare
-    base_url: %s
-    auth:
-      bearer_env: CF_AI_API_KEY
-    capabilities: [chat, tts, stt, voices, systemone, batch]
-    models:
-      sync: false
-      allow:
-        - "@cf/ibm-granite/granite-4.0-h-micro"
-        - "@cf/zai-org/glm-4.7-flash"
-        - "@cf/google/gemma-4-26b-a4b-it"
-        - "@cf/deepgram/aura-2-en"
-        - "@cf/deepgram/nova-3"
-        - "typesafe/jev"
-
+{{template "mlx_local" .}}{{template "cf_local" .}}
 routers:
   investigator:
     capability: chat
@@ -221,8 +130,71 @@ routers:
       type: stage_router
       picker: efficient_first
       confidence_threshold: 0.5
-      capable: cf_local/@cf/zai-org/glm-4.7-flash
-      efficient: cf_local/@cf/zai-org/glm-4.7-flash
-`, switchyardBase, switchyardConfigPath, mlxBaseURL, DefaultMLXTTSModel, cfBaseV1)
-	return os.WriteFile(path, []byte(content), 0o600)
+      capable: {{quote .RouterLeaf}}
+      efficient: {{quote .RouterLeaf}}
+{{end}}`
+
+// quote writes s as a JSON string, which YAML reads as a double-quoted scalar.
+func quote(s string) (string, error) {
+	b, err := json.Marshal(s)
+	return string(b), err
+}
+
+var fixtures = template.Must(template.New("fixtures").Funcs(template.FuncMap{"quote": quote}).Parse(fixtureTemplates))
+
+// fixture is the data every config fixture reads; each fills what its template uses.
+type fixture struct {
+	CFBase           string
+	CFAllow          []string
+	MLXBase          string
+	MLXAllow         []string
+	SwitchyardBase   string
+	SwitchyardConfig string
+	ChatTimeout      string
+	RouterLeaf       string
+}
+
+func writeFixture(path, name string, data fixture) error {
+	var b strings.Builder
+	if err := fixtures.ExecuteTemplate(&b, name, data); err != nil {
+		return fmt.Errorf("integration: %s config: %w", name, err)
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+func trimURL(u string) string {
+	return strings.TrimRight(strings.TrimSpace(u), "/")
+}
+
+func writeHermeticConfig(path string, cfBaseV1 string) error {
+	return writeFixture(path, "cf", fixture{CFBase: trimURL(cfBaseV1), CFAllow: cfLocalAllow(), ChatTimeout: "60s"})
+}
+
+func writeLiveConfig(path string, accountID string) error {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return fmt.Errorf("integration: CF_ACCOUNT_ID required for live config")
+	}
+	base := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", accountID)
+	return writeFixture(path, "cf", fixture{CFBase: base, CFAllow: cfLocalAllow(), ChatTimeout: "120s"})
+}
+
+func writeMlxConfig(path string, mlxBaseURL string) error {
+	return writeFixture(path, "mlx", fixture{
+		MLXBase:  trimURL(mlxBaseURL),
+		MLXAllow: []string{DefaultMLXTTSModel, DefaultMLXSTTModel, DefaultHiggsTTSModel},
+	})
+}
+
+func writeRouterConfig(path string, cfBaseV1, switchyardBase, mlxBaseURL, switchyardConfigPath string) error {
+	return writeFixture(path, "router", fixture{
+		CFBase:           trimURL(cfBaseV1),
+		CFAllow:          cfLocalAllow(),
+		MLXBase:          trimURL(mlxBaseURL),
+		MLXAllow:         []string{DefaultMLXTTSModel},
+		SwitchyardBase:   trimURL(switchyardBase),
+		SwitchyardConfig: switchyardConfigPath,
+		ChatTimeout:      "60s",
+		RouterLeaf:       "cf_local/" + routerLeafModel,
+	})
 }

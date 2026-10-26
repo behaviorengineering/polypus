@@ -9,6 +9,7 @@ import (
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
+// Batch endpoints a batch input line can target.
 const (
 	EndpointChatCompletions = "/v1/chat/completions"
 	EndpointEmbeddings      = "/v1/embeddings"
@@ -80,6 +81,11 @@ func ParseBatchJSONL(raw []byte, endpoint string) (ParsedInput, error) {
 		if err := validateBodyForEndpoint(endpoint, req.Body); err != nil {
 			return ParsedInput{}, derrors.Wrap(err, derrors.CodeInvalid, "batch.ParseBatchJSONL", "body").
 				With("line", strconv.Itoa(i+1))
+		}
+		if _, dup := out.BodyByID[req.CustomID]; dup {
+			// Results are matched back by custom_id, so it must be unique.
+			return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "duplicate custom_id").
+				With("line", strconv.Itoa(i+1)).With("custom_id", req.CustomID)
 		}
 		out.Lines = append(out.Lines, req)
 		out.BodyByID[req.CustomID] = req.Body

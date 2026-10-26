@@ -13,7 +13,8 @@ func agentOperatingGuide(root *cobra.Command) string {
 	fmt.Fprintf(&b, `polypus %s — OpenAI-compatible inference gateway (loopback)
 
 ROLE & BOUNDARIES
-  Routes speech and chat traffic to configured MLX or remote backends.
+  Routes chat, vision, embeddings, speech, SystemOne and batch traffic to configured
+  local (for example MLX) or remote backends.
   Consumer stacks may probe /health before speech or model jobs when enabled.
 
 AGENT OPERATING GUIDE

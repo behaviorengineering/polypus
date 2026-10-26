@@ -9,12 +9,13 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/batch"
 )
 
 const (
 	batchSmokeCustomID    = "smoke-batch-1"
 	batchSmokePollEvery   = 2 * time.Second
-	batchEndpointChat     = "/v1/chat/completions"
 	batchCompletionWindow = "24h"
 )
 
@@ -30,7 +31,7 @@ func runBatch(ctx context.Context, opts Options) ([]Result, error) {
 	})
 	out := []Result{ping, lifecycle}
 	var err error
-	if ping.Status == "fail" || lifecycle.Status == "fail" {
+	if ping.Status == StatusFail || lifecycle.Status == StatusFail {
 		err = fmt.Errorf("batch smoke failed")
 	}
 	return out, err
@@ -48,11 +49,16 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 		return "", fmt.Errorf("batch model required")
 	}
 
-	line := fmt.Sprintf(
-		`{"custom_id":%q,"method":"POST","url":%q,"body":{"model":%q,"messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":%d,"temperature":%g}}`,
-		batchSmokeCustomID, batchEndpointChat, model, opts.MaxTokens, opts.Temperature,
-	)
-	fileID, err := uploadBatchJSONL(ctx, opts.BaseURL, line+"\n")
+	line, err := json.Marshal(struct {
+		CustomID string      `json:"custom_id"`
+		Method   string      `json:"method"`
+		URL      string      `json:"url"`
+		Body     pingRequest `json:"body"`
+	}{batchSmokeCustomID, http.MethodPost, batch.EndpointChatCompletions, newPingRequest(model, opts)})
+	if err != nil {
+		return "", err
+	}
+	fileID, err := uploadBatchJSONL(ctx, opts.BaseURL, string(line)+"\n")
 	if err != nil {
 		return "", err
 	}
@@ -67,10 +73,12 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 		return "", err
 	}
 	switch meta.Status {
-	case "completed":
-		// continue
-	case "failed", "expired", "cancelled":
+	case batch.StatusCompleted:
+		// continue.
+	case batch.StatusFailed, batch.StatusExpired, batch.StatusCancelled:
 		return "", fmt.Errorf("batch terminal status %s", meta.Status)
+	case batch.StatusValidating, batch.StatusInProgress, batch.StatusCancelling:
+		return "", fmt.Errorf("batch not finished: %s", meta.Status)
 	default:
 		return "", fmt.Errorf("unexpected batch status %s", meta.Status)
 	}
@@ -83,11 +91,7 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 		return "", err
 	}
 	if !strings.Contains(string(raw), batchSmokeCustomID) {
-		detail := strings.TrimSpace(string(raw))
-		if len(detail) > 80 {
-			detail = detail[:77] + "..."
-		}
-		return "", fmt.Errorf("output missing custom_id %q: %s", batchSmokeCustomID, detail)
+		return "", fmt.Errorf("output missing custom_id %q: %s", batchSmokeCustomID, truncate(string(raw), 80))
 	}
 	return fmt.Sprintf("batch %s completed", batchID), nil
 }
@@ -119,9 +123,12 @@ func uploadBatchJSONL(ctx context.Context, baseURL, content string) (string, err
 		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, _ := ioReadAllLimit(resp.Body, 1<<20)
+	raw, err := ioReadAllLimit(resp.Body, 1<<20)
+	if err != nil {
+		return "", fmt.Errorf("files upload: read body: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("files upload status %d: %s", resp.StatusCode, string(raw))
+		return "", &statusError{what: "files upload", status: resp.StatusCode, body: string(raw)}
 	}
 	var parsed struct {
 		ID string `json:"id"`
@@ -136,11 +143,15 @@ func uploadBatchJSONL(ctx context.Context, baseURL, content string) (string, err
 }
 
 func createBatch(ctx context.Context, baseURL, inputFileID string) (string, error) {
-	body := fmt.Sprintf(
-		`{"input_file_id":%q,"endpoint":%q,"completion_window":%q}`,
-		inputFileID, batchEndpointChat, batchCompletionWindow,
-	)
-	req, err := httpNewPost(ctx, baseURL+"/v1/batches", body)
+	body, err := json.Marshal(map[string]string{
+		"input_file_id":     inputFileID,
+		"endpoint":          batch.EndpointChatCompletions,
+		"completion_window": batchCompletionWindow,
+	})
+	if err != nil {
+		return "", err
+	}
+	req, err := httpNewPost(ctx, baseURL+"/v1/batches", string(body))
 	if err != nil {
 		return "", err
 	}
@@ -149,13 +160,16 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, _ := ioReadAllLimit(resp.Body, 1<<20)
+	raw, err := ioReadAllLimit(resp.Body, 1<<20)
+	if err != nil {
+		return "", fmt.Errorf("batches create: read body: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("batches create status %d: %s", resp.StatusCode, string(raw))
+		return "", &statusError{what: "batches create", status: resp.StatusCode, body: string(raw)}
 	}
 	var parsed struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
+		ID     string       `json:"id"`
+		Status batch.Status `json:"status"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return "", err
@@ -164,9 +178,9 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 		return "", fmt.Errorf("batches create: empty id")
 	}
 	switch parsed.Status {
-	case "validating", "in_progress", "completed":
+	case batch.StatusValidating, batch.StatusInProgress, batch.StatusCompleted:
 		return parsed.ID, nil
-	case "failed", "expired", "cancelled":
+	case batch.StatusFailed, batch.StatusExpired, batch.StatusCancelling, batch.StatusCancelled:
 		return "", fmt.Errorf("batches create terminal status %s", parsed.Status)
 	default:
 		return "", fmt.Errorf("batches create unexpected status %s", parsed.Status)
@@ -174,9 +188,9 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 }
 
 type batchMetaSmoke struct {
-	ID           string `json:"id"`
-	Status       string `json:"status"`
-	OutputFileID string `json:"output_file_id"`
+	ID           string       `json:"id"`
+	Status       batch.Status `json:"status"`
+	OutputFileID string       `json:"output_file_id"`
 }
 
 func pollBatchTerminal(ctx context.Context, baseURL, batchID string) (batchMetaSmoke, error) {
@@ -191,10 +205,10 @@ func pollBatchTerminal(ctx context.Context, baseURL, batchID string) (batchMetaS
 		}
 		last = meta
 		switch meta.Status {
-		case "completed", "failed", "expired", "cancelled":
+		case batch.StatusCompleted, batch.StatusFailed, batch.StatusExpired, batch.StatusCancelled:
 			return meta, nil
-		case "validating", "in_progress":
-			// keep polling
+		case batch.StatusValidating, batch.StatusInProgress, batch.StatusCancelling:
+			// keep polling.
 		default:
 			return meta, fmt.Errorf("batch poll unexpected status %s", meta.Status)
 		}
@@ -219,9 +233,12 @@ func getBatch(ctx context.Context, baseURL, batchID string) (batchMetaSmoke, err
 		return zero, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, _ := ioReadAllLimit(resp.Body, 1<<20)
+	raw, err := ioReadAllLimit(resp.Body, 1<<20)
+	if err != nil {
+		return zero, fmt.Errorf("batches get: read body: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return zero, fmt.Errorf("batches get status %d: %s", resp.StatusCode, string(raw))
+		return zero, &statusError{what: "batches get", status: resp.StatusCode, body: string(raw)}
 	}
 	var meta batchMetaSmoke
 	if err := json.Unmarshal(raw, &meta); err != nil {
@@ -245,7 +262,7 @@ func downloadFileContent(ctx context.Context, baseURL, fileID string) ([]byte, e
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("files content status %d: %s", resp.StatusCode, string(raw))
+		return nil, &statusError{what: "files content", status: resp.StatusCode, body: string(raw)}
 	}
 	return raw, nil
 }

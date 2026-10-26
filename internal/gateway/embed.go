@@ -3,11 +3,11 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/outbound"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -16,41 +16,12 @@ import (
 
 const embedMaxBody = 8 << 20
 
-func extractEmbedModel(body []byte) (string, error) {
-	var payload struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", derrors.Wrap(err, derrors.CodeInvalid, "gateway.extractEmbedModel", "invalid json")
-	}
-	model := strings.TrimSpace(payload.Model)
-	if model == "" {
-		return "", derrors.New(derrors.CodeInvalid, "gateway.extractEmbedModel", "model required")
-	}
-	return model, nil
-}
-
-func rewriteEmbedModel(body []byte, model string) ([]byte, error) {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteEmbedModel", "invalid json")
-	}
-	payload["model"] = model
-	out, err := json.Marshal(payload)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteEmbedModel", "marshal")
-	}
-	return out, nil
-}
-
-func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
-	target := embeddingsURL(backendURL)
-	ctx := r.Context()
-	if hopTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hopTimeout)
-		defer cancel()
-	}
+func (h chatHandler) proxyEmbeddings(w http.ResponseWriter, r *http.Request, t backendTarget, body []byte, hopTimeout time.Duration) error {
+	client, backendAuth := h.client, t.auth
+	target := embeddingsURL(t.url)
+	hopTimeout = hopBudget(hopTimeout, config.DefaultTimeouts().Embed)
+	ctx, cancel := context.WithTimeout(r.Context(), hopTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyEmbeddings", "request")
@@ -62,37 +33,29 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 	} else if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
-	if hopTimeout > 0 {
-		req.Header.Set(config.TimeoutHeader, hopTimeout.String())
-	}
+	req.Header.Set(config.TimeoutHeader, hopTimeout.String())
 
 	if client == nil {
 		client = newChatProxyClient(0)
 	}
-	resp, err := client.Do(req)
+	resp, err := outbound.DoOnce(ctx, outbound.DepGateway, client, req)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyEmbeddings", "post").
 			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
-
-	for k, vals := range resp.Header {
-		if len(vals) == 0 {
-			continue
-		}
-		switch strings.ToLower(k) {
-		case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-			"te", "trailers", "transfer-encoding", "upgrade", "content-length":
-			continue
-		}
-		for _, v := range vals {
-			w.Header().Add(k, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, io.LimitReader(resp.Body, embedMaxBody))
+	// Read before the headers go out, so an oversized reply becomes an error status
+	// rather than a truncated 200.
+	raw, err := readUpstream(resp.Body, embedMaxBody, "gateway.proxyEmbeddings")
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyEmbeddings", "write response")
+		return err
+	}
+
+	copyChatResponseHeaders(w, resp.Header)
+
+	w.WriteHeader(resp.StatusCode)
+	if _, err := w.Write(raw); err != nil {
+		return afterHeaders(r.Context(), err, true, "gateway.proxyEmbeddings", "write response")
 	}
 	return upstream.StatusFailure(resp.StatusCode)
 }

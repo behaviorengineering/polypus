@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -16,10 +15,10 @@ type filesHandler struct{ *shared }
 
 func (h filesHandler) serveFiles(w http.ResponseWriter, r *http.Request) {
 	if h.batchStore == nil {
-		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveFiles", "batch store not configured"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveFiles", "batch store not configured"))
 		return
 	}
-	if r.URL.Path == "/v1/files" {
+	if r.URL.Path == pathFiles {
 		if r.Method == http.MethodPost {
 			h.serveFileUpload(w, r)
 			return
@@ -54,28 +53,30 @@ func (h filesHandler) serveFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h filesHandler) serveFileUpload(w http.ResponseWriter, r *http.Request) {
+	// The batch input cap plus multipart overhead; past it the upload gets 413.
+	r.Body = http.MaxBytesReader(w, r.Body, batchMaxInputBytes+1<<20)
 	if err := r.ParseMultipartForm(batchMaxInputBytes); err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "multipart"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "multipart"))
 		return
 	}
 	purpose := strings.TrimSpace(r.FormValue("purpose"))
 	if purpose != string(batch.FilePurposeBatch) {
-		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveFileUpload", "purpose must be batch"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveFileUpload", "purpose must be batch"))
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "file required"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "file required"))
 		return
 	}
 	defer func() { _ = file.Close() }()
 	content, err := io.ReadAll(io.LimitReader(file, batchMaxInputBytes+1))
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "read file"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "read file"))
 		return
 	}
 	if len(content) > batchMaxInputBytes {
-		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveFileUpload", "file exceeds 10MB batch limit"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveFileUpload", "file exceeds 10MB batch limit"))
 		return
 	}
 	filename := "batch.jsonl"
@@ -87,35 +88,36 @@ func (h filesHandler) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 		Purpose:  batch.FilePurposeBatch,
 	}
 	if err := h.batchStore.SaveFile(rec, content); err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rec)
+	h.writeJSON(w, http.StatusOK, rec)
 }
 
 func (h filesHandler) serveFileRetrieve(w http.ResponseWriter, r *http.Request, id string) {
 	rec, err := h.batchStore.GetFile(id)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rec)
+	h.writeJSON(w, http.StatusOK, rec)
 }
 
 func (h filesHandler) serveFileContent(w http.ResponseWriter, r *http.Request, id string) {
 	content, err := h.batchStore.ReadFileContent(id)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/jsonl")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(content)
+	_, _ = w.Write(content) //nolint:gosec // G705: stored JSONL served as application/jsonl with nosniff
 }
 
 func (h filesHandler) serveFileDelete(w http.ResponseWriter, r *http.Request, id string) {
 	if err := h.batchStore.DeleteFile(id); err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	var deleted struct {
@@ -126,11 +128,5 @@ func (h filesHandler) serveFileDelete(w http.ResponseWriter, r *http.Request, id
 	deleted.ID = id
 	deleted.Object = "file"
 	deleted.Deleted = true
-	writeJSON(w, http.StatusOK, deleted)
-}
-
-func writeJSON(w http.ResponseWriter, code int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	h.writeJSON(w, http.StatusOK, deleted)
 }

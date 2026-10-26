@@ -17,7 +17,7 @@ func TestNewAccountRegistersCloudflareChatAndSpeech(t *testing.T) {
 				Remote:    true,
 				Extension: config.ExtensionCloudflare,
 				BaseURL:   "https://api.cloudflare.com/client/v4/accounts/x/ai/v1",
-				Auth:      config.BackendAuth{BearerEnv: "CF_AI_API_KEY"},
+				Auth:      config.BackendAuth{BearerEnv: "CF_AI_API_KEY"}, //nolint:gosec // G101: an env var name, not a credential
 				Capabilities: []config.Capability{
 					config.CapChat, config.CapEmbed, config.CapTTS, config.CapSTT,
 				},
@@ -25,7 +25,7 @@ func TestNewAccountRegistersCloudflareChatAndSpeech(t *testing.T) {
 		},
 	}
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
-	acct := NewAccount(cfg)
+	acct := newAccount(cfg)
 	providers, err := acct.GetConfiguredProviders()
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestNewAccountRegistersSwitchyardWhenComposed(t *testing.T) {
 		},
 		Switchyard: config.SwitchyardConfig{BaseURL: "http://127.0.0.1:4000"},
 	}
-	acct := NewAccount(cfg)
+	acct := newAccount(cfg)
 	providers, err := acct.GetConfiguredProviders()
 	if err != nil {
 		t.Fatal(err)
@@ -124,14 +124,14 @@ func TestNewAccountRegistersGeminiChat(t *testing.T) {
 				ID:        "gemini_studio",
 				Remote:    true,
 				Extension: config.ExtensionGemini,
-				Auth:      config.BackendAuth{BearerEnv: "GEMINI_API_KEY"},
+				Auth:      config.BackendAuth{BearerEnv: "GEMINI_API_KEY"}, //nolint:gosec // G101: an env var name, not a credential
 				Capabilities: []config.Capability{
 					config.CapChat,
 				},
 			},
 		},
 	}
-	acct := NewAccount(cfg)
+	acct := newAccount(cfg)
 	pc, err := acct.GetConfigForProvider("gemini_studio")
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestNewAccountCopiesExtraHeaders(t *testing.T) {
 				ID:      "openrouter",
 				Remote:  true,
 				BaseURL: "https://openrouter.ai/api/v1",
-				Auth:    config.BackendAuth{BearerEnv: "OPENROUTER_API_KEY"},
+				Auth:    config.BackendAuth{BearerEnv: "OPENROUTER_API_KEY"}, //nolint:gosec // G101: an env var name, not a credential
 				ExtraHeaders: map[string]string{
 					"HTTP-Referer": "https://example.com",
 					"X-Title":      "Polypus",
@@ -169,7 +169,7 @@ func TestNewAccountCopiesExtraHeaders(t *testing.T) {
 			},
 		},
 	}
-	acct := NewAccount(cfg)
+	acct := newAccount(cfg)
 	pc, err := acct.GetConfigForProvider("openrouter")
 	if err != nil {
 		t.Fatal(err)
@@ -193,14 +193,14 @@ func TestNewAccountRegistersNativeOpenRouter(t *testing.T) {
 				ID:      "openrouter",
 				Remote:  true,
 				BaseURL: "https://openrouter.ai/api/v1",
-				Auth:    config.BackendAuth{BearerEnv: "OPENROUTER_API_KEY"},
+				Auth:    config.BackendAuth{BearerEnv: "OPENROUTER_API_KEY"}, //nolint:gosec // G101: an env var name, not a credential
 				Capabilities: []config.Capability{
 					config.CapChat, config.CapSystemOne,
 				},
 			},
 		},
 	}
-	acct := NewAccount(cfg)
+	acct := newAccount(cfg)
 	pc, err := acct.GetConfigForProvider(schemas.OpenRouter)
 	if err != nil {
 		t.Fatal(err)

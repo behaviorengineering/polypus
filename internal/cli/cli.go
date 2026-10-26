@@ -4,17 +4,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 // Run dispatches polypus subcommands. Returns a process exit code.
 func Run(args []string) int {
-	root := newRoot()
+	return execute(newRoot(), args)
+}
+
+// execute runs a Cobra root and maps its error to a process exit code.
+func execute(root *cobra.Command, args []string) int {
 	root.SetArgs(args)
 	root.SetOut(os.Stdout)
 	root.SetErr(os.Stderr)
+	markUsageErrors(root)
 
 	_, err := root.ExecuteC()
 	if err == nil {
@@ -27,22 +31,44 @@ func Run(args []string) int {
 		}
 		return ex.code
 	}
-	if isUnknownCommand(err) {
+	var usage *usageError
+	if errors.As(err, &usage) {
+		fmt.Fprintf(os.Stderr, "%s: %v\nRun '%s help' for the command list.\n", root.Name(), err, root.Name())
 		return 2
 	}
 	fmt.Fprintln(os.Stderr, err)
 	return 1
 }
 
-func isUnknownCommand(err error) bool {
-	if err == nil {
-		return false
+// usageError is a Cobra flag or argument error: the command line is wrong, so the
+// process exits 2.
+type usageError struct{ err error }
+
+func (e *usageError) Error() string { return e.err.Error() }
+
+func (e *usageError) Unwrap() error { return e.err }
+
+// markUsageErrors types Cobra's flag and argument errors as usageError, so execute
+// reads the exit code from the error's type rather than Cobra's wording. A command
+// with no Args gets cobra.NoArgs, whose error for a stray word is "unknown command".
+func markUsageErrors(root *cobra.Command) {
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return &usageError{err: err} })
+	for _, cmd := range polypusCommands(root) {
+		check := cmd.Args
+		if check == nil {
+			check = cobra.NoArgs
+		}
+		cmd.Args = func(c *cobra.Command, args []string) error {
+			if err := check(c, args); err != nil {
+				return &usageError{err: err}
+			}
+			return nil
+		}
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "unknown command")
 }
 
-// polypusCommands walks Polypus-owned commands for tests and guide helpers.
+// polypusCommands lists root and every Polypus-owned command under it (Cobra's own
+// help command excluded).
 func polypusCommands(root *cobra.Command) []*cobra.Command {
 	var out []*cobra.Command
 	var walk func(*cobra.Command)

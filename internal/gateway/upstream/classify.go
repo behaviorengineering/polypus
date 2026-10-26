@@ -6,9 +6,11 @@ import (
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 	"github.com/sony/gobreaker"
 )
 
+// Layer values attribute a dial failure to the hop that failed.
 const (
 	LayerCloudflare     = "cloudflare"
 	LayerPolypusBreaker = "polypus_breaker"
@@ -28,7 +30,7 @@ type FailureClass struct {
 // ResolveUpstreamName returns hint when set, else the name from mapExecuteErr wraps.
 func ResolveUpstreamName(err error, hint string) string {
 	hint = strings.TrimSpace(hint)
-	if hint != "" && hint != "unknown" {
+	if hint != "" && hint != unknownUpstream {
 		return normalizeName(hint)
 	}
 	if name := upstreamNameFromUnavailable(err); name != "" {
@@ -86,7 +88,7 @@ func isCloudflareDialFailure(err error) bool {
 }
 
 func hasCloudflareMetadata(err error) bool {
-	for _, key := range []string{"cf_code", "cf_ray", "limit_kind"} {
+	for _, key := range []string{ratelimit.FieldCFCode, ratelimit.FieldCFRay, ratelimit.FieldKind} {
 		if derrors.Field(err, key) != "" {
 			return true
 		}
@@ -95,54 +97,24 @@ func hasCloudflareMetadata(err error) bool {
 }
 
 func hasCloudflareOp(err error) bool {
-	var de *derrors.Error
-	for e := err; e != nil; {
-		if errors.As(e, &de) && de != nil {
-			if strings.HasPrefix(de.Op(), "cloudflare.") {
-				return true
-			}
-		}
-		e = errors.Unwrap(e)
-	}
-	return false
+	found := false
+	derrors.Walk(err, func(de *derrors.Error) bool {
+		found = strings.HasPrefix(de.Op(), "cloudflare.")
+		return !found
+	})
+	return found
 }
 
+// upstreamNameFromUnavailable is the upstream a breaker refusal names, if any.
 func upstreamNameFromUnavailable(err error) string {
-	const suffix = " unavailable:"
-	for e := err; e != nil; {
-		msg := e.Error()
-		const prefix = "upstream "
-		if i := strings.Index(msg, prefix); i >= 0 {
-			rest := msg[i+len(prefix):]
-			if j := strings.Index(rest, suffix); j > 0 {
-				return normalizeName(strings.TrimSpace(rest[:j]))
-			}
-		}
-		e = errors.Unwrap(e)
-	}
-	return ""
+	return strings.TrimSpace(derrors.Field(err, FieldUpstream))
 }
 
+// bifrostStatus is the upstream HTTP status the error chain records, or 0.
 func bifrostStatus(err error) int {
-	var de *derrors.Error
-	for e := err; e != nil; {
-		if errors.As(e, &de) && de != nil {
-			if fields := de.Fields(); fields != nil {
-				if raw, ok := fields["status"]; ok {
-					if n, convErr := strconv.Atoi(strings.TrimSpace(raw)); convErr == nil {
-						return n
-					}
-				}
-			}
-		}
-		e = errors.Unwrap(e)
+	n, convErr := strconv.Atoi(strings.TrimSpace(derrors.Field(err, ratelimit.FieldStatus)))
+	if convErr != nil {
+		return 0
 	}
-	msg := strings.ToLower(err.Error())
-	if idx := strings.Index(msg, "status "); idx >= 0 {
-		rest := strings.TrimSpace(msg[idx+len("status "):])
-		if n, convErr := strconv.Atoi(strings.Fields(rest)[0]); convErr == nil {
-			return n
-		}
-	}
-	return 0
+	return n
 }

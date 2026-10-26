@@ -3,9 +3,9 @@ package observability
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -20,13 +20,14 @@ const (
 	bifrostTracerActiveKey  = "polypus.bifrost.tracer.active"
 )
 
-// BifrostOTelTracer maps Bifrost schemas.Tracer hooks to OpenTelemetry spans on the
-// active Polypus request context. Stream gate methods stay on the embedded NoOpTracer.
+// BifrostOTelTracer maps Bifrost schemas.Tracer hooks to OpenTelemetry spans. One
+// tracer serves every request, so it holds no per-request state: the parent span
+// comes from the context Bifrost passes in, and the router puts each request's
+// trace ID on its BifrostContext. Stream gate methods stay on the embedded NoOpTracer.
 type BifrostOTelTracer struct {
 	schemas.NoOpTracer
 
-	active  atomic.Pointer[context.Context]
-	handles sync.Map // span handle -> *otelSpanBridge
+	handles sync.Map // span handle -> *otelSpanBridge.
 }
 
 // NewBifrostOTelTracer returns a tracer suitable for schemas.BifrostConfig.Tracer.
@@ -34,33 +35,10 @@ func NewBifrostOTelTracer() *BifrostOTelTracer {
 	return &BifrostOTelTracer{}
 }
 
-// Bind records the Go context that carries polypus.chat (or the inbound W3C parent).
-// CreateTrace reads the trace ID from this context when Bifrost passes an empty parent.
-func (t *BifrostOTelTracer) Bind(ctx context.Context) {
-	if t == nil || ctx == nil {
-		return
-	}
-	t.active.Store(&ctx)
-}
-
-func (t *BifrostOTelTracer) boundContext() context.Context {
-	if t == nil {
-		return context.Background()
-	}
-	p := t.active.Load()
-	if p == nil || *p == nil {
-		return context.Background()
-	}
-	return *p
-}
-
-// CreateTrace returns the W3C trace ID hex for the bound context, or a new random ID.
+// CreateTrace returns parentID, or a new random trace ID. Bifrost calls it only when
+// the request context carries no BifrostContextKeyTraceID; the router sets that key
+// from the request's span, so traced requests never reach here.
 func (t *BifrostOTelTracer) CreateTrace(parentID string, _ ...string) string {
-	ctx := t.boundContext()
-	sc := trace.SpanFromContext(ctx).SpanContext()
-	if sc.HasTraceID() {
-		return sc.TraceID().String()
-	}
 	if parentID != "" {
 		return parentID
 	}
@@ -88,7 +66,8 @@ func (t *BifrostOTelTracer) StartSpan(ctx context.Context, name string, kind sch
 func (t *BifrostOTelTracer) StartSpanID(ctx context.Context, name string, kind schemas.SpanKind) (string, schemas.SpanHandle) {
 	parent := ctx
 	if parent == nil {
-		parent = t.boundContext()
+		// A new root span: never another request's context.
+		parent = context.Background()
 	}
 	oiKind := openInferenceKind(kind)
 	newCtx, otelSpan := Tracer().Start(parent, name, trace.WithSpanKind(otelSpanKind(kind)))
@@ -115,7 +94,7 @@ func (t *BifrostOTelTracer) StartSpanID(ctx context.Context, name string, kind s
 	return schemaSpan.SpanID, bridge
 }
 
-func (t *BifrostOTelTracer) EndSpan(handle schemas.SpanHandle, status schemas.SpanStatus, statusMsg string) {
+func (t *BifrostOTelTracer) endSpan(handle schemas.SpanHandle, status schemas.SpanStatus, statusMsg string) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil {
 		return
@@ -124,6 +103,8 @@ func (t *BifrostOTelTracer) EndSpan(handle schemas.SpanHandle, status schemas.Sp
 	switch status {
 	case schemas.SpanStatusError:
 		bridge.otel.SetStatus(codes.Error, statusMsg)
+	case schemas.SpanStatusOk, schemas.SpanStatusUnset:
+		bridge.otel.SetStatus(codes.Ok, "")
 	default:
 		bridge.otel.SetStatus(codes.Ok, "")
 	}
@@ -133,6 +114,7 @@ func (t *BifrostOTelTracer) EndSpan(handle schemas.SpanHandle, status schemas.Sp
 	}
 }
 
+// PopulateLLMRequestAttributes implements schemas.Tracer.
 func (t *BifrostOTelTracer) PopulateLLMRequestAttributes(handle schemas.SpanHandle, req *schemas.BifrostRequest) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil || req == nil {
@@ -149,6 +131,7 @@ func (t *BifrostOTelTracer) PopulateLLMRequestAttributes(handle schemas.SpanHand
 	flushBifrostSpanAttributes(bridge)
 }
 
+// PopulateLLMResponseAttributes implements schemas.Tracer.
 func (t *BifrostOTelTracer) PopulateLLMResponseAttributes(_ *schemas.BifrostContext, handle schemas.SpanHandle, resp *schemas.BifrostResponse, err *schemas.BifrostError) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil {
@@ -178,6 +161,7 @@ func flushBifrostSpanAttributes(bridge *otelSpanBridge) {
 	}
 }
 
+// SetAttribute implements schemas.Tracer.
 func (t *BifrostOTelTracer) SetAttribute(handle schemas.SpanHandle, key string, value any) {
 	span := t.SpanFromHandle(handle)
 	if span != nil {
@@ -185,6 +169,7 @@ func (t *BifrostOTelTracer) SetAttribute(handle schemas.SpanHandle, key string, 
 	}
 }
 
+// SpanFromHandle implements schemas.Tracer.
 func (t *BifrostOTelTracer) SpanFromHandle(handle schemas.SpanHandle) *schemas.Span {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.schema == nil {
@@ -193,10 +178,12 @@ func (t *BifrostOTelTracer) SpanFromHandle(handle schemas.SpanHandle) *schemas.S
 	return bridge.schema
 }
 
+// GetSpanHandleByID implements schemas.Tracer.
 func (t *BifrostOTelTracer) GetSpanHandleByID(_ string, _ *string) schemas.SpanHandle {
 	return nil
 }
 
+// AddEvent implements schemas.Tracer.
 func (t *BifrostOTelTracer) AddEvent(handle schemas.SpanHandle, name string, attrs map[string]any) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil {
@@ -209,8 +196,10 @@ func (t *BifrostOTelTracer) AddEvent(handle schemas.SpanHandle, name string, att
 	bridge.otel.AddEvent(name, trace.WithAttributes(otelAttrs...))
 }
 
+// EndTrace implements schemas.Tracer.
 func (t *BifrostOTelTracer) EndTrace(_ string) *schemas.Trace { return nil }
 
+// Stop implements schemas.Tracer.
 func (t *BifrostOTelTracer) Stop() {
 	if t == nil {
 		return
@@ -249,22 +238,24 @@ func bifrostAttrToOTel(key string, value any) attribute.KeyValue {
 	}
 }
 
+// geminiSyntheticURLFull is the url.full a Gemini span reports: the endpoint shape
+// with the key already redacted, since no real key reaches the tracer.
 func geminiSyntheticURLFull() string {
-	return redactURLString("https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent?key=super-secret")
+	return "https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent?key=" + url.QueryEscape(redactedSecret)
 }
 
 func openInferenceKind(kind schemas.SpanKind) string {
+	//exhaustive:ignore // only LLM calls are LLM spans; every other Bifrost kind is a CHAIN step
 	switch kind {
 	case schemas.SpanKindLLMCall:
 		return "LLM"
-	case schemas.SpanKindPlugin:
-		return "CHAIN"
 	default:
 		return "CHAIN"
 	}
 }
 
 func otelSpanKind(kind schemas.SpanKind) trace.SpanKind {
+	//exhaustive:ignore // only LLM calls leave the process; every other Bifrost kind is internal
 	switch kind {
 	case schemas.SpanKindLLMCall:
 		return trace.SpanKindClient

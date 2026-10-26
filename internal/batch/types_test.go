@@ -8,10 +8,10 @@ import (
 
 func TestBatchMetaPublicOmitsAdapterFields(t *testing.T) {
 	t.Parallel()
-	meta := BatchMeta{
+	meta := Meta{
 		ID:          "batch_test",
 		Endpoint:    "/v1/chat/completions",
-		Status:      BatchStatusInProgress,
+		Status:      StatusInProgress,
 		BackendID:   "cf_local",
 		PublicModel: "cf_local/@cf/meta/llama",
 		CFModel:     "@cf/meta/llama",

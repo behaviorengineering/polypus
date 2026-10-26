@@ -56,7 +56,7 @@ backends:
 		t.Fatal(err)
 	}
 	recRouter := &recordingRouter{reg: reg, uses: map[string]bool{"leaf": true}}
-	handler := observability.WrapHandler(newTestGateway(t, opts, recRouter))
+	handler := observability.WrapHandler(newTestGateway(t, opts, recRouter), nil)
 
 	ctx, root := tp.Tracer("client").Start(context.Background(), "test.client")
 	rootTrace := root.SpanContext().TraceID()

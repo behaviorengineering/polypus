@@ -17,28 +17,24 @@ func ExpiresAtUnix(createdAt int64, completionWindow string) (int64, error) {
 	return createdAt + int64(d.Seconds()), nil
 }
 
-// ParseCompletionWindow parses OpenAI batch completion_window strings.
+// ParseCompletionWindow parses OpenAI batch completion_window strings: a positive
+// whole number of hours or minutes ("24h", "90m"). Empty means 24h.
 func ParseCompletionWindow(window string) (time.Duration, error) {
+	const op = "batch.ParseCompletionWindow"
 	window = strings.TrimSpace(strings.ToLower(window))
 	if window == "" {
 		return 24 * time.Hour, nil
 	}
-	if strings.HasSuffix(window, "h") {
-		n, err := strconv.Atoi(strings.TrimSuffix(window, "h"))
-		if err != nil || n <= 0 {
-			return 0, derrors.New(derrors.CodeInvalid, "batch.ParseCompletionWindow", "invalid completion_window").
-				With("completion_window", window)
-		}
-		return time.Duration(n) * time.Hour, nil
+	if !strings.HasSuffix(window, "h") && !strings.HasSuffix(window, "m") {
+		return 0, derrors.New(derrors.CodeInvalid, op, "unsupported completion_window").With("completion_window", window)
 	}
-	if strings.HasSuffix(window, "m") {
-		n, err := strconv.Atoi(strings.TrimSuffix(window, "m"))
-		if err != nil || n <= 0 {
-			return 0, derrors.New(derrors.CodeInvalid, "batch.ParseCompletionWindow", "invalid completion_window").
-				With("completion_window", window)
-		}
-		return time.Duration(n) * time.Minute, nil
+	// One unit only, as a whole number: "1h30m" and "1.5h" are refused.
+	if _, err := strconv.Atoi(window[:len(window)-1]); err != nil {
+		return 0, derrors.New(derrors.CodeInvalid, op, "invalid completion_window").With("completion_window", window)
 	}
-	return 0, derrors.New(derrors.CodeInvalid, "batch.ParseCompletionWindow", "unsupported completion_window").
-		With("completion_window", window)
+	d, err := time.ParseDuration(window)
+	if err != nil || d <= 0 {
+		return 0, derrors.New(derrors.CodeInvalid, op, "invalid completion_window").With("completion_window", window)
+	}
+	return d, nil
 }

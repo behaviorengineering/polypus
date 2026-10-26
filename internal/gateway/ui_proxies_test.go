@@ -42,7 +42,7 @@ backends:
     base_url: http://127.0.0.1:1322
     capabilities: [tts, stt, voices]
 `
-	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", cfgPath)
@@ -85,7 +85,7 @@ backends:
     base_url: http://127.0.0.1:1322
     capabilities: [tts, stt, voices]
 `
-	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", cfgPath)
@@ -118,7 +118,7 @@ func TestUIProxyPreservesPrefix(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	proxy := newUIReverseProxy("/hyperdx", mustParseURL(upstream.URL), false)
+	proxy := testShared.newUIReverseProxy("/hyperdx", mustParseURL(upstream.URL), false)
 	req := httptest.NewRequest(http.MethodGet, "/hyperdx/search", nil)
 	rec := httptest.NewRecorder()
 	proxy.ServeHTTP(rec, req)
@@ -135,7 +135,7 @@ func TestUIProxyForwardsUpgradeHeader(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	proxy := newUIReverseProxy("/phoenix", mustParseURL(upstream.URL), true)
+	proxy := testShared.newUIReverseProxy("/phoenix", mustParseURL(upstream.URL), true)
 	req := httptest.NewRequest(http.MethodGet, "/phoenix/ws", nil)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "websocket")

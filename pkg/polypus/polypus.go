@@ -6,6 +6,7 @@ package polypus
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -15,6 +16,24 @@ import (
 
 // ServeOptions is the gateway listen configuration.
 type ServeOptions = config.ServeOptions
+
+// HandlerOption configures Serve and NewHandler. Build one with the With* functions
+// below.
+type HandlerOption = gateway.HandlerOption
+
+// WithLogger sets the logger the gateway writes warnings and request failures to
+// (slog.Default otherwise). Panics if l is nil.
+func WithLogger(l *slog.Logger) HandlerOption { return gateway.WithLogger(l) }
+
+// WithObservability sets where failure dumps land (empty turns them off) and the
+// HTTP paths that get no SERVER span (nil keeps the default /health probes).
+func WithObservability(dumpDir string, traceSkipPaths []string) HandlerOption {
+	return gateway.WithObservability(dumpDir, traceSkipPaths)
+}
+
+// WithAdminStateDir keeps the models allow overlay and the admin key store under dir
+// instead of the XDG state directory. Panics if dir is empty.
+func WithAdminStateDir(dir string) HandlerOption { return gateway.WithAdminStateDir(dir) }
 
 // SmokeOptions configures multi-channel L1 smoke against a running gateway.
 type SmokeOptions = smoke.Options
@@ -31,23 +50,21 @@ const (
 	DefaultBatchModel     = smoke.DefaultBatchModel
 )
 
-// LoadServeOptions resolves host/port/backend from the environment.
-func LoadServeOptions() ServeOptions {
+// LoadServeOptions resolves host/port/backend from the environment. A set but
+// invalid POLYPUS_PORT or POLYPUS_MLX_PORT is an error.
+func LoadServeOptions() (ServeOptions, error) {
 	return config.LoadServeOptions()
 }
 
-// Serve starts the Polypus gateway (blocks until the server exits).
-func Serve(opts ServeOptions) error {
-	return gateway.ListenAndServe(opts)
-}
-
-// ListenAndServe is an alias for Serve.
-func ListenAndServe(opts ServeOptions) error {
-	return Serve(opts)
+// Serve starts the Polypus gateway and blocks until ctx is done (then shuts down
+// gracefully) or the server fails. The host owns signals: pass a ctx from
+// signal.NotifyContext to stop on SIGINT or SIGTERM.
+func Serve(ctx context.Context, opts ServeOptions, options ...HandlerOption) error {
+	return gateway.ListenAndServe(ctx, opts, options...)
 }
 
 // NewHandler builds the public HTTP handler without listening.
-func NewHandler(opts ServeOptions, options ...gateway.HandlerOption) (http.Handler, error) {
+func NewHandler(opts ServeOptions, options ...HandlerOption) (http.Handler, error) {
 	return gateway.NewHandler(opts, options...)
 }
 
@@ -55,11 +72,6 @@ func NewHandler(opts ServeOptions, options ...gateway.HandlerOption) (http.Handl
 // Batch is opt-in via Options.Channels (not included in AllSmokeChannels).
 func Smoke(ctx context.Context, opts SmokeOptions) ([]SmokeResult, error) {
 	return smoke.Run(ctx, opts)
-}
-
-// SmokeCLI runs the polypus-smoke command surface (flags + JSONL stdout).
-func SmokeCLI(args []string) int {
-	return smoke.RunCLI(args)
 }
 
 // AllSmokeChannels returns the default CI channel set.

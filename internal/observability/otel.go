@@ -3,11 +3,12 @@ package observability
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"os"
 	"strings"
-	"sync/atomic"
 	"time"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 
 	"github.com/behaviorengineering/olly/pkg/dump"
 	"github.com/behaviorengineering/olly/pkg/olly"
@@ -21,21 +22,11 @@ import (
 
 const instrumentationName = "github.com/behaviorengineering/polypus"
 
-// skipHTTPPaths holds the active SERVER skip list (set by Init; read by WrapHandler).
-var skipHTTPPaths atomic.Value // []string
-
-func init() {
-	skipHTTPPaths.Store(append([]string(nil), defaultSkipPaths...))
-}
-
 // Init installs the global tracer provider, W3C propagator, and optional dump processor via olly.
 func Init(cfg Config) (func(context.Context) error, error) {
-	skip := cfg.SkipPaths
-	if skip == nil {
-		skip = defaultSkipPaths
+	if cfg.Logger == nil {
+		return nil, derrors.New(derrors.CodeInvalid, "observability.Init", "logger is required")
 	}
-	skipHTTPPaths.Store(append([]string(nil), skip...))
-
 	serviceName := cfg.ServiceName
 	if serviceName == "" {
 		serviceName = defaultServiceName
@@ -54,20 +45,17 @@ func Init(cfg Config) (func(context.Context) error, error) {
 			MaxFiles:         cfg.DumpMaxFiles,
 			RedactAttribute:  dumpRedactAttribute,
 			RedactStatusText: redactURLsInText,
-			Diagnostics:      stderrDiag{},
+			Diagnostics:      logDiag{log: cfg.Logger},
 		},
 	}
-	dumpDir := cfg.DumpDir
 	if !cfg.Enabled {
 		ollyCfg.OTLPEndpoint = ""
 		ollyCfg.Dump.Dir = ""
-		dumpDir = ""
 	}
-	SetFailureDumpDir(dumpDir)
 
 	shutdown, err := olly.Init(ollyCfg)
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "observability.Init", "olly init")
 	}
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
@@ -76,10 +64,11 @@ func Init(cfg Config) (func(context.Context) error, error) {
 	return shutdown, nil
 }
 
-type stderrDiag struct{}
+// logDiag sends olly's dump diagnostics (write and prune failures) to the logger.
+type logDiag struct{ log *slog.Logger }
 
-func (stderrDiag) Printf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+func (d logDiag) Printf(format string, args ...any) {
+	d.log.Warn("polypus: failure dump", "detail", fmt.Sprintf(format, args...))
 }
 
 func dumpRedactAttribute(key string, value any) any {
@@ -96,9 +85,8 @@ func Tracer() trace.Tracer {
 }
 
 // WrapHandler extracts incoming W3C context and creates SERVER spans for each request.
-// Paths in SkipPaths (default /health) are not traced.
-func WrapHandler(h http.Handler) http.Handler {
-	skip, _ := skipHTTPPaths.Load().([]string)
+// Paths in skip are not traced; nil means the default (/health and its probes).
+func WrapHandler(h http.Handler, skip []string) http.Handler {
 	if skip == nil {
 		skip = defaultSkipPaths
 	}
@@ -166,36 +154,50 @@ func RecordDownstreamModel(ctx context.Context, model string) {
 	span.SetAttributes(attribute.String("polypus.downstream_model", model))
 }
 
-// StartRouterSpan starts an OpenInference span for a composed router hop via Switchyard.
-func StartRouterSpan(ctx context.Context, operation, model, routerName, switchyardURL string) (context.Context, trace.Span) {
+// LLMSpanAttrs names one inference hop for StartLLMSpan and StartRouterSpan.
+type LLMSpanAttrs struct {
+	// Model is the model the client asked for.
+	Model string
+	// BackendID and BackendURL name the backend the hop dials.
+	BackendID  string
+	BackendURL string
+	// Downstream is the model id the backend receives (LLM spans).
+	Downstream string
+	// Router is the composed router's name (router spans).
+	Router string
+}
+
+// StartRouterSpan starts an OpenInference span for a composed router hop via
+// Switchyard; a.BackendURL is the Switchyard URL.
+func StartRouterSpan(ctx context.Context, operation string, a LLMSpanAttrs) (context.Context, trace.Span) {
 	ctx, span := Tracer().Start(ctx, operation, trace.WithSpanKind(trace.SpanKindInternal))
 	span.SetAttributes(
 		attribute.String("openinference.span.kind", "LLM"),
-		attribute.String("llm.model_name", model),
+		attribute.String("llm.model_name", a.Model),
 		attribute.String("llm.provider", "polypus"),
 		attribute.String("polypus.backend_id", "switchyard"),
-		attribute.String("polypus.backend_url", switchyardURL),
-		attribute.String("polypus.router_name", routerName),
+		attribute.String("polypus.backend_url", a.BackendURL),
+		attribute.String("polypus.router_name", a.Router),
 	)
 	return ctx, span
 }
 
 // StartLLMSpan starts an OpenInference LLM span for a routed inference call.
-func StartLLMSpan(ctx context.Context, operation, model, backendID, backendURL, downstream string) (context.Context, trace.Span) {
+func StartLLMSpan(ctx context.Context, operation string, a LLMSpanAttrs) (context.Context, trace.Span) {
 	ctx, span := Tracer().Start(ctx, operation, trace.WithSpanKind(trace.SpanKindInternal))
 	span.SetAttributes(
 		attribute.String("openinference.span.kind", "LLM"),
-		attribute.String("llm.model_name", model),
+		attribute.String("llm.model_name", a.Model),
 		attribute.String("llm.provider", "polypus"),
-		attribute.String("polypus.backend_id", backendID),
-		attribute.String("polypus.backend_url", backendURL),
-		attribute.String("polypus.downstream_model", downstream),
+		attribute.String("polypus.backend_id", a.BackendID),
+		attribute.String("polypus.backend_url", a.BackendURL),
+		attribute.String("polypus.downstream_model", a.Downstream),
 	)
 	return ctx, span
 }
 
-// EndSpan records err on the span and ends it.
-func EndSpan(span trace.Span, err error) {
+// endSpan records err on the span and ends it.
+func endSpan(span trace.Span, err error) {
 	if span == nil {
 		return
 	}

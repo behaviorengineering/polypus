@@ -14,8 +14,6 @@ import (
 
 	llm "github.com/XiaoConstantine/llm-go"
 	"github.com/XiaoConstantine/llm-go/openai"
-
-	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 func TestLLMGoModuleIsOfficialV035(t *testing.T) {
@@ -192,7 +190,7 @@ func TestLLMGoOracleDualTable(t *testing.T) {
 		name       string
 		upstream   string
 		stripExtra bool
-		rawSub     string // malformed substring; empty => expect EOF
+		rawSub     string // malformed substring; empty => expect EOF.
 		rawText    string
 		sanSub     string
 		sanText    string
@@ -455,12 +453,10 @@ func TestCopyOpenAIChatStreamRespectsCancel(t *testing.T) {
 
 func TestProxyStreamDropWritesFailureDump(t *testing.T) {
 	dir := t.TempDir()
-	observability.SetFailureDumpDir(dir)
-	defer observability.SetFailureDumpDir("")
 
 	upstream := gemmaStreamWithTrailingChoice("late")
 	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(withStreamChunkCounter(context.Background()), &buf, strings.NewReader(upstream), false)
+	_, err := copyOpenAIChatStream(withStreamChunkCounter(context.Background(), testShared.log, dir), &buf, strings.NewReader(upstream), false)
 	if err != nil {
 		t.Fatal(err)
 	}

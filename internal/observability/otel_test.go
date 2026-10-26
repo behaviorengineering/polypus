@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/behaviorengineering/olly/pkg/dump"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -174,7 +176,7 @@ func TestEndSpanRecordsTimeout(t *testing.T) {
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
 	_, span := tp.Tracer("test").Start(context.Background(), "polypus.chat")
-	EndSpan(span, context.DeadlineExceeded)
+	endSpan(span, context.DeadlineExceeded)
 
 	spans := exporter.GetSpans()
 	if len(spans) != 1 {
@@ -246,5 +248,11 @@ func TestFailureDumpSkipsSuccessfulRequest(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("unexpected dump files=%d", len(entries))
+	}
+}
+
+func TestInitRequiresALogger(t *testing.T) {
+	if _, err := Init(Config{}); derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("Init without a logger must fail closed: %v", err)
 	}
 }

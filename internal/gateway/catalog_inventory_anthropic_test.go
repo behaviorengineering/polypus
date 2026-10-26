@@ -41,7 +41,7 @@ func TestAnthropicInventoryListsPrefixedModels(t *testing.T) {
 	}
 	h := newTestGateway(t, config.ServeOptions{}, &fakeRouter{reg: reg},
 		WithAdminStateDir(t.TempDir()),
-		WithAnthropicClientGet(func(config.BackendDef) (*anthropic.Client, error) {
+		withAnthropicClientGet(func(config.BackendDef) (*anthropic.Client, error) {
 			return anthropic.NewClientWithListURL(modelsSrv.URL, "secret")
 		}),
 	)

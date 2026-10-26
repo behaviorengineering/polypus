@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -12,9 +11,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
@@ -22,8 +21,6 @@ import (
 )
 
 const (
-	modelsTimeout  = 30 * time.Second
-	pingTimeout    = 5 * time.Second
 	modelsCacheTTL = 10 * time.Minute
 	modelsPerPage  = 100
 	modelsMaxBody  = 8 << 20
@@ -32,30 +29,28 @@ const (
 var accountIDRE = regexp.MustCompile(`/accounts/([^/]+)/`)
 
 // Model is the OpenAI Models API object.
-type Model struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
-}
+type Model = catalog.Model
 
 // ModelList is the OpenAI list response for GET /v1/models.
-type ModelList struct {
-	Object string  `json:"object"`
-	Data   []Model `json:"data"`
-}
+type ModelList = catalog.ModelList
 
 // Client implements Cloudflare Workers AI extension hooks for Polypus.
 type Client struct {
 	apiBase      string
 	apiKey       string
-	httpClient   *http.Client // catalog / ping (short timeout)
-	speechClient *http.Client // /run TTS/STT (shared transport; timeout via ctx)
+	httpClient   *http.Client // Catalog and ping (short timeout).
+	speechClient *http.Client // Workers AI /run (shared transport; timeout via ctx).
 
-	mu       sync.Mutex
-	cache    []Model
-	cacheAt  time.Time
-	cacheTTL time.Duration
+	cache *catalog.Cache
+
+	// Speech defaults, read from the environment once when the client is built.
+	ttsModel string
+	sttModel string
+	voice    string
+
+	backendID string             // scopes the outbound breaker to this backend.
+	policies  *outbound.Policies // nil: the process default.
+	log       *slog.Logger       // nil: no warnings.
 }
 
 // NewClient builds an uncached Cloudflare extension client from a remote backend
@@ -63,7 +58,7 @@ type Client struct {
 // process-scoped client (and transport after speech-client wiring).
 func NewClient(b config.BackendDef) (*Client, error) {
 	if !b.IsCloudflareExtension() {
-		return nil, fmt.Errorf("%w: %q", errNotCloudflareExtension, b.ID)
+		return nil, derrors.Wrap(errNotCloudflareExtension, derrors.CodeInvalid, "cloudflare", "backend").With("backend", b.ID)
 	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {
@@ -85,7 +80,6 @@ func newClient(apiBase, token string) (*Client, error) {
 		apiBase: apiBase,
 		apiKey:  token,
 		httpClient: &http.Client{
-			Timeout:   modelsTimeout,
 			Transport: transport,
 		},
 		// Timeout 0: hop deadline comes from context (gateway ResolveSpeech).
@@ -93,17 +87,22 @@ func newClient(apiBase, token string) (*Client, error) {
 			Timeout:   0,
 			Transport: transport,
 		},
-		cacheTTL: modelsCacheTTL,
+		cache:    catalog.NewCache(modelsCacheTTL),
+		ttsModel: defaultTTSModel(),
+		sttModel: defaultSTTModel(),
+		voice:    defaultVoice(),
 	}, nil
 }
 
-// Ping checks Cloudflare Model Search reachability (used by gateway health).
+// Ping checks Cloudflare Model Search reachability (used by gateway health). The
+// caller's ctx deadline bounds it.
 func (c *Client) Ping(ctx context.Context) error {
-	if c == nil {
-		return fmt.Errorf("cloudflare: not configured")
+	if ctx == nil {
+		return derrors.New(derrors.CodeInvalid, "cloudflare.Ping", "context required")
 	}
-	ctx, cancel := context.WithTimeout(ctx, pingTimeout)
-	defer cancel()
+	if c == nil {
+		return derrors.New(derrors.CodeFailedPrecondition, "cloudflare", "not configured")
+	}
 	_, _, err := c.fetchPage(ctx, 1)
 	return err
 }
@@ -116,52 +115,13 @@ func (c *Client) Ping(ctx context.Context) error {
 // warning is logged. Operators should treat that as degraded inventory, not a
 // fresh sync. With no cache, the dial error is returned.
 func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
+	if ctx == nil {
+		return ModelList{}, derrors.New(derrors.CodeInvalid, "cloudflare.ListModelsStrict", "context required")
+	}
 	if c == nil {
-		return ModelList{}, fmt.Errorf("cloudflare: not configured")
+		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, "cloudflare", "not configured")
 	}
-	if cached, ok := c.cached(); ok {
-		return ModelList{Object: "list", Data: cached}, nil
-	}
-	models, err := c.fetchAll(ctx)
-	if err != nil {
-		if cached, ok := c.cached(); ok {
-			slog.Warn("cloudflare: models catalog fetch failed; using stale cache",
-				"err", err,
-				"cached_models", len(cached),
-			)
-			return ModelList{Object: "list", Data: cached}, nil
-		}
-		return ModelList{Object: "list"}, err
-	}
-	c.storeCache(models)
-	return ModelList{Object: "list", Data: models}, nil
-}
-
-// ListModels returns OpenAI-shaped models (ids are bare @cf/... for Polypus to prefix).
-// Fetch failures with no cache yield an empty list; prefer ListModelsStrict when
-// the caller must distinguish errors from an empty catalog.
-func (c *Client) ListModels(ctx context.Context) ModelList {
-	list, err := c.ListModelsStrict(ctx)
-	if err != nil {
-		slog.Warn("cloudflare: models catalog fetch failed; empty list", "err", err)
-		return ModelList{Object: "list", Data: nil}
-	}
-	return list
-}
-
-// GetModel returns one model by id or false when missing.
-func (c *Client) GetModel(ctx context.Context, id string) (Model, bool) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return Model{}, false
-	}
-	list := c.ListModels(ctx)
-	for _, m := range list.Data {
-		if m.ID == id {
-			return m, true
-		}
-	}
-	return Model{}, false
+	return catalog.ListStrict(ctx, catalog.Source{Provider: "cloudflare", Backend: c.backendID, Cache: c.cache, Fetch: c.fetchAll, Log: c.log})
 }
 
 func (c *Client) fetchAll(ctx context.Context) ([]Model, error) {
@@ -215,7 +175,7 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 	base := strings.TrimRight(c.apiBase, "/")
 	u, err := url.Parse(base + "/models/search")
 	if err != nil {
-		return nil, 0, fmt.Errorf("cloudflare models: parse url: %w", err)
+		return nil, 0, derrors.Wrap(err, derrors.CodeInternal, "cloudflare models", "parse url")
 	}
 	q := u.Query()
 	q.Set("page", fmt.Sprintf("%d", page))
@@ -225,39 +185,37 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, 0, fmt.Errorf("cloudflare models: request: %w", err)
+		return nil, 0, derrors.Wrap(err, derrors.CodeInternal, "cloudflare models", "request")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, modelsTimeout)
-	defer cancel()
-	resp, err := outbound.Do(ctx, outbound.DepCloudflare, c.httpClient, req)
+	resp, err := c.policies.Do(ctx, c.dep(), c.httpClient, req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("cloudflare models: fetch: %w", err)
+		return nil, 0, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "cloudflare models", "fetch")
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
+	raw, err := readCapped(resp.Body, modelsMaxBody, "cloudflare.fetchPage")
 	if err != nil {
-		return nil, 0, fmt.Errorf("cloudflare models: read: %w", err)
+		return nil, 0, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 			return nil, 0, derrors.Wrap(nil, derrors.CodeUnauthorized, "cloudflare.fetchPage", "API key rejected").
 				With("status", strconv.Itoa(resp.StatusCode))
 		}
-		return nil, 0, fmt.Errorf("cloudflare models: status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+		return nil, 0, derrors.New(catalog.StatusCode(resp.StatusCode), "cloudflare models", fmt.Sprintf("status %d: %s", resp.StatusCode, truncate(string(raw), 200)))
 	}
 	var body cfModelsSearchResponse
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, 0, fmt.Errorf("cloudflare models: decode: %w", err)
+		return nil, 0, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare models", "decode")
 	}
 	if !body.Success {
 		msg := "models search failed"
 		if len(body.Errors) > 0 && strings.TrimSpace(body.Errors[0].Message) != "" {
 			msg = body.Errors[0].Message
 		}
-		return nil, 0, fmt.Errorf("cloudflare models: %s", msg)
+		return nil, 0, derrors.New(derrors.CodeUnavailable, "cloudflare models", msg)
 	}
 	out := make([]Model, 0, len(body.Result))
 	for _, e := range body.Result {
@@ -298,26 +256,4 @@ func normalizeWorkersAIModelName(name string) string {
 		return "@cf/" + strings.TrimPrefix(name, "cf/")
 	}
 	return name
-}
-
-func (c *Client) cached() ([]Model, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.cache) == 0 || c.cacheAt.IsZero() {
-		return nil, false
-	}
-	if time.Since(c.cacheAt) > c.cacheTTL {
-		return nil, false
-	}
-	out := make([]Model, len(c.cache))
-	copy(out, c.cache)
-	return out, true
-}
-
-func (c *Client) storeCache(models []Model) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cache = make([]Model, len(models))
-	copy(c.cache, models)
-	c.cacheAt = time.Now()
 }

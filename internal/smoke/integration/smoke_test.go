@@ -129,7 +129,7 @@ func TestSmokeHiggs(t *testing.T) {
 		o.TTSVoice = DefaultMLXVoice
 		o.AudioOutPath = out
 	})
-	if _, err := os.Stat(out); err != nil {
+	if _, err := os.Stat(out); err != nil { //nolint:gosec // G703: out is under t.TempDir.
 		t.Fatalf("expected audio out file %q: %v", out, err)
 	}
 }
@@ -170,7 +170,7 @@ func assertSmokeOK(t *testing.T, results []smoke.Result, err error) {
 		t.Fatal(err)
 	}
 	for _, r := range results {
-		if r.Status == "fail" {
+		if r.Status == smoke.StatusFail {
 			t.Fatalf("probe failed: %+v", r)
 		}
 	}

@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/behaviorengineering/polypus/internal/config"
 )
 
@@ -16,7 +18,7 @@ type uiProxyMount struct {
 	meta    config.UIProxy
 }
 
-func buildUIMounts(proxies []config.UIProxy) ([]uiProxyMount, error) {
+func (s *shared) buildUIMounts(proxies []config.UIProxy) ([]uiProxyMount, error) {
 	if len(proxies) == 0 {
 		return nil, nil
 	}
@@ -28,14 +30,14 @@ func buildUIMounts(proxies []config.UIProxy) ([]uiProxyMount, error) {
 		}
 		mounts = append(mounts, uiProxyMount{
 			prefix:  p.Path,
-			handler: newUIReverseProxy(p.Path, target, p.StripPrefix),
+			handler: s.newUIReverseProxy(p.Path, target, p.StripPrefix),
 			meta:    p,
 		})
 	}
 	return mounts, nil
 }
 
-func newUIReverseProxy(prefix string, target *url.URL, stripPrefix bool) http.Handler {
+func (s *shared) newUIReverseProxy(prefix string, target *url.URL, stripPrefix bool) http.Handler {
 	prefix = strings.TrimSuffix(prefix, "/")
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -65,12 +67,13 @@ func newUIReverseProxy(prefix string, target *url.URL, stripPrefix bool) http.Ha
 			}
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			http.Error(w, fmt.Sprintf("polypus ui proxy unavailable: %v", err), http.StatusBadGateway)
+			s.writeErrorJSON(w, http.StatusBadGateway,
+				derrors.Wrap(err, derrors.CodeUnavailable, "gateway.uiProxy", "polypus ui proxy unavailable"), "")
 		},
 	}
 }
 
-func (g *Gateway) matchUIProxy(r *http.Request) *uiProxyMount {
+func (g *gatewayHandler) matchUIProxy(r *http.Request) *uiProxyMount {
 	if g == nil || g.shared == nil || len(g.uiMounts) == 0 || r == nil {
 		return nil
 	}
@@ -88,7 +91,7 @@ func (g *Gateway) matchUIProxy(r *http.Request) *uiProxyMount {
 	return best
 }
 
-func (g *Gateway) serveUIProxy(w http.ResponseWriter, r *http.Request) bool {
+func (g *gatewayHandler) serveUIProxy(w http.ResponseWriter, r *http.Request) bool {
 	m := g.matchUIProxy(r)
 	if m == nil {
 		return false

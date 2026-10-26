@@ -73,7 +73,7 @@ backends:
         - "@cf/allow-me"
 `, mlx.URL, cf.URL)
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -114,7 +114,7 @@ backends:
 		t.Fatalf("inventory should include non-allowlisted: %s", inv)
 	}
 
-	// Disallowed chat
+	// Disallowed chat.
 	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"cf_local/@cf/deny-me","messages":[{"role":"user","content":"hi"}]}`,
 	))
@@ -128,7 +128,7 @@ backends:
 		t.Fatalf("deny chat body: %s", rec.Body.String())
 	}
 
-	// Allowed chat
+	// Allowed chat.
 	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"cf_local/@cf/allow-me","messages":[{"role":"user","content":"hi"}]}`,
 	))
@@ -184,7 +184,7 @@ backends:
     capabilities: [chat, vision, embed]
 `, mlx.URL, lm.URL)
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -243,7 +243,7 @@ backends:
     capabilities: [tts, stt, voices]
 `, backend.URL)
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -302,7 +302,7 @@ backends:
     capabilities: [tts, stt, voices]
 `, backend.URL)
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -470,7 +470,7 @@ backends:
     capabilities: [stt]
 `, mlxURL, altURL)
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -609,7 +609,7 @@ backends:
     capabilities: [chat, vision]
 `, mlx.URL, cf.URL)
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -670,7 +670,7 @@ backends:
     capabilities: [chat, vision]
 `, cf.URL)
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -730,7 +730,7 @@ backends:
     capabilities: [chat, vision]
 `, cf.URL)
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -820,7 +820,7 @@ backends:
     capabilities: [chat, vision, embed]
 `, lm.URL)
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -905,7 +905,7 @@ backends:
         - "@cf/zai-org/glm-4.7-flash"
 `, mlx.URL, cf.URL)
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)

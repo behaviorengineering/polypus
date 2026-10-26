@@ -88,10 +88,10 @@ func TestOpenRouterBatchLifecycle(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Status != batch.BatchStatusInProgress || fake.created != 1 {
+	if created.Status != batch.StatusInProgress || fake.created != 1 {
 		t.Fatalf("created=%+v submits=%d", created, fake.created)
 	}
-	if got := getBatch(t, h, created.ID); got.Status != batch.BatchStatusInProgress {
+	if got := getBatch(t, h, created.ID); got.Status != batch.StatusInProgress {
 		t.Fatalf("still running: %+v", got)
 	}
 
@@ -99,7 +99,7 @@ func TestOpenRouterBatchLifecycle(t *testing.T) {
 	fake.status = "completed"
 	fake.mu.Unlock()
 	done := getBatch(t, h, created.ID)
-	if done.Status != batch.BatchStatusCompleted || done.RequestCounts.Completed != 1 {
+	if done.Status != batch.StatusCompleted || done.RequestCounts.Completed != 1 {
 		t.Fatalf("done: %+v", done)
 	}
 	out := fileContent(t, h, done.OutputFileID)
@@ -119,7 +119,7 @@ func TestOpenRouterBatchFailedUpstream(t *testing.T) {
 	fake.mu.Lock()
 	fake.status = "failed"
 	fake.mu.Unlock()
-	if got := getBatch(t, h, created.ID); got.Status != batch.BatchStatusFailed || got.FailedAt == 0 {
+	if got := getBatch(t, h, created.ID); got.Status != batch.StatusFailed || got.FailedAt == 0 {
 		t.Fatalf("failed: %+v", got)
 	}
 }

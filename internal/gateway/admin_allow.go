@@ -3,8 +3,8 @@ package gateway
 import (
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -36,7 +36,7 @@ type adminAllowOverlayResponse struct {
 func (h adminHandler) serveModelsAllowOverlay(w http.ResponseWriter, r *http.Request) {
 	file, err := config.LoadAllowOverlay(h.overlayPath)
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllowOverlay", "load overlay"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllowOverlay", "load overlay"))
 		return
 	}
 	if file.Backends == nil {
@@ -47,85 +47,88 @@ func (h adminHandler) serveModelsAllowOverlay(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	writeAdminJSON(w, http.StatusOK, adminAllowOverlayResponse{
+	h.writeJSON(w, http.StatusOK, adminAllowOverlayResponse{
 		Object:   "allow_overlay",
 		Backends: file.Backends,
 	})
 }
 
 func (h adminHandler) serveModelsAllow(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, adminAllowMaxBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, adminAllowMaxBody))
 	if err != nil {
-		writeAdminJSONError(w, http.StatusBadRequest, "invalid_request_error", "invalid", "read body")
+		h.writeAdminJSONError(w, http.StatusBadRequest, errTypeInvalidRequest, "invalid", "read body")
 		return
 	}
 	var req adminAllowRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeAdminJSONError(w, http.StatusBadRequest, "invalid_request_error", "invalid", "invalid json")
+		h.writeAdminJSONError(w, http.StatusBadRequest, errTypeInvalidRequest, "invalid", "invalid json")
 		return
 	}
 	backendID := strings.TrimSpace(req.Backend)
 	model := strings.TrimSpace(req.Model)
 	if backendID == "" || model == "" {
-		writeAdminJSONError(w, http.StatusBadRequest, "invalid_request_error", "invalid", "backend and model required")
+		h.writeAdminJSONError(w, http.StatusBadRequest, errTypeInvalidRequest, "invalid", "backend and model required")
 		return
 	}
 	reg := h.router.Registry()
 	b, ok := reg.Backend(backendID)
 	if !ok {
-		writeAdminJSONError(w, http.StatusNotFound, "invalid_request_error", "not_found", "backend not found")
+		h.writeAdminJSONError(w, http.StatusNotFound, errTypeInvalidRequest, "not_found", "backend not found")
 		return
 	}
 	if b.Models == nil || !b.Models.HasAllowGate() {
-		writeAdminJSONError(w, http.StatusBadRequest, "invalid_request_error", "failed_precondition", "backend has no models.allow gate")
+		h.writeAdminJSONError(w, http.StatusBadRequest, errTypeInvalidRequest, "failed_precondition", "backend has no models.allow gate")
 		return
 	}
 	down := config.NormalizeDownstream(backendID, model)
 	if down == "" {
-		writeAdminJSONError(w, http.StatusBadRequest, "invalid_request_error", "invalid", "invalid model")
+		h.writeAdminJSONError(w, http.StatusBadRequest, errTypeInvalidRequest, "invalid", "invalid model")
 		return
 	}
 	if i := strings.Index(model, "/"); i > 0 {
 		prefix := model[:i]
 		if prefix != backendID {
 			if _, ok := reg.Config().Backends[prefix]; ok {
-				writeAdminJSONError(w, http.StatusBadRequest, "invalid_request_error", "invalid", "model backend prefix mismatch")
+				h.writeAdminJSONError(w, http.StatusBadRequest, errTypeInvalidRequest, "invalid", "model backend prefix mismatch")
 				return
 			}
 		}
 	}
 	publicID := prefixModelID(backendID, down)
 	if b.IsModelAllowed(model) || b.IsModelAllowed(down) || b.IsModelAllowed(publicID) {
-		writeAdminAllowOK(w, backendID, down, publicID, true, b.Models.Allow)
+		h.writeJSON(w, http.StatusOK, adminAllowResponse{Backend: backendID, Model: down, PublicID: publicID, AlreadyAllowed: true, Allow: slices.Clone(b.Models.Allow)})
 		return
 	}
-	inventory := modelsHandler(h).inventoryForBackend(r, b)
+	budgeted, cancel := withModelsBudget(r.Context(), h.router.Registry().Config())
+	defer cancel()
+	inventory := modelsHandler(h).inventoryForBackend(budgeted, r.Header.Get("Authorization"), b)
+	h.invCache.flush()
 	if !modelInInventory(backendID, down, model, inventory) {
 		if len(inventory) == 0 {
-			writeAdminJSONError(w, http.StatusServiceUnavailable, "invalid_request_error", "unavailable", "could not fetch backend inventory")
+			h.writeAdminJSONError(w, http.StatusServiceUnavailable, errTypeInvalidRequest, "unavailable", "could not fetch backend inventory")
 			return
 		}
-		writeAdminJSONError(w, http.StatusBadRequest, "invalid_request_error", "model_not_in_inventory", "model not in backend inventory")
+		h.writeAdminJSONError(w, http.StatusBadRequest, errTypeInvalidRequest, "model_not_in_inventory", "model not in backend inventory")
 		return
 	}
 	if err := config.OverlayAdd(h.overlayPath, backendID, down); err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllow", "overlay"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllow", "overlay"))
 		return
 	}
 	if err := reg.AllowModel(backendID, down); err != nil {
 		if rbErr := config.OverlayRemove(h.overlayPath, backendID, down); rbErr != nil {
-			slog.Warn("allow overlay rollback failed after AllowModel error",
-				"backend", backendID, "model", down, "rollback_err", rbErr, "allow_err", err)
+			h.log.Warn("allow overlay rollback failed after AllowModel error",
+				"backend", backendID, keyModel, down, "rollback_err", rbErr, "allow_err", err)
 		}
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllow", "allow model"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllow", "allow model"))
 		return
 	}
 	b2, ok := reg.Backend(backendID)
 	if !ok || b2.Models == nil {
-		writeAdminAllowOK(w, backendID, down, publicID, false, nil)
+		h.writeJSON(w, http.StatusOK, adminAllowResponse{Backend: backendID, Model: down, PublicID: publicID})
 		return
 	}
-	writeAdminAllowOK(w, backendID, down, publicID, false, b2.Models.Allow)
+	h.writeJSON(w, http.StatusOK, adminAllowResponse{Backend: backendID, Model: down, PublicID: publicID, Allow: slices.Clone(b2.Models.Allow)})
 }
 
 func modelInInventory(backendID, down, req string, models []openaiModel) bool {
@@ -140,33 +143,6 @@ func modelInInventory(backendID, down, req string, models []openaiModel) bool {
 	return false
 }
 
-func writeAdminJSONError(w http.ResponseWriter, status int, typ, code, msg string) {
-	writeAdminJSON(w, status, map[string]any{
-		"error": map[string]any{
-			"message": msg,
-			"type":    typ,
-			"code":    code,
-		},
-	})
-}
-
-func writeAdminAllowOK(w http.ResponseWriter, backend, down, publicID string, already bool, allow []string) {
-	writeAdminJSON(w, http.StatusOK, adminAllowResponse{
-		Backend:        backend,
-		Model:          down,
-		PublicID:       publicID,
-		AlreadyAllowed: already,
-		Allow:          append([]string(nil), allow...),
-	})
-}
-
-func writeAdminJSON(w http.ResponseWriter, status int, v any) {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+func (h adminHandler) writeAdminJSONError(w http.ResponseWriter, status int, typ, code, msg string) {
+	h.writeOpenAIError(w, status, openaiError{Message: msg, Type: typ, Code: code})
 }

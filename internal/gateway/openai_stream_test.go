@@ -20,7 +20,7 @@ func TestOpenAIStreamSanitizerDropsPostStopChoice(t *testing.T) {
 	}
 	illegal := []byte(`{"id":"c1","choices":[{"index":0,"delta":{"content":"late"}}]}`)
 	_, action, emit := sanitizeOpenAIStreamChunk(illegal, san, true)
-	if emit || action != StreamSSEDrop {
+	if emit || action != streamSSEDrop {
 		t.Fatalf("expected drop, emit=%v action=%s", emit, action)
 	}
 }
@@ -31,7 +31,7 @@ func TestOpenAIStreamSanitizerRewritesUsageAfterStop(t *testing.T) {
 	sanitizeOpenAIStreamChunk(stop, san, true)
 	usage := []byte(`{"id":"c1","choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`)
 	out, action, emit := sanitizeOpenAIStreamChunk(usage, san, true)
-	if !emit || action != StreamSSERewriteUsage {
+	if !emit || action != streamSSERewriteUsage {
 		t.Fatalf("emit=%v action=%s", emit, action)
 	}
 	if !strings.Contains(string(out), `"choices":[]`) {
@@ -129,7 +129,7 @@ func TestSanitizeFailOpenOnMalformedJSON(t *testing.T) {
 	san := newOpenAIStreamSanitizer()
 	bad := []byte(`not-json`)
 	out, action, emit := sanitizeOpenAIStreamChunk(bad, san, false)
-	if !emit || action != StreamSSEForward || !bytes.Equal(out, bad) {
+	if !emit || action != streamSSEForward || !bytes.Equal(out, bad) {
 		t.Fatalf("fail open: emit=%v action=%s out=%q", emit, action, out)
 	}
 }
@@ -137,7 +137,7 @@ func TestSanitizeFailOpenOnMalformedJSON(t *testing.T) {
 func TestSanitizePerIndexFinish(t *testing.T) {
 	san := newOpenAIStreamSanitizer()
 	sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":0,"finish_reason":"stop","delta":{}}]}`), san, false)
-	// index 1 still allowed
+	// index 1 still allowed.
 	out, _, emit := sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":1,"delta":{"content":"ok"}}]}`), san, false)
 	if !emit || !strings.Contains(string(out), `"content":"ok"`) {
 		t.Fatalf("index 1 should forward: %q", out)

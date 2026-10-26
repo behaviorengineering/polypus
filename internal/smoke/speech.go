@@ -22,7 +22,7 @@ func runTTS(ctx context.Context, opts Options) ([]Result, error) {
 		}
 		return fmt.Sprintf("%d bytes", len(audio)), nil
 	})
-	if row.Status == "fail" {
+	if row.Status == StatusFail {
 		return []Result{row}, fmt.Errorf("tts smoke failed")
 	}
 	return []Result{row}, nil
@@ -41,7 +41,7 @@ func runSTT(ctx context.Context, opts Options) ([]Result, error) {
 		}
 		return fmt.Sprintf("%d bytes", len(audio)), nil
 	})
-	if prep.Status == "fail" {
+	if prep.Status == StatusFail {
 		return []Result{prep}, fmt.Errorf("stt smoke failed (tts prep)")
 	}
 	transcribe := timed(ChannelSTT, "transcribe", opts.STTModel, func() (string, error) {
@@ -52,27 +52,22 @@ func runSTT(ctx context.Context, opts Options) ([]Result, error) {
 		if len(strings.TrimSpace(text)) < 8 {
 			return "", fmt.Errorf("transcript too short: %q", text)
 		}
-		d := strings.TrimSpace(text)
-		if len(d) > 80 {
-			d = d[:77] + "..."
-		}
-		return d, nil
+		return truncate(text, 80), nil
 	})
 	out := []Result{prep, transcribe}
-	if transcribe.Status == "fail" {
+	if transcribe.Status == StatusFail {
 		return out, fmt.Errorf("stt smoke failed")
 	}
 	return out, nil
 }
 
 func synthesize(ctx context.Context, opts Options) ([]byte, error) {
-	payload := map[string]any{
-		"model":           opts.TTSModel,
-		"input":           opts.TTSText,
-		"voice":           opts.TTSVoice,
-		"response_format": "mp3",
-	}
-	raw, err := json.Marshal(payload)
+	raw, err := json.Marshal(struct {
+		Model          string `json:"model"`
+		Input          string `json:"input"`
+		Voice          string `json:"voice"`
+		ResponseFormat string `json:"response_format"`
+	}{opts.TTSModel, opts.TTSText, opts.TTSVoice, "mp3"})
 	if err != nil {
 		return nil, err
 	}
@@ -90,10 +85,10 @@ func synthesize(ctx context.Context, opts Options) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("speech status %d: %s", resp.StatusCode, truncate(string(body), 200))
+		return nil, &statusError{what: "speech", status: resp.StatusCode, body: truncate(string(body), 200)}
 	}
 	if path := strings.TrimSpace(opts.AudioOutPath); path != "" {
-		if err := os.WriteFile(path, body, 0o644); err != nil {
+		if err := os.WriteFile(path, body, 0o600); err != nil {
 			return nil, fmt.Errorf("write audio out %q: %w", path, err)
 		}
 	}
@@ -103,7 +98,9 @@ func synthesize(ctx context.Context, opts Options) ([]byte, error) {
 func transcribeAudio(ctx context.Context, opts Options, audio []byte) (string, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	_ = w.WriteField("model", opts.STTModel)
+	if err := w.WriteField("model", opts.STTModel); err != nil {
+		return "", err
+	}
 	part, err := w.CreateFormFile("file", "smoke.mp3")
 	if err != nil {
 		return "", err
@@ -129,7 +126,7 @@ func transcribeAudio(ctx context.Context, opts Options, audio []byte) (string, e
 		return "", err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("transcription status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+		return "", &statusError{what: "transcription", status: resp.StatusCode, body: truncate(string(raw), 200)}
 	}
 	var flat struct {
 		Text string `json:"text"`
@@ -140,10 +137,13 @@ func transcribeAudio(ctx context.Context, opts Options, audio []byte) (string, e
 	return flat.Text, nil
 }
 
+// truncate trims s and caps it at n runes, ending a cut string with "...". It cuts on
+// rune boundaries, so model output in any script stays valid text.
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(r[:max(0, n-3)]) + "..."
 }

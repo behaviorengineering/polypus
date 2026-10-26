@@ -41,7 +41,7 @@ backends:
       allow: []
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -116,7 +116,7 @@ backends:
     capabilities: [stt]
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -158,7 +158,7 @@ backends:
     capabilities: [tts, stt, voices]
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -169,8 +169,8 @@ backends:
 	if cfg.Timeouts.Chat != 90*time.Second {
 		t.Fatalf("chat: %s", cfg.Timeouts.Chat)
 	}
-	if cfg.Timeouts.ResolveChat("", "cf_local", false, false) != 30*time.Second {
-		t.Fatalf("cf chat: %s", cfg.Timeouts.ResolveChat("", "cf_local", false, false))
+	if cfg.Timeouts.ResolveChat("", "cf_local", ChatKindOf(false, false)) != 30*time.Second {
+		t.Fatalf("cf chat: %s", cfg.Timeouts.ResolveChat("", "cf_local", ChatKindOf(false, false)))
 	}
 }
 
@@ -190,7 +190,7 @@ backends:
     capabilities: [chat, vision, embed]
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -232,7 +232,7 @@ backends:
     capabilities: [tts, stt, voices]
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -271,7 +271,7 @@ backends:
     capabilities: [chat, vision, embed]
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -300,7 +300,7 @@ backends:
     capabilities: [tts, stt, voices]
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -321,7 +321,7 @@ func TestLoadRouterConfigFromPOLYPUS_CONFIG(t *testing.T) {
 	if path == "" {
 		t.Skip("POLYPUS_CONFIG unset")
 	}
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(path); err != nil { //nolint:gosec // G703: the operator's own POLYPUS_CONFIG in a live test
 		t.Fatalf("POLYPUS_CONFIG stat %q: %v", path, err)
 	}
 	cfg, err := LoadRouterConfig(ServeOptions{})

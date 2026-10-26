@@ -2,47 +2,10 @@ package gateway
 
 import (
 	"context"
-	"log/slog"
-	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 )
-
-const defaultModelsRefreshInterval = 30 * time.Minute
-
-func modelsWarmupEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("POLYPUS_MODELS_WARMUP"))) {
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return true
-	}
-}
-
-func modelsRefreshInterval() time.Duration {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("POLYPUS_MODELS_REFRESH_INTERVAL"))) {
-	case "0", "false", "no", "off":
-		return 0
-	case "":
-		return defaultModelsRefreshInterval
-	default:
-		d, err := time.ParseDuration(strings.TrimSpace(os.Getenv("POLYPUS_MODELS_REFRESH_INTERVAL")))
-		if err != nil || d <= 0 {
-			return defaultModelsRefreshInterval
-		}
-		return d
-	}
-}
-
-func modelsRefreshEnabled() bool {
-	if !modelsWarmupEnabled() {
-		return false
-	}
-	return modelsRefreshInterval() > 0
-}
 
 func modelsWarmupTimeout(cfg config.RouterConfig) time.Duration {
 	n := len(cfg.BackendIDs())
@@ -88,43 +51,27 @@ func runModelsRefreshLoop(ctx context.Context, interval time.Duration, newTicker
 	}
 }
 
-// warmModelsInventory prefetches enabled model catalogs (same path as GET /v1/models).
-func (h modelsHandler) warmModelsInventory(ctx context.Context) {
+// warmInventory prefetches model catalogs (the GET /v1/models path): the enabled
+// models at startup, or the full inventory view on refresh.
+func (h modelsHandler) warmInventory(ctx context.Context, asInventory bool) {
 	if h.shared == nil || h.router == nil {
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/", nil)
-	if err != nil {
-		slog.Warn("polypus: models warmup", "err", err)
-		return
-	}
-	models := h.collectModels(req, false)
-	slog.Info("polypus: models inventory warmup complete", "enabled_count", len(models))
-}
-
-func (h modelsHandler) warmModelsInventoryInventoryView(ctx context.Context) {
-	if h.shared == nil || h.router == nil {
-		return
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/", nil)
-	if err != nil {
-		slog.Warn("polypus: models inventory refresh", "err", err)
-		return
-	}
-	models := h.collectModels(req, true)
-	slog.Info("polypus: models inventory refresh complete", "inventory_count", len(models))
+	// Warmup has no caller, so no inbound credential reaches local backends.
+	models := h.collectModels(ctx, "", asInventory)
+	h.log.Info("polypus: models inventory warmed", "inventory_view", asInventory, "count", len(models))
 }
 
 func (h modelsHandler) startModelsRefreshLoop(refreshCtx context.Context, cfg config.RouterConfig) {
-	if !modelsRefreshEnabled() {
+	if !h.models.RefreshEnabled() {
 		return
 	}
-	interval := modelsRefreshInterval()
+	interval := h.models.RefreshInterval
 	warm := func(iterCtx context.Context) {
 		timeout := modelsWarmupTimeout(cfg)
 		runCtx, cancel := context.WithTimeout(iterCtx, timeout)
 		defer cancel()
-		h.warmModelsInventoryInventoryView(runCtx)
+		h.warmInventory(runCtx, true)
 	}
 	go runModelsRefreshLoop(refreshCtx, interval, nil, warm)
 }

@@ -4,16 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
-
-const systemOneTimeout = 120 * time.Second
 
 // SystemOne calls Workers AI typesafe/jev (or another systemone-capable model).
 // Cloudflare's REST surface for this third-party model is POST /ai/run with
@@ -21,6 +18,9 @@ const systemOneTimeout = 120 * time.Second
 // (that returns "No route for that URI"). Response is unwrapped from the
 // Workers AI {success, result, errors} envelope when present.
 func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]byte, error) {
+	if ctx == nil {
+		return nil, derrors.New(derrors.CodeInvalid, "cloudflare.SystemOne", "context required")
+	}
 	if c == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.SystemOne", "not configured")
 	}
@@ -56,12 +56,12 @@ func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]by
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
+	raw, err := readCapped(resp.Body, runMaxBody, "cloudflare.SystemOne")
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.SystemOne", "read body")
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if rl := ClassifyRateLimit("cloudflare.SystemOne", resp.StatusCode, resp.Header, raw); rl != nil {
+		if rl := ratelimit.Classify("cloudflare.SystemOne", resp.StatusCode, resp.Header, raw); rl != nil {
 			return nil, rl
 		}
 		msg := workersAIErrorMessage(raw)
@@ -76,13 +76,11 @@ func (c *Client) doSystemOne(ctx context.Context, req *http.Request) (*http.Resp
 	if c == nil || c.speechClient == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.doSystemOne", "not configured")
 	}
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, systemOneTimeout)
-		defer cancel()
-		req = req.WithContext(ctx)
+	resp, err := c.policies.DoOnce(ctx, c.dep(), c.speechClient, req)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.doSystemOne", "post")
 	}
-	return c.speechClient.Do(req)
+	return resp, nil
 }
 
 // stripModelField removes top-level "model" from a JSON object so CF /run
@@ -131,7 +129,7 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 		}
 		if envelope.Success != nil {
 			if !*envelope.Success {
-				if rl := ClassifyRateLimit("cloudflare.unwrapRunResult", 0, nil, cur); rl != nil {
+				if rl := ratelimit.Classify("cloudflare.unwrapRunResult", 0, nil, cur); rl != nil {
 					return nil, rl
 				}
 				msg := "cloudflare workers ai error"
@@ -153,9 +151,6 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 			continue
 		}
 		break
-	}
-	if looksLikeTypeSafeResult(cur) {
-		return cur, nil
 	}
 	return cur, nil
 }

@@ -1,7 +1,6 @@
 package cloudflare
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -54,14 +53,14 @@ func TestSubmitAndPollBatch(t *testing.T) {
 		CustomID: "c1",
 		Body:     []byte(`{"model":"@cf/meta/llama-3.3-70b-instruct-fp8-fast","messages":[{"role":"user","content":"hi"}]}`),
 	}}
-	id, err := c.SubmitBatch(context.Background(), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", batch.EndpointChatCompletions, lines)
+	id, err := c.SubmitBatch(hopCtx(t), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", batch.EndpointChatCompletions, lines)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if id != "cf-req-1" {
 		t.Fatalf("request id: %s", id)
 	}
-	poll, err := c.PollBatch(context.Background(), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", id)
+	poll, err := c.PollBatch(hopCtx(t), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,5 +126,24 @@ func TestUnwrapThenParseEmptyResultIsQueued(t *testing.T) {
 	}
 	if poll.State != BatchPollQueued {
 		t.Fatalf("state=%v want queued", poll.State)
+	}
+}
+
+func TestBatchLinesKeepLargeIntegersExact(t *testing.T) {
+	items, err := translateBatchRequests(batch.EndpointChatCompletions, []batch.InputLine{{
+		CustomID: "a",
+		Body:     json.RawMessage(`{"model":"m","stream":true,"seed":9007199254740993,"messages":[]}`),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(items[0]["seed"]); got != "9007199254740993" {
+		t.Fatalf("seed = %s, want it byte for byte", got)
+	}
+	if _, has := items[0]["model"]; has {
+		t.Fatal("model is dropped")
+	}
+	if got := string(items[0]["external_reference"]); got != `"a"` {
+		t.Fatalf("external_reference = %s", got)
 	}
 }

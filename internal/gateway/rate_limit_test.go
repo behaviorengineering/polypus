@@ -6,22 +6,22 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
 
 func TestWriteRateLimitErrorJSON(t *testing.T) {
 	err := derrors.Wrap(
 		derrors.New(derrors.CodeRateLimited, "cloudflare.workers", "You have used up your daily free allocation of 10,000 neurons. Quota resets daily at 00:00 UTC.").
-			With(cloudflare.FieldCFCode, cloudflare.WorkersQuotaCode).
-			With(cloudflare.FieldRetryAfter, "120").
-			With(cloudflare.FieldCFRay, "ray-1"),
+			With(ratelimit.FieldCFCode, ratelimit.WorkersQuotaCode).
+			With(ratelimit.FieldRetryAfter, "120").
+			With(ratelimit.FieldCFRay, "ray-1"),
 		derrors.CodeRateLimited,
 		"router.bifrost",
 		"provider rate limited",
 	)
 	rec := httptest.NewRecorder()
-	if !writeRateLimitError(rec, err) {
+	if !testShared.writeRateLimitError(rec, err) {
 		t.Fatal("expected write")
 	}
 	if rec.Code != http.StatusTooManyRequests {
@@ -37,7 +37,7 @@ func TestWriteRateLimitErrorJSON(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Error.Type != "rate_limit_error" || body.Error.Code != cloudflare.WorkersQuotaCode {
+	if body.Error.Type != "rate_limit_error" || body.Error.Code != ratelimit.WorkersQuotaCode {
 		t.Fatalf("error=%+v", body.Error)
 	}
 	if body.Error.Message == "provider rate limited" {
@@ -48,17 +48,17 @@ func TestWriteRateLimitErrorJSON(t *testing.T) {
 func TestWriteRateLimitErrorXRateLimitHeaders(t *testing.T) {
 	err := derrors.Wrap(
 		derrors.New(derrors.CodeRateLimited, "cloudflare.workers", "capacity").
-			With(cloudflare.FieldCFCode, cloudflare.WorkersCapacityCode).
-			With(cloudflare.FieldRetryAfter, "30").
-			With(cloudflare.FieldCFRay, "ray-syd").
-			With(cloudflare.FieldHeaderPrefix+"x-ratelimit-limit", "100").
-			With(cloudflare.FieldHeaderPrefix+"x-ratelimit-remaining", "0"),
+			With(ratelimit.FieldCFCode, ratelimit.WorkersCapacityCode).
+			With(ratelimit.FieldRetryAfter, "30").
+			With(ratelimit.FieldCFRay, "ray-syd").
+			With(ratelimit.FieldHeaderPrefix+"x-ratelimit-limit", "100").
+			With(ratelimit.FieldHeaderPrefix+"x-ratelimit-remaining", "0"),
 		derrors.CodeRateLimited,
 		"router.bifrost",
 		"provider rate limited",
 	)
 	rec := httptest.NewRecorder()
-	if !writeRateLimitError(rec, err) {
+	if !testShared.writeRateLimitError(rec, err) {
 		t.Fatal("expected write")
 	}
 	if rec.Header().Get("X-RateLimit-Limit") != "100" {
@@ -89,7 +89,7 @@ func TestOpenAIRateLimitBodyFromWorkersJSON(t *testing.T) {
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Error.Code != cloudflare.WorkersCapacityCode {
+	if body.Error.Code != ratelimit.WorkersCapacityCode {
 		t.Fatalf("code=%q", body.Error.Code)
 	}
 	if body.Error.Type != "rate_limit_error" {

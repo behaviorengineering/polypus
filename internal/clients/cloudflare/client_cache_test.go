@@ -6,8 +6,8 @@ import (
 	"github.com/behaviorengineering/polypus/internal/config"
 )
 
-func TestGetClientReusesSameInstance(t *testing.T) {
-	t.Cleanup(resetClientCacheForTest)
+func TestClientsReuseSameInstance(t *testing.T) {
+	cs := &Clients{}
 	t.Setenv("CF_CACHE_KEY", "secret-a")
 	b := config.BackendDef{
 		ID:        "cf_local",
@@ -16,11 +16,11 @@ func TestGetClientReusesSameInstance(t *testing.T) {
 		BaseURL:   "https://api.cloudflare.com/client/v4/accounts/test-acc/ai/v1",
 		Auth:      config.BackendAuth{BearerEnv: "CF_CACHE_KEY"},
 	}
-	a, err := GetClient(b)
+	a, err := cs.Get(b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := GetClient(b)
+	again, err := cs.Get(b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,8 +29,8 @@ func TestGetClientReusesSameInstance(t *testing.T) {
 	}
 }
 
-func TestGetClientDifferentTokenNewInstance(t *testing.T) {
-	t.Cleanup(resetClientCacheForTest)
+func TestClientsNewInstanceOnTokenChange(t *testing.T) {
+	cs := &Clients{}
 	t.Setenv("CF_CACHE_KEY", "secret-a")
 	b := config.BackendDef{
 		ID:        "cf_local",
@@ -39,12 +39,12 @@ func TestGetClientDifferentTokenNewInstance(t *testing.T) {
 		BaseURL:   "https://api.cloudflare.com/client/v4/accounts/test-acc/ai/v1",
 		Auth:      config.BackendAuth{BearerEnv: "CF_CACHE_KEY"},
 	}
-	first, err := GetClient(b)
+	first, err := cs.Get(b)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CF_CACHE_KEY", "secret-b")
-	second, err := GetClient(b)
+	second, err := cs.Get(b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,9 +53,9 @@ func TestGetClientDifferentTokenNewInstance(t *testing.T) {
 	}
 }
 
-func TestGetClientRejectsNonCloudflare(t *testing.T) {
-	t.Cleanup(resetClientCacheForTest)
-	_, err := GetClient(config.BackendDef{
+func TestClientsRejectNonCloudflare(t *testing.T) {
+	cs := &Clients{}
+	_, err := cs.Get(config.BackendDef{
 		ID:        "leaf",
 		BaseURL:   "http://127.0.0.1:9",
 		Extension: "",

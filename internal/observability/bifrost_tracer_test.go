@@ -25,12 +25,6 @@ func TestBifrostOTelTracer_sameTraceAsParent(t *testing.T) {
 	parentTrace := parent.SpanContext().TraceID()
 
 	tr := NewBifrostOTelTracer()
-	tr.Bind(parentCtx)
-
-	traceID := tr.CreateTrace("")
-	if traceID != parentTrace.String() {
-		t.Fatalf("CreateTrace %q != parent trace %q", traceID, parentTrace)
-	}
 
 	bctx := schemas.NewBifrostContext(parentCtx, schemas.NoDeadline)
 	_, handle := tr.StartSpanID(bctx, "chat_completion_stream test-model", schemas.SpanKindLLMCall)
@@ -39,7 +33,7 @@ func TestBifrostOTelTracer_sameTraceAsParent(t *testing.T) {
 		t.Fatal("expected otel span bridge handle")
 	}
 	bridge.schema.SetAttribute(schemas.AttrBifrostProviderName, string(schemas.Gemini))
-	tr.EndSpan(handle, schemas.SpanStatusOk, "")
+	tr.endSpan(handle, schemas.SpanStatusOk, "")
 	parent.End()
 
 	var childTrace string
@@ -77,5 +71,38 @@ func TestBifrostOTelTracer_gateSendPassthrough(t *testing.T) {
 	}
 	if len(ch) != 1 {
 		t.Fatal("expected chunk on channel")
+	}
+}
+
+func TestBifrostOTelTracer_concurrentRequestsKeepTheirOwnTrace(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+	tr := NewBifrostOTelTracer()
+	ctxA, spanA := Tracer().Start(context.Background(), "polypus.chat A")
+	ctxB, spanB := Tracer().Start(context.Background(), "polypus.chat B")
+	// Interleave like two concurrent requests on the one shared tracer.
+	_, hA := tr.StartSpanID(schemas.NewBifrostContext(ctxA, schemas.NoDeadline), "llm A", schemas.SpanKindLLMCall)
+	_, hB := tr.StartSpanID(schemas.NewBifrostContext(ctxB, schemas.NoDeadline), "llm B", schemas.SpanKindLLMCall)
+	tr.endSpan(hA, schemas.SpanStatusOk, "")
+	tr.endSpan(hB, schemas.SpanStatusOk, "")
+	spanA.End()
+	spanB.End()
+	want := map[string]string{
+		"llm A": spanA.SpanContext().TraceID().String(),
+		"llm B": spanB.SpanContext().TraceID().String(),
+	}
+	for _, sp := range exporter.GetSpans() {
+		if w, ok := want[sp.Name]; ok && sp.SpanContext.TraceID().String() != w {
+			t.Fatalf("%s joined trace %s, want its own request's %s", sp.Name, sp.SpanContext.TraceID(), w)
+		}
+	}
+	if got := tr.CreateTrace(""); len(got) != 32 {
+		t.Fatalf("CreateTrace with no parent must return a fresh 32-hex id, got %q", got)
 	}
 }

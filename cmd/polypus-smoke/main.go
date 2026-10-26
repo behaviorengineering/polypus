@@ -4,9 +4,10 @@ package main
 import (
 	"os"
 
-	"github.com/behaviorengineering/polypus/pkg/polypus"
+	"github.com/behaviorengineering/polypus/internal/cli"
 )
 
 func main() {
-	os.Exit(polypus.SmokeCLI(os.Args[1:]))
+	// Thin wiring: the command surface lives in internal/cli.
+	os.Exit(cli.RunSmoke(os.Args[1:]))
 }

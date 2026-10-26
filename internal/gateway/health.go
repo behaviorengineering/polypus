@@ -2,15 +2,14 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 )
 
@@ -36,8 +35,8 @@ type backendHealthResponse struct {
 }
 
 type upstreamHealthResponse struct {
-	Status    string                      `json:"status"`
-	Upstreams []upstream.UpstreamSnapshot `json:"upstreams"`
+	Status    string              `json:"status"`
+	Upstreams []upstream.Snapshot `json:"upstreams"`
 }
 
 // serveUpstreamHealth reports in-process circuit breaker state (no upstream dials).
@@ -46,16 +45,12 @@ func (h healthHandler) serveUpstreamHealth(w http.ResponseWriter, _ *http.Reques
 		Status:    "ok",
 		Upstreams: h.upstreams.Snapshot(),
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	h.writeJSON(w, http.StatusOK, resp)
 }
 
 // serveHealth reports gateway liveness only (no upstream probes).
-func (healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok"})
+func (h healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
+	h.writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
 }
 
 // serveBackendHealth probes configured upstream backends (manual / stack-doctor use).
@@ -71,7 +66,7 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 		b := cfg.Backends[id]
 		entry := backendProbeResult{ID: id, URL: b.BaseURL}
 		// Probes must not trip the same circuit breaker as chat/TTS/STT dials.
-		if err := probeBackend(ctx, b, h.cloudflareClient); err != nil {
+		if err := h.probeBackend(ctx, b); err != nil {
 			entry.Error = err.Error()
 			allOK = false
 		} else {
@@ -83,7 +78,7 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	if config.SwitchyardEnabled() {
 		switchyardURL := cfg.EffectiveSwitchyardBaseURL()
 		entry := backendProbeResult{ID: "switchyard", URL: switchyardURL}
-		if err := probeSwitchyard(ctx, switchyardURL); err != nil {
+		if err := h.compat.CheckHealth(ctx, strings.TrimRight(strings.TrimSpace(switchyardURL), "/")+"/health"); err != nil {
 			entry.Error = err.Error()
 			allOK = false
 		} else {
@@ -98,9 +93,7 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 		status = "degraded"
 		code = http.StatusServiceUnavailable
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(backendHealthResponse{
+	h.writeJSON(w, code, backendHealthResponse{
 		Status:   status,
 		Router:   "bifrost",
 		Backends: backends,
@@ -108,53 +101,49 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 }
 
 // probeRemoteCredentials validates each remote backend before serve accepts traffic.
-func probeRemoteCredentials(ctx context.Context, cfg config.RouterConfig, getCF CloudflareClientGet) error {
+func probeRemoteCredentials(ctx context.Context, cfg config.RouterConfig, getCF cloudflareClientGet) error {
 	for _, id := range cfg.BackendIDs() {
 		b := cfg.Backends[id]
 		if !b.Remote {
 			continue
 		}
-		if err := probeBackend(ctx, b, getCF); err != nil {
+		if err := probeRemoteBackend(ctx, b, getCF); err != nil {
 			return fmt.Errorf("startup probe backend %s: %w (check polypus secret set / env)", id, err)
 		}
 	}
 	return nil
 }
 
-func probeBackend(ctx context.Context, b config.BackendDef, getCF CloudflareClientGet) error {
+// probeBackend checks one backend for the health page: a remote one by its
+// credential (and a Cloudflare ping), a local one by a GET of its root.
+func (s *shared) probeBackend(ctx context.Context, b config.BackendDef) error {
 	if b.Remote {
-		if b.IsCloudflareExtension() {
-			if getCF == nil {
-				getCF = cloudflare.GetClient
-			}
-			cf, err := getCF(b)
-			if err != nil {
-				return err
-			}
-			return cf.Ping(ctx)
+		return probeRemoteBackend(ctx, b, s.cloudflareClient)
+	}
+	if err := s.compat.Ping(ctx, strings.TrimRight(b.BaseURL, "/")+"/"); err != nil {
+		return gatewayErr(err, "gateway.probeBackend", "ping").With("backend", b.ID)
+	}
+	return nil
+}
+
+// probeRemoteBackend checks a remote backend's credential; a Cloudflare backend is
+// also pinged.
+func probeRemoteBackend(ctx context.Context, b config.BackendDef, getCF cloudflareClientGet) error {
+	if b.IsCloudflareExtension() {
+		if getCF == nil {
+			getCF = new(cloudflare.Clients).Get
 		}
-		if _, err := b.Auth.ResolveBearerToken(); err != nil {
-			return err
+		cf, err := getCF(b)
+		if err != nil {
+			return gatewayErr(err, "gateway.probeBackend", "cloudflare client").With("backend", b.ID)
+		}
+		if err := cf.Ping(ctx); err != nil {
+			return gatewayErr(err, "gateway.probeBackend", "ping").With("backend", b.ID)
 		}
 		return nil
 	}
-	return pingBackendURL(ctx, b.BaseURL)
-}
-
-func pingBackendURL(ctx context.Context, backendURL string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(backendURL, "/")+"/", nil)
-	if err != nil {
-		return err
-	}
-	client := &http.Client{Timeout: backendProbeTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode >= 500 {
-		return fmt.Errorf("status %d", resp.StatusCode)
+	if _, err := b.Auth.ResolveBearerToken(); err != nil {
+		return derrors.Wrap(err, derrors.CodeNotReady, "gateway.probeBackend", "backend credential").With("backend", b.ID)
 	}
 	return nil
 }

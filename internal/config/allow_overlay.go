@@ -1,9 +1,13 @@
 package config
 
 import (
-	"log/slog"
+	"errors"
+	"fmt"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -11,7 +15,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const modelsAllowOverlayFile = "models-allow-overlay.yaml"
+// ModelsAllowOverlayFile is the allow overlay's file name under the state directory.
+const ModelsAllowOverlayFile = "models-allow-overlay.yaml"
 
 // AllowOverlayFile is the on-disk shape for runtime model allow extras.
 type AllowOverlayFile struct {
@@ -25,45 +30,50 @@ type AllowOverlayBackend struct {
 
 // ResolveModelsAllowOverlayPath picks the overlay file path.
 // Order: POLYPUS_MODELS_ALLOW_OVERLAY, then $XDG_STATE_HOME/polypus/models-allow-overlay.yaml.
-func ResolveModelsAllowOverlayPath() string {
-	if path := strings.TrimSpace(os.Getenv("POLYPUS_MODELS_ALLOW_OVERLAY")); path != "" {
-		return path
-	}
-	dir, err := DefaultStateDir()
+func ResolveModelsAllowOverlayPath() (string, error) {
+	out, err := resolveModelsAllowOverlayPath()
 	if err != nil {
-		return ""
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), "config.ResolveModelsAllowOverlayPath", "state dir")
 	}
-	return filepath.Join(dir, modelsAllowOverlayFile)
+	return out, nil
 }
 
-// ResolveAdminKeysPath picks the admin API key store path.
-// Order: POLYPUS_ADMIN_KEYS, then $XDG_STATE_HOME/polypus/admin-api-keys.json.
-func ResolveAdminKeysPath() string {
-	if path := strings.TrimSpace(os.Getenv("POLYPUS_ADMIN_KEYS")); path != "" {
-		return path
+// resolveModelsAllowOverlayPath is ResolveModelsAllowOverlayPath before its error is typed at the package boundary.
+func resolveModelsAllowOverlayPath() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("POLYPUS_MODELS_ALLOW_OVERLAY")); path != "" {
+		return path, nil
 	}
 	dir, err := DefaultStateDir()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("models allow overlay path: %w", err)
 	}
-	return filepath.Join(dir, "admin-api-keys.json")
+	return filepath.Join(dir, ModelsAllowOverlayFile), nil
 }
 
 // LoadAllowOverlay reads overlay YAML. Missing file returns empty overlay, not an error.
 func LoadAllowOverlay(path string) (AllowOverlayFile, error) {
+	out, err := loadAllowOverlay(path)
+	if err != nil {
+		return AllowOverlayFile{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.LoadAllowOverlay", "allow overlay")
+	}
+	return out, nil
+}
+
+// loadAllowOverlay is LoadAllowOverlay before its error is typed at the package boundary.
+func loadAllowOverlay(path string) (AllowOverlayFile, error) {
 	if strings.TrimSpace(path) == "" {
 		return AllowOverlayFile{}, nil
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return AllowOverlayFile{}, nil
 		}
 		return AllowOverlayFile{}, derrors.Wrap(err, derrors.CodeInternal, "config.LoadAllowOverlay", "read")
 	}
 	var file AllowOverlayFile
 	if err := yaml.Unmarshal(raw, &file); err != nil {
-		return AllowOverlayFile{}, derrors.Wrap(err, derrors.CodeInternal, "config.LoadAllowOverlay", "parse")
+		return AllowOverlayFile{}, derrors.Wrap(err, derrors.CodeInvalid, "config.LoadAllowOverlay", "parse").With("path", path)
 	}
 	if file.Backends == nil {
 		file.Backends = make(map[string]AllowOverlayBackend)
@@ -71,23 +81,47 @@ func LoadAllowOverlay(path string) (AllowOverlayFile, error) {
 	return file, nil
 }
 
-// ApplyAllowOverlay unions overlay allow entries into rcfg for gated backends only.
-func ApplyAllowOverlay(rcfg *RouterConfig, path string) error {
+// SkippedOverlay is an overlay backend ApplyAllowOverlay left out, with the reason.
+type SkippedOverlay struct {
+	Backend string
+	Reason  string
+}
+
+// Reasons an overlay backend is skipped.
+const (
+	SkipUnknownBackend = "unknown backend"
+	SkipNoAllowGate    = "backend has no models.allow gate"
+)
+
+// ApplyAllowOverlay unions overlay allow entries into rcfg for gated backends only,
+// and returns the overlay backends it skipped so the caller can log them.
+func ApplyAllowOverlay(rcfg *RouterConfig, path string) ([]SkippedOverlay, error) {
+	skipped, err := applyAllowOverlay(rcfg, path)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.ApplyAllowOverlay", "apply allow overlay")
+	}
+	return skipped, nil
+}
+
+// applyAllowOverlay is ApplyAllowOverlay before its error is typed at the package boundary.
+func applyAllowOverlay(rcfg *RouterConfig, path string) ([]SkippedOverlay, error) {
 	if rcfg == nil {
-		return derrors.New(derrors.CodeInvalid, "config.ApplyAllowOverlay", "nil RouterConfig")
+		return nil, derrors.New(derrors.CodeInvalid, "config.ApplyAllowOverlay", "nil RouterConfig")
 	}
 	overlay, err := LoadAllowOverlay(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for backendID, ob := range overlay.Backends {
+	var skipped []SkippedOverlay
+	for _, backendID := range slices.Sorted(maps.Keys(overlay.Backends)) {
+		ob := overlay.Backends[backendID]
 		b, ok := rcfg.Backends[backendID]
 		if !ok {
-			slog.Warn("allow overlay: skip unknown backend", "backend", backendID)
+			skipped = append(skipped, SkippedOverlay{Backend: backendID, Reason: SkipUnknownBackend})
 			continue
 		}
 		if b.Models == nil || !b.Models.HasAllowGate() {
-			slog.Warn("allow overlay: skip backend without models.allow gate", "backend", backendID)
+			skipped = append(skipped, SkippedOverlay{Backend: backendID, Reason: SkipNoAllowGate})
 			continue
 		}
 		for _, entry := range ob.Allow {
@@ -102,11 +136,19 @@ func ApplyAllowOverlay(rcfg *RouterConfig, path string) error {
 		}
 		rcfg.Backends[backendID] = b
 	}
-	return nil
+	return skipped, nil
 }
 
 // OverlayAdd appends a downstream model id to the overlay file (overlay-only extras).
 func OverlayAdd(path, backendID, downstream string) error {
+	if err := overlayAdd(path, backendID, downstream); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "config.OverlayAdd", "overlay add")
+	}
+	return nil
+}
+
+// overlayAdd is OverlayAdd before its error is typed at the package boundary.
+func overlayAdd(path, backendID, downstream string) error {
 	backendID = strings.TrimSpace(backendID)
 	downstream = strings.TrimSpace(NormalizeDownstream(backendID, downstream))
 	if backendID == "" || downstream == "" {
@@ -138,6 +180,14 @@ func OverlayAdd(path, backendID, downstream string) error {
 
 // OverlayRemove drops one downstream model id from the overlay file (no-op if missing).
 func OverlayRemove(path, backendID, downstream string) error {
+	if err := overlayRemove(path, backendID, downstream); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "config.OverlayRemove", "overlay remove")
+	}
+	return nil
+}
+
+// overlayRemove is OverlayRemove before its error is typed at the package boundary.
+func overlayRemove(path, backendID, downstream string) error {
 	backendID = strings.TrimSpace(backendID)
 	downstream = strings.TrimSpace(NormalizeDownstream(backendID, downstream))
 	if backendID == "" || downstream == "" {
@@ -179,28 +229,4 @@ func OverlayRemove(path, backendID, downstream string) error {
 		}
 		return statefile.WriteAtomic(path, raw, 0o600)
 	})
-}
-
-// CloneBackendAllowMap returns a copy of YAML allow lists per backend (after load, before overlay).
-func CloneBackendAllowMap(rcfg RouterConfig) map[string][]string {
-	out := make(map[string][]string)
-	for id, b := range rcfg.Backends {
-		if b.Models == nil || !b.Models.HasAllowGate() {
-			continue
-		}
-		out[id] = append([]string(nil), b.Models.Allow...)
-	}
-	return out
-}
-
-// OverlayOnlyAllow returns allow entries present in current but not in yamlBaseline.
-func OverlayOnlyAllow(yamlBaseline map[string][]string, backendID string, current []string) []string {
-	base := yamlBaseline[backendID]
-	var extras []string
-	for _, c := range current {
-		if !ModelInAllowList(backendID, c, base) {
-			extras = append(extras, NormalizeDownstream(backendID, c))
-		}
-	}
-	return extras
 }

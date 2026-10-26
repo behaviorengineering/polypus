@@ -45,8 +45,8 @@ func TestWrapChainIsAndFields(t *testing.T) {
 	}
 }
 
-func TestNewDomainErrorAndSentinel(t *testing.T) {
-	err := NewDomainError(CodeNotFound, "backend missing", nil)
+func TestErrorMatchesItsCodeSentinel(t *testing.T) {
+	err := New(CodeNotFound, "", "backend missing")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatal("want Is ErrNotFound")
 	}
@@ -107,5 +107,20 @@ func TestFieldWalksWrapChain(t *testing.T) {
 	}
 	if Field(outer, "missing") != "" {
 		t.Fatal("missing field")
+	}
+}
+
+func TestPublicMessageHidesInternalCausesOnServerErrors(t *testing.T) {
+	dial := errors.New(`Post "http://10.0.0.5:8080/v1/chat": connection refused`)
+	server := Wrap(dial, CodeUnavailable, "gateway.proxyChat", "post")
+	if got := PublicMessage(server); got != "post" {
+		t.Fatalf("5xx must not expose the dial error or op names, got %q", got)
+	}
+	caller := Wrap(errors.New(`unknown TTS model "x"`), CodeInvalid, "gateway.serveSpeech", "resolve backend")
+	if got := PublicMessage(caller); got != `resolve backend: unknown TTS model "x"` {
+		t.Fatalf("4xx should explain the request problem, got %q", got)
+	}
+	if got := PublicMessage(errors.New("boom")); got != "Internal Server Error" {
+		t.Fatalf("a foreign 500 falls back to the status text, got %q", got)
 	}
 }

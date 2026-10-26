@@ -47,11 +47,16 @@ func TestAllowModelConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			_ = reg.AllowModel("cf", fmt.Sprintf("@cf/m%d", n))
+			if err := reg.AllowModel("cf", fmt.Sprintf("@cf/m%d", n)); err != nil {
+				t.Error(err)
+			}
 		}(i)
 	}
 	wg.Wait()
-	_ = reg.Config()
+	allow := reg.Config().Backends["cf"].Models.Allow
+	if len(allow) != 9 {
+		t.Fatalf("every concurrent AllowModel must land: got %d entries %v", len(allow), allow)
+	}
 }
 
 func gatedTestRouterConfig() config.RouterConfig {

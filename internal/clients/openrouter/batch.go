@@ -12,38 +12,40 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 const (
-	defaultAPIBase  = "https://openrouter.ai/api/v1"
-	batchHopTimeout = 60 * time.Second
-	batchMaxBody    = 64 << 20
+	defaultAPIBase = "https://openrouter.ai/api/v1"
+	batchMaxBody   = 64 << 20
 	// completionWindow is the only window OpenRouter accepts.
 	completionWindow = "24h"
 )
 
+// BatchStatus is a batch's state as OpenRouter reports it.
+type BatchStatus string
+
 // Batch status values OpenRouter reports.
 const (
-	StatusValidating = "validating"
-	StatusInProgress = "in_progress"
-	StatusFinalizing = "finalizing"
-	StatusCompleted  = "completed"
-	StatusFailed     = "failed"
-	StatusExpired    = "expired"
-	StatusCancelled  = "cancelled"
+	StatusValidating BatchStatus = "validating"
+	StatusInProgress BatchStatus = "in_progress"
+	StatusFinalizing BatchStatus = "finalizing"
+	StatusCompleted  BatchStatus = "completed"
+	StatusFailed     BatchStatus = "failed"
+	StatusExpired    BatchStatus = "expired"
+	StatusCancelled  BatchStatus = "cancelled"
 )
 
 // Batch is the OpenRouter batch object. Results are inline once the batch completes.
 type Batch struct {
 	ID            string        `json:"id"`
-	Status        string        `json:"status"`
+	Status        BatchStatus   `json:"status"`
 	RequestCounts RequestCounts `json:"request_counts"`
 	Results       []BatchResult `json:"results"`
 	Error         *BatchError   `json:"error"`
@@ -99,15 +101,8 @@ type Client struct {
 	apiBase    string
 	apiKey     string
 	httpClient *http.Client
-}
-
-// NewClient builds a batch client from an OpenRouter backend definition.
-func NewClient(b config.BackendDef) (*Client, error) {
-	token, err := b.Auth.ResolveBearerToken()
-	if err != nil {
-		return nil, err
-	}
-	return newClient(apiBase(b.BaseURL), token)
+	backendID  string             // scopes the outbound breaker to this backend.
+	policies   *outbound.Policies // nil: the process default.
 }
 
 func newClient(base, token string) (*Client, error) {
@@ -117,8 +112,9 @@ func newClient(base, token string) (*Client, error) {
 	return &Client{
 		apiBase: base,
 		apiKey:  token,
+		// No client Timeout: the caller's ctx deadline bounds each call (outbound fails
+		// closed without one).
 		httpClient: &http.Client{
-			Timeout:   batchHopTimeout,
 			Transport: observability.WrapTransport(http.DefaultTransport),
 		},
 	}, nil
@@ -133,17 +129,28 @@ func apiBase(base string) string {
 	return base
 }
 
-var clients catalog.Registry[Client]
+// Clients caches one batch client per backend, credential and URL. A gateway owns
+// one; its clients share the gateway's outbound policies.
+type Clients struct {
+	Policies *outbound.Policies
+	reg      catalog.Registry[Client]
+}
 
-// GetClient returns a process-scoped batch client for b.
-func GetClient(b config.BackendDef) (*Client, error) {
+// Get returns the cached client for b, building it on first use.
+func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {
 		return nil, err
 	}
 	base := apiBase(b.BaseURL)
-	return clients.Get(b.ID+"\x00"+token+"\x00"+base, func() (*Client, error) {
-		return newClient(base, token)
+	return cs.reg.Get(b.ID+"\x00"+token+"\x00"+base, func() (*Client, error) {
+		c, err := newClient(base, token)
+		if err != nil {
+			return nil, err
+		}
+		c.backendID = b.ID
+		c.policies = cs.Policies
+		return c, nil
 	})
 }
 
@@ -172,7 +179,10 @@ func (c *Client) SubmitBatch(ctx context.Context, model, endpoint string, lines 
 		return "", err
 	}
 	var created Batch
-	if err := json.Unmarshal(raw, &created); err != nil || strings.TrimSpace(created.ID) == "" {
+	if err := json.Unmarshal(raw, &created); err != nil {
+		return "", derrors.Wrap(err, derrors.CodeUnavailable, "openrouter.SubmitBatch", "decode create response")
+	}
+	if strings.TrimSpace(created.ID) == "" {
 		return "", derrors.New(derrors.CodeUnavailable, "openrouter.SubmitBatch", "batch id missing from response")
 	}
 	return created.ID, nil
@@ -221,7 +231,12 @@ func (c *Client) do(ctx context.Context, method, target string, payload []byte) 
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.httpClient.Do(req)
+	// A create is sent once (never submit a batch twice); a retrieve may retry.
+	send := c.policies.Do
+	if method != http.MethodGet {
+		send = c.policies.DoOnce
+	}
+	resp, err := send(ctx, outbound.Scoped(outbound.DepOpenRouter, c.backendID), c.httpClient, req)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "openrouter.do", strings.ToLower(method)).
 			With("target", target)
@@ -232,26 +247,10 @@ func (c *Client) do(ctx context.Context, method, target string, payload []byte) 
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "openrouter.do", "read body")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, derrors.New(statusCode(resp.StatusCode), "openrouter.do", errorMessage(raw, resp.StatusCode)).
+		return nil, derrors.New(catalog.StatusCode(resp.StatusCode), "openrouter.do", errorMessage(raw, resp.StatusCode)).
 			With("status", strconv.Itoa(resp.StatusCode))
 	}
 	return raw, nil
-}
-
-// statusCode maps an OpenRouter HTTP status to the closest domain code.
-func statusCode(status int) derrors.Code {
-	switch {
-	case status == http.StatusTooManyRequests:
-		return derrors.CodeRateLimited
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return derrors.CodeUnauthorized
-	case status == http.StatusNotFound || status == http.StatusGone:
-		return derrors.CodeNotFound
-	case status >= 400 && status < 500:
-		return derrors.CodeInvalid
-	default:
-		return derrors.CodeUnavailable
-	}
 }
 
 func errorMessage(raw []byte, status int) string {

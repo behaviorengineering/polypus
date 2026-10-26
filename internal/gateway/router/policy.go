@@ -17,8 +17,8 @@ var defaultAllowedHosts = map[string]struct{}{
 	"host.docker.internal": {},
 }
 
-// ValidateBackend validates a backend definition against router policy.
-func ValidateBackend(b config.BackendDef, policy config.RouterPolicy) error {
+// validateBackend validates a backend definition against router policy.
+func validateBackend(b config.BackendDef, policy config.RouterPolicy) error {
 	if b.IsGeminiExtension() {
 		return validateGeminiBackendURL(b.BaseURL)
 	}
@@ -68,11 +68,6 @@ func validateAnthropicBackendURL(raw string) error {
 		return fmt.Errorf("backend host %q is not allowed for anthropic extension", host)
 	}
 	return nil
-}
-
-// validateBackendURL rejects cloud or non-loopback hosts for local routing (case-mode default).
-func validateBackendURL(raw string) error {
-	return validateLocalBackendURL(raw, true)
 }
 
 func validateRemoteBackendURL(raw string) error {

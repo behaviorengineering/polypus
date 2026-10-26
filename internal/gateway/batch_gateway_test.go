@@ -89,7 +89,7 @@ backends:
         - "cf_local/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -107,7 +107,7 @@ backends:
 	}
 	defer client.Close()
 
-	h, err := NewHandler(config.ServeOptions{}, WithRouter(client))
+	h, err := NewHandler(config.ServeOptions{}, withRouter(client))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ backends:
 	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
 		t.Fatal(err)
 	}
-	if batchObj.Status != batch.BatchStatusInProgress {
+	if batchObj.Status != batch.StatusInProgress {
 		t.Fatalf("status: %s", batchObj.Status)
 	}
 
@@ -139,7 +139,7 @@ backends:
 	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
 		t.Fatal(err)
 	}
-	if batchObj.Status != batch.BatchStatusCompleted || batchObj.OutputFileID == "" {
+	if batchObj.Status != batch.StatusCompleted || batchObj.OutputFileID == "" {
 		t.Fatalf("final batch: %+v", batchObj)
 	}
 
@@ -203,7 +203,7 @@ func TestBatchCancelNotSupported(t *testing.T) {
 		t.Fatalf("cancel status: %d %s", rec.Code, rec.Body.String())
 	}
 	got, _ := h.batchStore.GetBatch(batchObj.ID)
-	if got.Status != batch.BatchStatusInProgress {
+	if got.Status != batch.StatusInProgress {
 		t.Fatalf("status unchanged: %s", got.Status)
 	}
 }
@@ -251,7 +251,7 @@ func TestBatchFailedLineErrorMessage(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
 		t.Fatal(err)
 	}
-	if batchObj.Status != batch.BatchStatusFailed {
+	if batchObj.Status != batch.StatusFailed {
 		t.Fatalf("status: %s", batchObj.Status)
 	}
 	if batchObj.ErrorFileID == "" {
@@ -364,7 +364,7 @@ func TestBatchRetrievePollUnavailableKeepsInProgress(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != batch.BatchStatusInProgress {
+	if got.Status != batch.StatusInProgress {
 		t.Fatalf("status: %s", got.Status)
 	}
 	if got.OutputFileID != "" || got.RequestCounts.Completed != 0 {
@@ -402,7 +402,7 @@ func TestBatchRetrieveEmptyPollJSONKeepsInProgress(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != batch.BatchStatusInProgress {
+	if got.Status != batch.StatusInProgress {
 		t.Fatalf("status: %s", got.Status)
 	}
 }
@@ -424,7 +424,7 @@ func createTestBatch(t *testing.T, h http.Handler) batch.PublicBatch {
 	return batchObj
 }
 
-func newBatchGatewayHandler(t *testing.T, cfHandler http.HandlerFunc) *Gateway {
+func newBatchGatewayHandler(t *testing.T, cfHandler http.HandlerFunc) *gatewayHandler {
 	if cfHandler == nil {
 		cfHandler = func(w http.ResponseWriter, r *http.Request) {
 			raw, _ := io.ReadAll(r.Body)
@@ -493,7 +493,7 @@ backends:
         - "cf_local/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -509,7 +509,7 @@ backends:
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
-	handler, err := NewHandler(config.ServeOptions{}, WithRouter(client))
+	handler, err := NewHandler(config.ServeOptions{}, withRouter(client))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -45,19 +45,25 @@ func mockCloudflareHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Workers AI envelope keys.
+const (
+	keySuccess = "success"
+	keyResult  = "result"
+)
+
 func handleBatchRun(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	body := string(raw)
 	w.Header().Set("Content-Type", "application/json")
 	if strings.Contains(body, "request_id") {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"result": map[string]interface{}{
+			keySuccess: true,
+			keyResult: map[string]interface{}{
 				"responses": []map[string]interface{}{
 					{
 						"external_reference": smokeBatchCustomID,
-						"success":            true,
-						"result":             map[string]string{"response": "ok"},
+						keySuccess:           true,
+						keyResult:            map[string]string{"response": "ok"},
 					},
 				},
 			},
@@ -65,8 +71,8 @@ func handleBatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"result": map[string]interface{}{
+		keySuccess: true,
+		keyResult: map[string]interface{}{
 			"status":     "queued",
 			"request_id": "cf-smoke-1",
 		},
@@ -76,8 +82,8 @@ func handleBatchRun(w http.ResponseWriter, r *http.Request) {
 func handleSystemOneRun(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"result": map[string]interface{}{
+		keySuccess: true,
+		keyResult: map[string]interface{}{
 			"model": "jev-test",
 			"answers": map[string]interface{}{
 				"is_urgent": map[string]interface{}{"type": "noul", "noul": 0.9},

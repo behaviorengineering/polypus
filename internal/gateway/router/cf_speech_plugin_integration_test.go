@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -84,7 +85,7 @@ func TestClientSynthesizeCFViaBifrostPlugin(t *testing.T) {
 	}
 	t.Cleanup(client.Close)
 
-	audio, err := client.Synthesize(context.Background(), SpeechRequest{
+	audio, err := client.Synthesize(speechTestCtx(t), SpeechRequest{
 		Model:          "cf_local/@cf/deepgram/aura-2-en",
 		Input:          "hi",
 		Voice:          "luna",
@@ -154,7 +155,7 @@ func TestClientTranscribeCFViaBifrostPlugin(t *testing.T) {
 	}
 	t.Cleanup(client.Close)
 
-	body, ct, err := client.Transcribe(context.Background(), TranscriptionRequest{
+	body, ct, err := client.Transcribe(speechTestCtx(t), TranscriptionRequest{
 		Model:          "cf_local/@cf/deepgram/nova-3",
 		Audio:          []byte("fake-audio"),
 		Filename:       "a.mp3",
@@ -217,7 +218,7 @@ func TestNewClientOmitsCFSpeechPluginWithoutCloudflare(t *testing.T) {
 		t.Fatal("leaf-only must not register CF speech plugin")
 	}
 
-	audio, err := client.Synthesize(context.Background(), SpeechRequest{
+	audio, err := client.Synthesize(speechTestCtx(t), SpeechRequest{
 		Model:          "leaf/tts-1",
 		Input:          "hi",
 		ResponseFormat: "mp3",
@@ -231,4 +232,12 @@ func TestNewClientOmitsCFSpeechPluginWithoutCloudflare(t *testing.T) {
 	if cfGetCalls != 0 {
 		t.Fatalf("cfGetCalls=%d", cfGetCalls)
 	}
+}
+
+// speechTestCtx is the caller deadline the gateway handler would set.
+func speechTestCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	return ctx
 }

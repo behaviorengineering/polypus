@@ -1,11 +1,53 @@
 package switchyard
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/pelletier/go-toml/v2"
 )
+
+// decode parses rendered routes.toml into plain maps, so the tests check the key
+// names Switchyard reads, not the renderer's own structs.
+func decode(t *testing.T, out []byte) map[string]any {
+	t.Helper()
+	var doc map[string]any
+	if err := toml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("rendered TOML does not parse: %v\n%s", err, out)
+	}
+	return doc
+}
+
+// at returns the value at a dotted path, failing the test when it is missing.
+func at(t *testing.T, doc map[string]any, path string) any {
+	t.Helper()
+	var cur any = doc
+	for _, key := range strings.Split(path, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			t.Fatalf("%s: %q is not under a table", path, key)
+		}
+		if cur, ok = m[key]; !ok {
+			t.Fatalf("%s: missing %q", path, key)
+		}
+	}
+	return cur
+}
+
+func wantAt(t *testing.T, doc map[string]any, path string, want any) {
+	t.Helper()
+	if got := at(t, doc, path); !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s = %#v, want %#v", path, got, want)
+	}
+}
+
+func hasKey(doc map[string]any, table, key string) bool {
+	m, _ := doc[table].(map[string]any)
+	_, ok := m[key]
+	return ok
+}
 
 func TestRenderGoldenStageRouter(t *testing.T) {
 	window := 3
@@ -37,24 +79,20 @@ func TestRenderGoldenStageRouter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(out)
-	if !strings.Contains(body, `schema_version = 1`) {
-		t.Fatalf("missing schema: %s", body)
-	}
-	if !strings.Contains(body, `base_url = "http://127.0.0.1:1320/v1"`) {
-		t.Fatalf("missing polypus client: %s", body)
-	}
-	if !strings.Contains(body, `[routes.investigator]`) {
-		t.Fatalf("missing route: %s", body)
-	}
-	if !strings.Contains(body, `id = "router/investigator"`) {
-		t.Fatalf("missing public id: %s", body)
-	}
-	if !strings.Contains(body, `[targets.investigator_capable]`) || !strings.Contains(body, `[targets.investigator_efficient]`) {
-		t.Fatalf("missing targets: %s", body)
-	}
-	if strings.Contains(body, "scribe") {
-		t.Fatalf("passthrough must be omitted: %s", body)
+	doc := decode(t, out)
+	wantAt(t, doc, "schema_version", int64(1))
+	wantAt(t, doc, "llm_clients.polypus.base_url", "http://127.0.0.1:1320/v1")
+	wantAt(t, doc, "routes.investigator.id", "router/investigator")
+	wantAt(t, doc, "routes.investigator.type", "stage_router")
+	wantAt(t, doc, "routes.investigator.capable_target", "investigator_capable")
+	wantAt(t, doc, "routes.investigator.efficient_target", "investigator_efficient")
+	wantAt(t, doc, "routes.investigator.picker", string(config.PickerEfficientFirst))
+	wantAt(t, doc, "routes.investigator.confidence_threshold", 0.5)
+	wantAt(t, doc, "routes.investigator.recent_turn_window", int64(3))
+	wantAt(t, doc, "targets.investigator_capable.id", "cf_local/@cf/zai-org/glm-4.7-flash")
+	wantAt(t, doc, "targets.investigator_efficient.llm_client", "polypus")
+	if hasKey(doc, "routes", "scribe") {
+		t.Fatal("passthrough must be omitted")
 	}
 }
 
@@ -63,12 +101,10 @@ func TestRenderEmptyRouters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(out)
-	if !strings.Contains(body, `[llm_clients.polypus]`) {
-		t.Fatalf("expected polypus client: %s", body)
-	}
-	if strings.Contains(body, `[routes.`) {
-		t.Fatalf("unexpected routes: %s", body)
+	doc := decode(t, out)
+	wantAt(t, doc, "llm_clients.polypus.format", "openai_chat")
+	if _, ok := doc["routes"]; ok {
+		t.Fatalf("unexpected routes:\n%s", out)
 	}
 }
 
@@ -109,69 +145,44 @@ func TestRenderLLMClassifierCustom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(out)
-	if !strings.Contains(body, `[targets.smart_classifier]`) {
-		t.Fatalf("missing classifier target: %s", body)
-	}
-	if !strings.Contains(body, `id = "cf_local/@cf/zai-org/glm-4.7-flash"`) {
-		t.Fatalf("missing classifier leaf: %s", body)
-	}
-	if !strings.Contains(body, `[targets.fast]`) || !strings.Contains(body, `[targets.premium]`) {
-		t.Fatalf("missing leaf targets: %s", body)
-	}
-	if !strings.Contains(body, `[routes.smart]`) {
-		t.Fatalf("missing route: %s", body)
-	}
-	if !strings.Contains(body, `id = "router/smart"`) {
-		t.Fatalf("missing public id: %s", body)
-	}
-	if !strings.Contains(body, `type = "llm_classifier"`) || !strings.Contains(body, `mode = "custom"`) {
-		t.Fatalf("missing classifier type/mode: %s", body)
-	}
-	if !strings.Contains(body, `classifier_target = "smart_classifier"`) {
-		t.Fatalf("missing classifier_target: %s", body)
-	}
-	if !strings.Contains(body, `targets = ["fast", "premium"]`) {
-		t.Fatalf("missing targets list: %s", body)
-	}
-	if !strings.Contains(body, `default_target = "premium"`) {
-		t.Fatalf("missing default_target: %s", body)
-	}
-	if !strings.Contains(body, `[routes.smart.policy]`) {
-		t.Fatalf("missing policy: %s", body)
-	}
-	if !strings.Contains(body, `type = "target_selector"`) || !strings.Contains(body, `selector = "/decision/target"`) {
-		t.Fatalf("missing policy fields: %s", body)
-	}
-	if !strings.Contains(body, `session_affinity = true`) {
-		t.Fatalf("missing session_affinity: %s", body)
-	}
-	if !strings.Contains(body, "Choose the best configured target") {
-		t.Fatalf("missing prompt: %s", body)
-	}
-	if strings.Contains(body, "scribe") {
-		t.Fatalf("passthrough must be omitted: %s", body)
+	doc := decode(t, out)
+	wantAt(t, doc, "targets.smart_classifier.id", "cf_local/@cf/zai-org/glm-4.7-flash")
+	wantAt(t, doc, "targets.fast.id", "lm_studio/ornith-1.0-9b")
+	wantAt(t, doc, "targets.premium.llm_client", "polypus")
+	wantAt(t, doc, "routes.smart.id", "router/smart")
+	wantAt(t, doc, "routes.smart.type", "llm_classifier")
+	wantAt(t, doc, "routes.smart.mode", "custom")
+	wantAt(t, doc, "routes.smart.classifier_target", "smart_classifier")
+	wantAt(t, doc, "routes.smart.targets", []any{"fast", "premium"})
+	wantAt(t, doc, "routes.smart.default_target", "premium")
+	wantAt(t, doc, "routes.smart.policy.type", "target_selector")
+	wantAt(t, doc, "routes.smart.policy.selector", "/decision/target")
+	wantAt(t, doc, "routes.smart.session_affinity", true)
+	wantAt(t, doc, "routes.smart.prompt", "Choose the best configured target for this request.")
+	if hasKey(doc, "routes", "scribe") {
+		t.Fatal("passthrough must be omitted")
 	}
 }
 
-func TestTomlMultilineLiteralAndFallback(t *testing.T) {
-	lit := tomlMultiline("hello\nworld")
-	if !strings.HasPrefix(lit, "'''\n") || !strings.HasSuffix(lit, "\n'''") {
-		t.Fatalf("expected literal block: %q", lit)
+// TestRenderQuotesAwkwardStrings covers what hand quoting got wrong: quotes, triple
+// quotes, backslashes, control characters, astral runes and a trailing quote must
+// all survive the round trip.
+func TestRenderQuotesAwkwardStrings(t *testing.T) {
+	prompt := "line one\nsay \"hi\" and ''' then \\ and \a bell and \U0001F600 and a trailing quote'"
+	cfg := config.RouterConfig{Routers: map[string]config.NamedRouter{
+		"odd": {Name: "odd", Capability: config.CapChat, Route: config.RouterRoute{
+			Type: config.RouteLLMClassifier, Mode: config.ClassifierModeCustom,
+			Classifier: "a/b", DefaultTarget: "x", Prompt: prompt, ResponseSchema: `{"k":"v"}`,
+			PolicyType: config.PolicyTargetSelector, PolicySelector: "/t",
+			Targets: []config.ClassifierTarget{{Name: "x", Model: `a/"quoted"`}},
+		}},
+	}}
+	out, err := Render(cfg, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	withTriple := tomlMultiline("has ''' inside")
-	if strings.HasPrefix(withTriple, "'''") {
-		t.Fatalf("expected basic string fallback: %q", withTriple)
-	}
-	if !strings.Contains(withTriple, "'") {
-		t.Fatalf("missing quote content: %q", withTriple)
-	}
-	trailing := tomlMultiline("ends with quote'")
-	if strings.HasPrefix(trailing, "'''") {
-		t.Fatalf("trailing quote must use basic string: %q", trailing)
-	}
-	quoted := tomlMultiline(`say "hi"`)
-	if !strings.HasPrefix(quoted, "'''") && !strings.Contains(quoted, `\"`) {
-		t.Fatalf("expected literal or escaped quotes: %q", quoted)
-	}
+	doc := decode(t, out)
+	wantAt(t, doc, "routes.odd.prompt", prompt)
+	wantAt(t, doc, "routes.odd.response_schema", `{"k":"v"}`)
+	wantAt(t, doc, "targets.x.id", `a/"quoted"`)
 }

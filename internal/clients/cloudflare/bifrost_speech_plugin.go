@@ -24,18 +24,19 @@ type ClientGet func(config.BackendDef) (*Client, error)
 type runSpeechPlugin struct {
 	lookup BackendLookup
 	get    ClientGet
+	log    *slog.Logger
 }
 
-// NewRunSpeechPlugin returns a Bifrost LLMPlugin for CF /run speech.
-// lookup must be non-nil. get defaults to GetClient when nil.
-func NewRunSpeechPlugin(lookup BackendLookup, get ClientGet) schemas.LLMPlugin {
-	if lookup == nil {
-		panic("cloudflare: NewRunSpeechPlugin(nil BackendLookup)")
+// NewRunSpeechPlugin returns a Bifrost LLMPlugin for CF /run speech. lookup and log
+// must be non-nil; get defaults to a fresh Clients cache when nil.
+func NewRunSpeechPlugin(lookup BackendLookup, get ClientGet, log *slog.Logger) schemas.LLMPlugin {
+	if lookup == nil || log == nil {
+		panic("cloudflare: NewRunSpeechPlugin(nil BackendLookup or logger)")
 	}
 	if get == nil {
-		get = GetClient
+		get = (&Clients{Logger: log}).Get
 	}
-	return &runSpeechPlugin{lookup: lookup, get: get}
+	return &runSpeechPlugin{lookup: lookup, get: get, log: log}
 }
 
 func (p *runSpeechPlugin) GetName() string { return runSpeechPluginName }
@@ -62,6 +63,7 @@ func (p *runSpeechPlugin) PreLLMHook(
 		return req, nil, nil
 	}
 
+	//exhaustive:ignore // the plugin acts on speech and transcription only; every other request type passes through
 	switch req.RequestType {
 	case schemas.SpeechStreamRequest, schemas.TranscriptionStreamRequest:
 		provider, model, _ := req.GetRequestFields()
@@ -69,13 +71,13 @@ func (p *runSpeechPlugin) PreLLMHook(
 			err := derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "speech streaming not supported").
 				With("backend", b.ID).
 				With("model", model)
-			return req, shortCircuitFail(ctx, b, model, string(req.RequestType), err, true), nil
+			return req, p.shortCircuitFail(ctx, b, model, string(req.RequestType), err, true), nil
 		}
 		return req, nil, nil
 	case schemas.SpeechRequest:
 		if req.SpeechRequest == nil {
 			err := derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "nil speech request payload")
-			return req, shortCircuitFail(ctx, config.BackendDef{ID: "unknown"}, "", "speech", err, true), nil
+			return req, p.shortCircuitFail(ctx, config.BackendDef{ID: "unknown"}, "", "speech", err, true), nil
 		}
 		b, ok := p.cfBackend(req.SpeechRequest.Provider)
 		if !ok {
@@ -85,7 +87,7 @@ func (p *runSpeechPlugin) PreLLMHook(
 	case schemas.TranscriptionRequest:
 		if req.TranscriptionRequest == nil {
 			err := derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "nil transcription request payload")
-			return req, shortCircuitFail(ctx, config.BackendDef{ID: "unknown"}, "", "transcription", err, true), nil
+			return req, p.shortCircuitFail(ctx, config.BackendDef{ID: "unknown"}, "", "transcription", err, true), nil
 		}
 		b, ok := p.cfBackend(req.TranscriptionRequest.Provider)
 		if !ok {
@@ -105,33 +107,44 @@ func (p *runSpeechPlugin) cfBackend(provider schemas.ModelProvider) (config.Back
 	return b, true
 }
 
-func (p *runSpeechPlugin) shortCircuitSpeech(
-	ctx *schemas.BifrostContext,
-	b config.BackendDef,
-	sr *schemas.BifrostSpeechRequest,
-) *schemas.LLMPluginShortCircuit {
-	model := ""
-	if sr != nil {
-		model = sr.Model
-	}
+// resolveClient checks the call has a deadline and gets the backend's client, or
+// returns the short circuit that reports why it cannot run.
+func (p *runSpeechPlugin) resolveClient(ctx *schemas.BifrostContext, b config.BackendDef, model, kind string) (*Client, *schemas.LLMPluginShortCircuit) {
 	if _, ok := ctx.Deadline(); !ok {
 		err := derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
 			With("backend", b.ID).
 			With("model", model)
-		return shortCircuitFail(ctx, b, model, "speech", err, true)
+		return nil, p.shortCircuitFail(ctx, b, model, kind, err, true)
 	}
 	cf, err := p.get(b)
 	if err != nil {
 		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "client").
 			With("backend", b.ID).
 			With("model", model)
-		return shortCircuitFail(ctx, b, model, "speech", wrapped, false)
+		return nil, p.shortCircuitFail(ctx, b, model, kind, wrapped, false)
 	}
 	if cf == nil {
 		err := derrors.New(derrors.CodeInternal, "cloudflare.runSpeech", "client nil").
 			With("backend", b.ID).
 			With("model", model)
-		return shortCircuitFail(ctx, b, model, "speech", err, true)
+		return nil, p.shortCircuitFail(ctx, b, model, kind, err, true)
+	}
+	return cf, nil
+}
+
+func (p *runSpeechPlugin) shortCircuitSpeech(
+	ctx *schemas.BifrostContext,
+	b config.BackendDef,
+	sr *schemas.BifrostSpeechRequest,
+) *schemas.LLMPluginShortCircuit {
+	if sr == nil {
+		err := derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "speech request required").With("backend", b.ID)
+		return p.shortCircuitFail(ctx, b, "", "speech", err, true)
+	}
+	model := sr.Model
+	cf, fail := p.resolveClient(ctx, b, model, "speech")
+	if fail != nil {
+		return fail
 	}
 	input := ""
 	if sr.Input != nil {
@@ -152,16 +165,16 @@ func (p *runSpeechPlugin) shortCircuitSpeech(
 		ResponseFormat: format,
 	})
 	if err != nil {
-		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "synthesize").
+		wrapped := derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "cloudflare.runSpeech", "synthesize").
 			With("backend", b.ID).
 			With("model", model)
-		return shortCircuitFail(ctx, b, model, "speech", wrapped, false)
+		return p.shortCircuitFail(ctx, b, model, "speech", wrapped, false)
 	}
 	if len(audio) == 0 {
 		err := derrors.New(derrors.CodeUnavailable, "cloudflare.runSpeech", "empty speech audio").
 			With("backend", b.ID).
 			With("model", model)
-		return shortCircuitFail(ctx, b, model, "speech", err, false)
+		return p.shortCircuitFail(ctx, b, model, "speech", err, false)
 	}
 	return &schemas.LLMPluginShortCircuit{
 		Response: &schemas.BifrostResponse{
@@ -175,28 +188,14 @@ func (p *runSpeechPlugin) shortCircuitTranscription(
 	b config.BackendDef,
 	tr *schemas.BifrostTranscriptionRequest,
 ) *schemas.LLMPluginShortCircuit {
-	model := ""
-	if tr != nil {
-		model = tr.Model
+	if tr == nil {
+		err := derrors.New(derrors.CodeInvalid, "cloudflare.runSpeech", "transcription request required").With("backend", b.ID)
+		return p.shortCircuitFail(ctx, b, "", "transcription", err, true)
 	}
-	if _, ok := ctx.Deadline(); !ok {
-		err := derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
-			With("backend", b.ID).
-			With("model", model)
-		return shortCircuitFail(ctx, b, model, "transcription", err, true)
-	}
-	cf, err := p.get(b)
-	if err != nil {
-		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "client").
-			With("backend", b.ID).
-			With("model", model)
-		return shortCircuitFail(ctx, b, model, "transcription", wrapped, false)
-	}
-	if cf == nil {
-		err := derrors.New(derrors.CodeInternal, "cloudflare.runSpeech", "client nil").
-			With("backend", b.ID).
-			With("model", model)
-		return shortCircuitFail(ctx, b, model, "transcription", err, true)
+	model := tr.Model
+	cf, fail := p.resolveClient(ctx, b, model, "transcription")
+	if fail != nil {
+		return fail
 	}
 	var file []byte
 	filename := ""
@@ -215,16 +214,16 @@ func (p *runSpeechPlugin) shortCircuitTranscription(
 		Language: lang,
 	})
 	if err != nil {
-		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "transcribe").
+		wrapped := derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "cloudflare.runSpeech", "transcribe").
 			With("backend", b.ID).
 			With("model", model)
-		return shortCircuitFail(ctx, b, model, "transcription", wrapped, false)
+		return p.shortCircuitFail(ctx, b, model, "transcription", wrapped, false)
 	}
 	if strings.TrimSpace(text) == "" {
 		err := derrors.New(derrors.CodeUnavailable, "cloudflare.runSpeech", "empty transcript").
 			With("backend", b.ID).
 			With("model", model)
-		return shortCircuitFail(ctx, b, model, "transcription", err, false)
+		return p.shortCircuitFail(ctx, b, model, "transcription", err, false)
 	}
 	resp := &schemas.BifrostTranscriptionResponse{Text: text}
 	if tr.Params != nil && tr.Params.ResponseFormat != nil {
@@ -237,7 +236,7 @@ func (p *runSpeechPlugin) shortCircuitTranscription(
 	}
 }
 
-func shortCircuitFail(
+func (p *runSpeechPlugin) shortCircuitFail(
 	ctx context.Context,
 	b config.BackendDef,
 	model, requestType string,
@@ -253,7 +252,7 @@ func shortCircuitFail(
 	if tid := traceIDFromCtx(ctx); tid != "" {
 		attrs = append([]any{"trace_id", tid}, attrs...)
 	}
-	slog.Error("polypus: cf speech short-circuit failed", attrs...)
+	p.log.Error("polypus: cf speech short-circuit failed", attrs...)
 	return &schemas.LLMPluginShortCircuit{Error: bifrostSpeechErr(err, isBifrost)}
 }
 
