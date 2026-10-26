@@ -185,8 +185,8 @@ func TestClaudeBatchRejectsEmbeddings(t *testing.T) {
 	}
 }
 
-func TestBuildClaudeBatchOutputCounts(t *testing.T) {
-	ok, errs, completed, failed := buildClaudeBatchOutput([]router.BatchLineResult{
+func TestBuildBatchLineOutputCounts(t *testing.T) {
+	ok, errs, completed, failed := buildBatchLineOutput([]router.BatchLineResult{
 		{CustomID: "a", Body: json.RawMessage(`{"x":1}`)},
 		{CustomID: "b", ErrCode: "expired", ErrMessage: "expired"},
 		{CustomID: "c", Body: json.RawMessage(`{"x":2}`)},

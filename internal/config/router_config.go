@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -57,6 +58,20 @@ func (b BackendDef) IsGeminiExtension() bool {
 // IsAnthropicExtension reports whether the backend uses the native Anthropic Messages API extension.
 func (b BackendDef) IsAnthropicExtension() bool {
 	return b.HasExtension(ExtensionAnthropic)
+}
+
+// IsOpenRouter reports whether the backend is OpenRouter: the backend id openrouter (which
+// Bifrost serves with its native OpenRouter provider) or a base_url on openrouter.ai.
+func (b BackendDef) IsOpenRouter() bool {
+	if strings.EqualFold(strings.TrimSpace(b.ID), "openrouter") {
+		return true
+	}
+	u, err := url.Parse(strings.TrimSpace(b.BaseURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai")
 }
 
 // AutoPromptCache reports whether Polypus adds a top-level cache_control to chat requests

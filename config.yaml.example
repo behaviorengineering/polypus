@@ -104,6 +104,8 @@ backends:
 #       - claude-haiku-5-5
 
 # Optional OpenRouter (OpenAI-compat remote; optional extra_headers for attribution):
+# Add batch to capabilities for /v1/batches on OpenRouter's Batch API (chat and embeddings,
+# text and public https image URLs only, no cancel).
 # openrouter:
 #   remote: true
 #   base_url: https://openrouter.ai/api/v1
