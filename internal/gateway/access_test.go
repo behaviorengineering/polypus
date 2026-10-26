@@ -52,7 +52,7 @@ func newKeyedTestGateway(t *testing.T) (http.Handler, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir)), key
+	return newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir)), gen.Key
 }
 
 func TestAccessKeysPresentRequiresCredential(t *testing.T) {
