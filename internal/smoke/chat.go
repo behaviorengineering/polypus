@@ -106,7 +106,7 @@ func pingHealth(ctx context.Context, baseURL string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("health status %d", resp.StatusCode)
+		return &statusError{what: "health", status: resp.StatusCode}
 	}
 	return nil
 }
@@ -157,7 +157,7 @@ func chatPing(ctx context.Context, opts Options, model string) (content, reasoni
 		return "", "", "", fmt.Errorf("chat: read body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", "", fmt.Errorf("chat status %d: %s", resp.StatusCode, string(raw))
+		return "", "", "", &statusError{what: "chat", status: resp.StatusCode, body: string(raw)}
 	}
 	selectedModel = extractSmokeSelectedModel(resp.Header, raw)
 	var parsed struct {

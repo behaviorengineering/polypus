@@ -90,7 +90,7 @@ func runAdminKeyDelete(o adminKeyOpts) int {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 2
 	}
-	if !o.yes && !confirmTTY("delete admin API key", o.name) {
+	if !o.yes && !confirmed("delete", "delete admin API key", o.name) {
 		return 1
 	}
 	if o.dryRun {
@@ -177,7 +177,7 @@ func runAdminKeyMutate(verb string, o adminKeyOpts, fn adminKeyMutateFn) int {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 2
 	}
-	if !o.yes && !confirmTTY(verb+" admin API key", name) {
+	if !o.yes && !confirmed(verb, verb+" admin API key", name) {
 		return 1
 	}
 	if o.dryRun {
@@ -228,16 +228,29 @@ func stdinTTY() bool {
 	return (f.Mode() & os.ModeCharDevice) != 0
 }
 
-func confirmTTY(action, name string) bool {
+// confirmed asks the operator to confirm action on name, and says why when the
+// answer is not yes: a read failure, a decline, or no terminal to ask on.
+func confirmed(verb, action, name string) bool {
+	ok, err := confirmTTY(action, name)
+	switch {
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "polypus admin-key %s: read confirmation: %v\n", verb, err)
+	case !ok:
+		fmt.Fprintf(os.Stderr, "polypus admin-key %s: not confirmed (pass --yes to skip the prompt)\n", verb)
+	}
+	return err == nil && ok
+}
+
+func confirmTTY(action, name string) (bool, error) {
 	if !stdinTTY() {
-		return false
+		return false, nil
 	}
 	line, err := promptLine(fmt.Sprintf("Confirm %s \"%s\"? [y/N]: ", action, name))
 	if err != nil {
-		return false
+		return false, err
 	}
 	line = strings.ToLower(strings.TrimSpace(line))
-	return line == "y" || line == "yes"
+	return line == "y" || line == "yes", nil
 }
 
 func promptLine(label string) (string, error) {

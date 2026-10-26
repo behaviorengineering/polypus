@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"regexp"
 	"strings"
@@ -216,7 +218,7 @@ func (s *Store) readFresh() (filePayload, error) {
 func (s *Store) read() (filePayload, error) {
 	raw, err := os.ReadFile(s.path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return filePayload{Version: 1, Keys: nil}, nil
 		}
 		return filePayload{}, derrors.Wrap(err, derrors.CodeInternal, "keys.read", "read")

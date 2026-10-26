@@ -32,10 +32,8 @@ func newSmokeRoot() *cobra.Command {
 		Version:       buildinfo.Version,
 		// Bare invoke prints the guide; probes cost money, so they only run from
 		// the explicit run command.
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				return &exitError{code: 2, msg: fmt.Sprintf("polypus-smoke: unknown command %q (see polypus-smoke help)", args[0])}
-			}
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			_, err := fmt.Fprint(cmd.OutOrStdout(), smokeOperatingGuide(cmd))
 			return err
 		},
@@ -92,7 +90,10 @@ func newSmokeRunCmd() *cobra.Command {
 			defer cancel()
 			// Trace the probes so a failure shows the client side, not only the
 			// gateway's server spans. Export failures never fail the smoke.
-			otelCfg := observability.LoadConfig()
+			otelCfg, err := observability.LoadConfig()
+			if err != nil {
+				return &exitError{code: 2, msg: "polypus-smoke: tracing config: " + err.Error(), err: err}
+			}
 			otelCfg.Logger = slog.Default()
 			shutdown, err := observability.Init(otelCfg)
 			if err != nil {

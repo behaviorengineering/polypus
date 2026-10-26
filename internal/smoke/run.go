@@ -74,6 +74,8 @@ type Result struct {
 	Status        Status `json:"status"`
 	Ms            int64  `json:"ms"`
 	Detail        string `json:"detail"`
+	// cause is the failed probe's error, for classifying it (Detail is its text).
+	cause error
 }
 
 // AllChannels is the default CI / smoke-all set.
@@ -203,6 +205,7 @@ func timed(channel, probe, model string, fn func() (string, error)) Result {
 	if err != nil {
 		row.Status = StatusFail
 		row.Detail = err.Error()
+		row.cause = err
 		return row
 	}
 	row.Detail = detail

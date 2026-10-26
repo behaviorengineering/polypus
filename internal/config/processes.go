@@ -2,7 +2,9 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -56,7 +58,7 @@ func loadProcessFlags() (ProcessFlags, error) {
 	}
 	raw, err := os.ReadFile(path) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return ProcessFlags{}, nil
 		}
 		return ProcessFlags{}, fmt.Errorf("process flags %s: %w", path, err)
@@ -70,6 +72,20 @@ func loadProcessFlags() (ProcessFlags, error) {
 		return ProcessFlags{}, fmt.Errorf("process flags %s: %w", path, err)
 	}
 	return ProcessFlags{MLX: file.Processes.MLX}, nil
+}
+
+// ParseEnvBool reads a boolean env var: fallback when unset, an error when set to a
+// word ParseBoolishEnv does not know.
+func ParseEnvBool(key string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	if v, ok := ParseBoolishEnv(raw); ok {
+		return v, nil
+	}
+	return fallback, derrors.New(derrors.CodeInvalid, "config.ParseEnvBool", "not a boolean (use 1/0, true/false, yes/no or on/off)").
+		With("env", key).With("value", raw)
 }
 
 // EnvBool reads a boolean env var with ParseBoolishEnv, returning fallback when it is

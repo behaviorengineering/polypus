@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -52,8 +53,24 @@ func TestWriteUnavailableErrorHalfOpen(t *testing.T) {
 	}
 }
 
+// refusedDial returns the error of a dial to a port nothing listens on.
+func refusedDial(t *testing.T) error {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close() // a closed port refuses the next dial.
+	_, dialErr := net.Dial("tcp", addr)
+	if dialErr == nil {
+		t.Fatal("expected the dial to be refused")
+	}
+	return dialErr
+}
+
 func TestWriteUpstreamDialErrorSwitchyardUnreachableNoRetryAfter(t *testing.T) {
-	err := errors.New("dial tcp 127.0.0.1:4000: connect: connection refused")
+	err := refusedDial(t)
 	rec := httptest.NewRecorder()
 	testShared.writeUpstreamDialError(rec, err, "polypus: switchyard unavailable: ", upstream.NameSwitchyard, isSwitchyardUnreachable)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -125,5 +142,15 @@ func TestWriteHandlerErrorBreakerResolvesUpstream(t *testing.T) {
 	}
 	if body.Polypus == nil || body.Polypus.Failure.Upstream != "cf_local" {
 		t.Fatalf("polypus=%+v", body.Polypus)
+	}
+}
+
+func TestSwitchyardUnreachableMatchesRealDialFailures(t *testing.T) {
+	dialErr := refusedDial(t)
+	if !isSwitchyardUnreachable(fmt.Errorf("wrapped: %w", dialErr)) {
+		t.Fatalf("a refused dial is unreachable: %v", dialErr)
+	}
+	if isSwitchyardUnreachable(errors.New("connection refused, said a body")) {
+		t.Fatal("text alone is not a dial failure")
 	}
 }

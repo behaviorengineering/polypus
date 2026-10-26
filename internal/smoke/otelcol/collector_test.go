@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -153,5 +155,19 @@ func TestJoinProbeErrorsNamesOnlyTheFailedProbes(t *testing.T) {
 	}
 	if err := joinProbeErrors(results[:1]); err != nil {
 		t.Fatalf("all probes passed: %v", err)
+	}
+}
+
+func TestDockerExecRetryableReadsTheExitStatus(t *testing.T) {
+	daemonFailed := exec.Command("sh", "-c", "exit 125").Run()
+	queryFailed := exec.Command("sh", "-c", "exit 1").Run()
+	if !dockerExecRetryable(fmt.Errorf("wrapped: %w", daemonFailed)) {
+		t.Fatal("exit 125 means docker itself failed: retry")
+	}
+	if dockerExecRetryable(queryFailed) {
+		t.Fatal("a failed query is not retried")
+	}
+	if dockerExecRetryable(errors.New("connection timeout, says some text")) {
+		t.Fatal("text alone is not a docker failure")
 	}
 }

@@ -132,7 +132,7 @@ func uploadBatchJSONL(ctx context.Context, baseURL, content string) (string, err
 		return "", fmt.Errorf("files upload: read body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("files upload status %d: %s", resp.StatusCode, string(raw))
+		return "", &statusError{what: "files upload", status: resp.StatusCode, body: string(raw)}
 	}
 	var parsed struct {
 		ID string `json:"id"`
@@ -169,7 +169,7 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 		return "", fmt.Errorf("batches create: read body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("batches create status %d: %s", resp.StatusCode, string(raw))
+		return "", &statusError{what: "batches create", status: resp.StatusCode, body: string(raw)}
 	}
 	var parsed struct {
 		ID     string            `json:"id"`
@@ -242,7 +242,7 @@ func getBatch(ctx context.Context, baseURL, batchID string) (batchMetaSmoke, err
 		return zero, fmt.Errorf("batches get: read body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return zero, fmt.Errorf("batches get status %d: %s", resp.StatusCode, string(raw))
+		return zero, &statusError{what: "batches get", status: resp.StatusCode, body: string(raw)}
 	}
 	var meta batchMetaSmoke
 	if err := json.Unmarshal(raw, &meta); err != nil {
@@ -266,7 +266,7 @@ func downloadFileContent(ctx context.Context, baseURL, fileID string) ([]byte, e
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("files content status %d: %s", resp.StatusCode, string(raw))
+		return nil, &statusError{what: "files content", status: resp.StatusCode, body: string(raw)}
 	}
 	return raw, nil
 }

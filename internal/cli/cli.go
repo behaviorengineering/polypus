@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -19,6 +18,7 @@ func execute(root *cobra.Command, args []string) int {
 	root.SetArgs(args)
 	root.SetOut(os.Stdout)
 	root.SetErr(os.Stderr)
+	markUsageErrors(root)
 
 	_, err := root.ExecuteC()
 	if err == nil {
@@ -31,7 +31,8 @@ func execute(root *cobra.Command, args []string) int {
 		}
 		return ex.code
 	}
-	if isUnknownCommand(err) || isUsageError(err) {
+	var usage *usageError
+	if errors.As(err, &usage) {
 		fmt.Fprintf(os.Stderr, "%s: %v\nRun '%s help' for the command list.\n", root.Name(), err, root.Name())
 		return 2
 	}
@@ -39,21 +40,31 @@ func execute(root *cobra.Command, args []string) int {
 	return 1
 }
 
-// isUsageError reports Cobra's argument and flag errors (unknown flag, wrong
-// number of arguments), which exit 2 like an unknown command.
-func isUsageError(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "unknown flag") || strings.Contains(msg, "unknown shorthand flag") ||
-		strings.Contains(msg, "accepts ") || strings.Contains(msg, "requires at least") ||
-		strings.Contains(msg, "flag needs an argument") || strings.Contains(msg, "invalid argument")
-}
+// usageError is a Cobra flag or argument error: the command line is wrong, so the
+// process exits 2.
+type usageError struct{ err error }
 
-func isUnknownCommand(err error) bool {
-	if err == nil {
-		return false
+func (e *usageError) Error() string { return e.err.Error() }
+
+func (e *usageError) Unwrap() error { return e.err }
+
+// markUsageErrors types Cobra's flag and argument errors as usageError, so execute
+// reads the exit code from the error's type rather than Cobra's wording. A command
+// with no Args gets cobra.NoArgs, whose error for a stray word is "unknown command".
+func markUsageErrors(root *cobra.Command) {
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return &usageError{err: err} })
+	for _, cmd := range polypusCommands(root) {
+		check := cmd.Args
+		if check == nil {
+			check = cobra.NoArgs
+		}
+		cmd.Args = func(c *cobra.Command, args []string) error {
+			if err := check(c, args); err != nil {
+				return &usageError{err: err}
+			}
+			return nil
+		}
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "unknown command")
 }
 
 // polypusCommands walks Polypus-owned commands for tests and guide helpers.

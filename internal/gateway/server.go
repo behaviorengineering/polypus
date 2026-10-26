@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/admin/keys"
@@ -492,15 +494,11 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 	}
 }
 
+// isSwitchyardUnreachable reports a dial that never reached Switchyard: refused, reset
+// or an unknown host.
 func isSwitchyardUnreachable(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "connect: connection refused") ||
-		strings.Contains(msg, "no such host") ||
-		strings.Contains(msg, "connection reset")
+	var dnsErr *net.DNSError
+	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.As(err, &dnsErr)
 }
 
 // writeHandlerError writes a domain error (or any error) using HTTPStatus.

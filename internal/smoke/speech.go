@@ -89,7 +89,7 @@ func synthesize(ctx context.Context, opts Options) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("speech status %d: %s", resp.StatusCode, truncate(string(body), 200))
+		return nil, &statusError{what: "speech", status: resp.StatusCode, body: truncate(string(body), 200)}
 	}
 	if path := strings.TrimSpace(opts.AudioOutPath); path != "" {
 		if err := os.WriteFile(path, body, 0o600); err != nil {
@@ -130,7 +130,7 @@ func transcribeAudio(ctx context.Context, opts Options, audio []byte) (string, e
 		return "", err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("transcription status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+		return "", &statusError{what: "transcription", status: resp.StatusCode, body: truncate(string(raw), 200)}
 	}
 	var flat struct {
 		Text string `json:"text"`

@@ -1,7 +1,8 @@
 package batch
 
 import (
-	"os"
+	"errors"
+	"io/fs"
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -48,7 +49,7 @@ func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (BatchMeta,
 
 	meta, err := s.readBatchMetaUnlocked(id)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return BatchMeta{}, false, derrors.New(derrors.CodeNotFound, "batch.TryFinalizeBatch", "batch not found")
 		}
 		return BatchMeta{}, false, derrors.Wrap(err, derrors.CodeInternal, "batch.TryFinalizeBatch", "read")

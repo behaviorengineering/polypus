@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,7 +43,7 @@ func (h healthHandler) serveFailureDump(w http.ResponseWriter, r *http.Request) 
 	}
 	body, err := os.ReadFile(cleanPath) //nolint:gosec // G703: traceID matched ^[0-9a-f]{32}$ and the path is checked to stay in the dump dir
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			http.NotFound(w, r)
 			return
 		}

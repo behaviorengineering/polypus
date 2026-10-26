@@ -47,7 +47,7 @@ func (b *ClaudeBatches) Create(ctx context.Context, backendID, model string, lin
 	for _, line := range lines {
 		params, err := c.claudeBatchParams(bctx, backendID, model, line.Body)
 		if err != nil {
-			return "", derrors.Wrap(err, derrors.CodeInvalid, "router.ClaudeBatches.Create", "translate line").
+			return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "router.ClaudeBatches.Create", "translate line").
 				With("custom_id", line.CustomID)
 		}
 		items = append(items, schemas.BatchRequestItem{CustomID: line.CustomID, Params: params})
@@ -71,11 +71,12 @@ func (c *Client) claudeBatchParams(bctx *schemas.BifrostContext, backendID, mode
 	var envelope struct {
 		Messages []schemas.ChatMessage `json:"messages"`
 	}
+	const op = "router.claudeBatchParams"
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, op, "parse line body")
 	}
 	if len(envelope.Messages) == 0 {
-		return nil, derrors.New(derrors.CodeInvalid, "router.claudeBatchParams", "messages required")
+		return nil, derrors.New(derrors.CodeInvalid, op, "messages required")
 	}
 	req, err := bifrostChatRequest(backendID, model, envelope.Messages, body, false)
 	if err != nil {
@@ -84,15 +85,16 @@ func (c *Client) claudeBatchParams(bctx *schemas.BifrostContext, backendID, mode
 	c.applyAutoPromptCache(backendID, body, req)
 	msgReq, err := bfanthropic.ToAnthropicChatRequest(bctx, req)
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, op, "convert to messages params")
 	}
+	// A failure past here is a conversion bug in Polypus, not the caller's input.
 	raw, err := json.Marshal(msgReq)
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInternal, op, "marshal messages params")
 	}
 	var params map[string]any
 	if err := json.Unmarshal(raw, &params); err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInternal, op, "decode messages params")
 	}
 	// Message Batches reject streaming; a batch line always runs to completion.
 	delete(params, "stream")

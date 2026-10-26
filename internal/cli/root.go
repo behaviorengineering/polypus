@@ -20,10 +20,8 @@ func newRoot() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       buildinfo.Version,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				return &exitError{code: 2, msg: fmt.Sprintf("polypus: unknown command %q\nRun 'polypus help' for the command list.", args[0])}
-			}
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			_, err := fmt.Fprint(cmd.OutOrStdout(), agentOperatingGuide(cmd))
 			return err
 		},

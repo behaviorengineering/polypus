@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 const (
@@ -34,15 +36,27 @@ type Config struct {
 }
 
 // LoadConfig reads POLYPUS_OTEL_* and POLYPUS_PHOENIX from the environment.
-// Tracing is on by default so gateway spans join client traces in Phoenix.
-func LoadConfig() Config {
+// Tracing is on by default so gateway spans join client traces in Phoenix. A value
+// that does not parse is an error naming the variable, not a silent default.
+func LoadConfig() (Config, error) {
+	var errs []error
+	boolEnv := func(key string, fallback bool) bool {
+		v, err := config.ParseEnvBool(key, fallback)
+		errs = append(errs, err)
+		return v
+	}
+	intEnv := func(key string, fallback int) int {
+		v, err := envInt(key, fallback)
+		errs = append(errs, err)
+		return v
+	}
 	cfg := Config{
-		Enabled:      config.EnvBool("POLYPUS_OTEL", true),
+		Enabled:      boolEnv("POLYPUS_OTEL", true),
 		ServiceName:  envOr("POLYPUS_SERVICE_NAME", defaultServiceName),
 		OTLPEndpoint: strings.TrimSpace(os.Getenv("POLYPUS_OTLP_ENDPOINT")),
 		DumpDir:      envOr("POLYPUS_FAILURE_DUMP_DIR", defaultDumpDir),
-		DumpMaxFiles: envInt("POLYPUS_FAILURE_DUMP_MAX_FILES", 20),
-		DumpMaxAgeH:  envInt("POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS", 48),
+		DumpMaxFiles: intEnv("POLYPUS_FAILURE_DUMP_MAX_FILES", 20),
+		DumpMaxAgeH:  intEnv("POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS", 48),
 		SkipPaths:    parseSkipPaths(os.Getenv("POLYPUS_OTEL_SKIP_PATHS")),
 	}
 	// POLYPUS_OTLP_ENDPOINT, then the standard OTEL_EXPORTER_OTLP_ENDPOINT, then the
@@ -50,13 +64,14 @@ func LoadConfig() Config {
 	if cfg.OTLPEndpoint == "" {
 		cfg.OTLPEndpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	}
-	if cfg.OTLPEndpoint == "" && config.EnvBool("POLYPUS_PHOENIX", true) {
+	if cfg.OTLPEndpoint == "" && boolEnv("POLYPUS_PHOENIX", true) {
 		cfg.OTLPEndpoint = defaultOTLPEndpoint
 	}
-	if v := strings.TrimSpace(os.Getenv("POLYPUS_OTEL_ENABLED")); v != "" {
-		cfg.Enabled = config.EnvBool("POLYPUS_OTEL_ENABLED", cfg.Enabled)
+	cfg.Enabled = boolEnv("POLYPUS_OTEL_ENABLED", cfg.Enabled)
+	if err := errors.Join(errs...); err != nil {
+		return cfg, derrors.Wrap(err, derrors.CodeInvalid, "observability.LoadConfig", "environment")
 	}
-	return cfg
+	return cfg, nil
 }
 
 func envOr(key, fallback string) string {
@@ -120,14 +135,17 @@ func pathIsSkipped(requestPath string, skip []string) bool {
 	return false
 }
 
-func envInt(key string, fallback int) int {
+// envInt reads a non-negative integer env var: fallback when unset, an error when
+// it does not parse.
+func envInt(key string, fallback int) (int, error) {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
-		return fallback
+		return fallback, nil
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 0 {
-		return fallback
+		return fallback, derrors.New(derrors.CodeInvalid, "observability.envInt", "not a non-negative integer").
+			With("env", key).With("value", raw)
 	}
-	return n
+	return n, nil
 }

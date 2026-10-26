@@ -2,6 +2,8 @@ package batch
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,7 +117,7 @@ func (s *DiskStore) readFileMeta(id string) (FileRecord, error) {
 	metaPath := filepath.Join(s.root, fileMetaDir, id+".json")
 	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return FileRecord{}, derrors.New(derrors.CodeNotFound, "batch.GetFile", "file not found")
 		}
 		return FileRecord{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetFile", "read meta")
@@ -141,7 +143,7 @@ func (s *DiskStore) ReadFileContent(id string) ([]byte, error) {
 	contentPath := filepath.Join(s.root, fileContentDir, id)
 	raw, err := os.ReadFile(contentPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, derrors.New(derrors.CodeNotFound, "batch.ReadFileContent", "file not found")
 		}
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "batch.ReadFileContent", "read content")
@@ -169,7 +171,7 @@ func (s *DiskStore) DeleteFile(id string) error {
 		return derrors.New(derrors.CodeConflict, "batch.DeleteFile", "file referenced by a batch")
 	}
 	for _, path := range []string{filepath.Join(s.root, fileMetaDir, id+".json"), filepath.Join(s.root, fileContentDir, id)} {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return derrors.Wrap(err, derrors.CodeInternal, "batch.DeleteFile", "remove").With("file_id", id)
 		}
 	}
@@ -180,7 +182,7 @@ func (s *DiskStore) fileReferencedByBatchLocked(fileID string) (bool, error) {
 	dir := filepath.Join(s.root, batchMetaDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return false, nil
 		}
 		return false, derrors.Wrap(err, derrors.CodeInternal, "batch.fileReferencedByBatchLocked", "readdir")
@@ -261,7 +263,7 @@ func (s *DiskStore) GetBatch(id string) (BatchMeta, error) {
 	metaPath := filepath.Join(s.root, batchMetaDir, id+".json")
 	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return BatchMeta{}, derrors.New(derrors.CodeNotFound, "batch.GetBatch", "batch not found")
 		}
 		return BatchMeta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "read")

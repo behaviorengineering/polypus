@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -49,7 +48,7 @@ func (s *shared) writeRateLimitError(w http.ResponseWriter, err error) bool {
 }
 
 func setRateLimitExtraHeaders(w http.ResponseWriter, err error) {
-	eachDomainError(err, func(de *derrors.Error) {
+	derrors.Walk(err, func(de *derrors.Error) bool {
 		for k, v := range de.Fields() {
 			if !strings.HasPrefix(k, ratelimit.FieldHeaderPrefix) {
 				continue
@@ -62,20 +61,8 @@ func setRateLimitExtraHeaders(w http.ResponseWriter, err error) {
 				w.Header().Set(name, v)
 			}
 		}
+		return true
 	})
-}
-
-// eachDomainError calls fn for every *derrors.Error along err's chain, outermost
-// first. errors.As follows any wrapping, including multi-%w.
-func eachDomainError(err error, fn func(*derrors.Error)) {
-	for err != nil {
-		var de *derrors.Error
-		if !errors.As(err, &de) || de == nil {
-			return
-		}
-		fn(de)
-		err = de.Unwrap()
-	}
 }
 
 func openaiRateLimitBody(status int, header http.Header, body []byte) ([]byte, bool) {
@@ -104,13 +91,14 @@ func openaiRateLimitError(err error) openaiError {
 
 func rateLimitClientMessage(err error) string {
 	msg := ""
-	eachDomainError(err, func(de *derrors.Error) {
+	derrors.Walk(err, func(de *derrors.Error) bool {
 		if de.Code() != derrors.CodeRateLimited {
-			return
+			return true
 		}
 		if m := strings.TrimSpace(de.Message()); m != "" {
 			msg = m // the innermost rate-limit message wins.
 		}
+		return true
 	})
 	if msg != "" {
 		return msg

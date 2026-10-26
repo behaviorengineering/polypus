@@ -296,18 +296,46 @@ func HTTPStatus(err error) int {
 	}
 }
 
-// Field walks the unwrap chain and returns the first metadata value for key.
+// Field returns the first metadata value for key, outermost first, anywhere in err's
+// tree.
 func Field(err error, key string) string {
 	key = strings.TrimSpace(key)
-	if err == nil || key == "" {
+	if key == "" {
 		return ""
 	}
-	var de *Error
-	if !stderrors.As(err, &de) || de == nil {
-		return ""
+	var out string
+	Walk(err, func(de *Error) bool {
+		out = strings.TrimSpace(de.fields[key])
+		return out == ""
+	})
+	return out
+}
+
+// Walk calls fn for every *Error in err's tree, outermost first and depth first,
+// following both Unwrap() error and the Unwrap() []error of joined errors. It stops
+// when fn returns false.
+func Walk(err error, fn func(*Error) bool) {
+	walk(err, fn)
+}
+
+func walk(err error, fn func(*Error) bool) bool {
+	if err == nil {
+		return true
 	}
-	if v := strings.TrimSpace(de.fields[key]); v != "" {
-		return v
+	if de, ok := err.(*Error); ok && de != nil { //nolint:errorlint // Walk visits each node itself.
+		if !fn(de) {
+			return false
+		}
 	}
-	return Field(de.cause, key)
+	switch u := err.(type) { //nolint:errorlint // Walk follows each unwrap itself.
+	case interface{ Unwrap() []error }:
+		for _, e := range u.Unwrap() {
+			if !walk(e, fn) {
+				return false
+			}
+		}
+	case interface{ Unwrap() error }:
+		return walk(u.Unwrap(), fn)
+	}
+	return true
 }

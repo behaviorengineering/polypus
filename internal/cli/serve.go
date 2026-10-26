@@ -39,7 +39,11 @@ func runServeWithOpts(ctx context.Context, host string, port int, backend string
 		return 1
 	}
 	logStartup(logger, rcfg)
-	otelCfg := observability.LoadConfig()
+	otelCfg, err := observability.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "polypus serve: otel config: %v\n", err)
+		return 2
+	}
 	otelCfg.Logger = logger
 	shutdownOTEL, err := observability.Init(otelCfg)
 	if err != nil {

@@ -550,15 +550,16 @@ func hyperdxClickhouseDocker(ctx context.Context, container, traceID string) (in
 	return n, nil
 }
 
+// dockerExitDaemon is the exit status docker gives when docker itself failed (daemon
+// unreachable, container not running yet) rather than the command it ran.
+const dockerExitDaemon = 125
+
+// dockerExecRetryable reports a docker exec failure worth retrying: docker itself
+// failed, which a starting stack outgrows. A failed query (any other exit status) or
+// a missing docker binary is not retried.
 func dockerExecRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "connection") ||
-		strings.Contains(msg, "daemon") ||
-		strings.Contains(msg, "temporarily")
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == dockerExitDaemon
 }
 
 func parseCountOutput(out []byte) (int, error) {

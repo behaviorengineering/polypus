@@ -2,7 +2,9 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"sort"
@@ -292,7 +294,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 	}
 	raw, err := os.ReadFile(path) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return RouterConfig{}, false, nil
 		}
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)

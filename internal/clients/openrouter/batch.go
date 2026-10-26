@@ -188,7 +188,10 @@ func (c *Client) SubmitBatch(ctx context.Context, model, endpoint string, lines 
 		return "", err
 	}
 	var created Batch
-	if err := json.Unmarshal(raw, &created); err != nil || strings.TrimSpace(created.ID) == "" {
+	if err := json.Unmarshal(raw, &created); err != nil {
+		return "", derrors.Wrap(err, derrors.CodeUnavailable, "openrouter.SubmitBatch", "decode create response")
+	}
+	if strings.TrimSpace(created.ID) == "" {
 		return "", derrors.New(derrors.CodeUnavailable, "openrouter.SubmitBatch", "batch id missing from response")
 	}
 	return created.ID, nil

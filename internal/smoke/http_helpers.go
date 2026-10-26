@@ -2,6 +2,7 @@ package smoke
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -35,4 +36,18 @@ func httpDefaultDo(req *http.Request) (*http.Response, error) {
 
 func ioReadAllLimit(r io.Reader, n int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, n))
+}
+
+// statusError is a gateway answer outside 2xx, kept typed so callers read the status.
+type statusError struct {
+	what   string // the call, for example "chat".
+	status int
+	body   string
+}
+
+func (e *statusError) Error() string {
+	if e.body == "" {
+		return fmt.Sprintf("%s status %d", e.what, e.status)
+	}
+	return fmt.Sprintf("%s status %d: %s", e.what, e.status, e.body)
 }

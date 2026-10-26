@@ -349,6 +349,8 @@ func unwrapBatchEnvelope(raw []byte) ([]byte, error) {
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
+		// Not an envelope: Workers AI can answer with the bare result, which the
+		// caller's own parser reads (and reports if it is malformed).
 		return raw, nil
 	}
 	if envelope.Success != nil && !*envelope.Success {
