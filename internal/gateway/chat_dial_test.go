@@ -70,3 +70,23 @@ func TestProxyChatStreamThatStallsIsCutOff(t *testing.T) {
 		t.Fatalf("the chunks before the stall must reach the client: %q", rec.Body.String())
 	}
 }
+
+func TestOversizedUpstreamReplyIsAnErrorNotATruncated200(t *testing.T) {
+	if _, err := readUpstream(strings.NewReader(strings.Repeat("x", 64)), 63, "test"); err == nil {
+		t.Fatal("a body past the cap must fail")
+	}
+	if raw, err := readUpstream(strings.NewReader(strings.Repeat("x", 64)), 64, "test"); err != nil || len(raw) != 64 {
+		t.Fatalf("a body at the cap must pass: %d %v", len(raw), err)
+	}
+}
+
+func TestOversizedChatRequestGets413(t *testing.T) {
+	h, _ := newOpenRouterBatchGateway(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(strings.Repeat("a", chatMaxBody+1)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want 413", rec.Code)
+	}
+}

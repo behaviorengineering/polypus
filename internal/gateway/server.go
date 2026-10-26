@@ -333,7 +333,7 @@ func (g *Gateway) serveModelsAllowRoute(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, chatMaxBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, chatMaxBody))
 	if err != nil {
 		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "read body"))
 		return
@@ -604,7 +604,7 @@ func writeUpstreamDialError(w http.ResponseWriter, err error, prefix, upstreamNa
 }
 
 func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, embedMaxBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, embedMaxBody))
 	if err != nil {
 		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "read body"))
 		return

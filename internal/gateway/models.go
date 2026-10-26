@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -41,9 +43,12 @@ type openaiModelList struct {
 type modelsInventoryCache struct {
 	mu    sync.Mutex
 	byKey map[string]modelsCacheEntry
+	dirty bool // put since the last flush.
 	ttl   time.Duration
 	path  string
 	now   func() time.Time
+	// writeMu orders disk writes, so an older snapshot never lands after a newer one.
+	writeMu sync.Mutex
 }
 
 type modelsCacheEntry struct {
@@ -80,10 +85,14 @@ func (c *modelsInventoryCache) loadDisk() {
 	}
 	raw, err := os.ReadFile(c.path)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			slog.Warn("polypus: models inventory cache unreadable; starting empty", "path", c.path, "err", err)
+		}
 		return
 	}
 	var disk map[string]modelsCacheEntry
 	if err := json.Unmarshal(raw, &disk); err != nil {
+		slog.Warn("polypus: models inventory cache corrupt; starting empty", "path", c.path, "err", err)
 		return
 	}
 	c.mu.Lock()
@@ -93,17 +102,30 @@ func (c *modelsInventoryCache) loadDisk() {
 	}
 }
 
-func (c *modelsInventoryCache) persist() error {
+// flush writes the cache to disk when something was put since the last flush. It
+// marshals a snapshot under the lock and writes outside it, so lookups are not
+// held up by disk I/O. The cache is best effort: a failed write is logged and the
+// in-memory entries stay.
+func (c *modelsInventoryCache) flush() {
 	if c == nil || c.path == "" {
-		return nil
+		return
 	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	raw, err := json.MarshalIndent(c.byKey, "", "  ")
-	if err != nil {
-		return err
+	if !c.dirty {
+		c.mu.Unlock()
+		return
 	}
-	return statefile.WriteAtomic(c.path, raw, 0o600)
+	raw, err := json.MarshalIndent(c.byKey, "", "  ")
+	c.dirty = false
+	c.mu.Unlock()
+	if err == nil {
+		err = statefile.WriteAtomic(c.path, raw, 0o600)
+	}
+	if err != nil {
+		slog.Warn("polypus: models inventory cache not saved", "path", c.path, "err", err)
+	}
 }
 
 func (c *modelsInventoryCache) get(key string) ([]openaiModel, bool) {
@@ -138,9 +160,8 @@ func (c *modelsInventoryCache) put(key string, models []openaiModel) {
 	}
 	c.mu.Lock()
 	c.byKey[key] = modelsCacheEntry{At: now(), Models: append([]openaiModel(nil), models...)}
+	c.dirty = true
 	c.mu.Unlock()
-	// Best-effort disk cache; in-memory entry remains when persist fails.
-	_ = c.persist()
 }
 
 func inventoryView(r *http.Request) bool {
@@ -254,6 +275,7 @@ func (h modelsHandler) collectModelsForRetrieve(r *http.Request, asInventory boo
 		return h.collectModels(r, false)
 	}
 	results := []backendInventory{{backend: backendID, models: h.inventoryForBackend(r, b)}}
+	h.invCache.flush()
 	byID := mergeBackendInventories(cfg, false, results)
 	mergeSeedModels(cfg, false, []string{backendID}, byID, seedModelsFromEnv(cfg))
 	return finalizeModelList(catalog, byID)
@@ -287,6 +309,8 @@ func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openai
 		}(i, backendID, b)
 	}
 	wg.Wait()
+	// One disk write per pass, not one per backend.
+	h.invCache.flush()
 
 	byID := mergeBackendInventories(cfg, asInventory, results)
 	mergeSeedModels(cfg, asInventory, ids, byID, seedModelsFromEnv(cfg))
@@ -455,7 +479,7 @@ func fetchBackendModelsAtURL(r *http.Request, b config.BackendDef, target string
 		return nil, derrors.New(derrors.CodeUnavailable, op, fmt.Sprintf("models list status %d", resp.StatusCode)).
 			With("backend", b.ID)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
+	raw, err := readUpstream(resp.Body, modelsMaxBody, op)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, op, "read body").With("backend", b.ID)
 	}

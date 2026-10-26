@@ -74,7 +74,7 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatchCreate", "no batch backend configured"))
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, batchMaxInputBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, batchMaxInputBytes))
 	if err != nil {
 		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveBatchCreate", "read body"))
 		return

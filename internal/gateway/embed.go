@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -72,6 +71,12 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// Read before the headers go out, so an oversized reply becomes an error status
+	// rather than a truncated 200.
+	raw, err := readUpstream(resp.Body, embedMaxBody, "gateway.proxyEmbeddings")
+	if err != nil {
+		return err
+	}
 
 	for k, vals := range resp.Header {
 		if len(vals) == 0 {
@@ -87,9 +92,8 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, io.LimitReader(resp.Body, embedMaxBody))
-	if err != nil {
-		return afterHeaders(r.Context(), err, false, "gateway.proxyEmbeddings", "copy response")
+	if _, err := w.Write(raw); err != nil {
+		return afterHeaders(r.Context(), err, true, "gateway.proxyEmbeddings", "write response")
 	}
 	return upstream.StatusFailure(resp.StatusCode)
 }

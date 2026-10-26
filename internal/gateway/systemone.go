@@ -21,7 +21,7 @@ import (
 type systemOneHandler struct{ *shared }
 
 func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, chatMaxBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, chatMaxBody))
 	if err != nil {
 		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSystemOne", "read body"))
 		return
@@ -171,9 +171,9 @@ func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *ht
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, chatMaxBody))
+	raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxySystemOnePassthrough")
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxySystemOnePassthrough", "read body")
+		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		w.Header().Set("Content-Type", firstNonEmpty(resp.Header.Get("Content-Type"), "application/json"))

@@ -54,7 +54,7 @@ func (h adminHandler) serveModelsAllowOverlay(w http.ResponseWriter, r *http.Req
 }
 
 func (h adminHandler) serveModelsAllow(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, adminAllowMaxBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, adminAllowMaxBody))
 	if err != nil {
 		writeAdminJSONError(w, http.StatusBadRequest, errTypeInvalidRequest, "invalid", "read body")
 		return
@@ -100,6 +100,7 @@ func (h adminHandler) serveModelsAllow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inventory := modelsHandler(h).inventoryForBackend(r, b)
+	h.invCache.flush()
 	if !modelInInventory(backendID, down, model, inventory) {
 		if len(inventory) == 0 {
 			writeAdminJSONError(w, http.StatusServiceUnavailable, errTypeInvalidRequest, "unavailable", "could not fetch backend inventory")

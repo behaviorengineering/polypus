@@ -240,10 +240,10 @@ func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) 
 		return writeChatStreamResponse(w, r, resp, target, streaming)
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, chatMaxBody))
+	raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
 	if err != nil {
 		observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, -1)
-		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "read response")
+		return err
 	}
 	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, len(raw))
 	status := resp.StatusCode
@@ -271,10 +271,10 @@ func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) 
 
 func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string, streaming bool) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, err := io.ReadAll(io.LimitReader(resp.Body, chatMaxBody))
+		raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
 		if err != nil {
 			observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, -1)
-			return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "read stream")
+			return err
 		}
 		status := resp.StatusCode
 		if rewritten, ok := openaiRateLimitBody(resp.StatusCode, resp.Header, raw); ok {
