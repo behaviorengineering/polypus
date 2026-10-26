@@ -160,7 +160,8 @@ func TestBreakersArePerPolicySetAndPerBackend(t *testing.T) {
 	a, b := NewPolicies(), NewPolicies()
 	team := Scoped(DepAnthropic, "claude_team")
 	personal := Scoped(DepAnthropic, "claude_personal")
-	if a.breakerFor(team) == nil || a.breakerFor(team) != a.breakerFor(team) {
+	first, again := a.breakerFor(team), a.breakerFor(team)
+	if first == nil || first != again {
 		t.Fatal("a scoped provider dep gets one stable breaker")
 	}
 	if a.breakerFor(team) == a.breakerFor(personal) {

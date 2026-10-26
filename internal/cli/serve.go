@@ -22,7 +22,7 @@ func runServeWithOpts(ctx context.Context, host string, port int, backend string
 	}
 	// The service logs its startup and runtime through one structured logger.
 	logger := slog.Default()
-	logger.Info("polypus gateway", "url", "http://"+opts.ListenAddr()+"/")
+	logger.Info("polypus gateway", "url", opts.GatewayBaseURL())
 	rcfg, err := config.LoadRouterConfig(opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: router config: %v\n", err)
