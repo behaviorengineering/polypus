@@ -89,128 +89,92 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 			opt(&ho)
 		}
 	}
-
-	overlayPath := ho.overlayPath
-	if overlayPath == "" {
-		p, err := config.ResolveModelsAllowOverlayPath()
-		if err != nil {
-			return nil, fmt.Errorf("gateway: %w", err)
-		}
-		overlayPath = p
+	if err := ho.fillDefaults(); err != nil {
+		return nil, fmt.Errorf("gateway: %w", err)
 	}
-	adminKeysPath := ho.adminKeysPath
-	if adminKeysPath == "" {
-		p, err := config.ResolveAdminKeysPath()
-		if err != nil {
-			return nil, fmt.Errorf("gateway: %w", err)
-		}
-		adminKeysPath = p
-	}
-	jobClock := ho.clock
-	if jobClock == nil {
-		jobClock = func() time.Time { return time.Now().UTC() }
-	}
-	adminKeys, err := keys.Config{Path: adminKeysPath, Clock: jobClock}.CreateStore()
+	adminKeys, err := keys.Config{Path: ho.adminKeysPath, Clock: ho.clock}.CreateStore()
 	if err != nil {
 		return nil, fmt.Errorf("gateway: admin keys: %w", err)
 	}
-
-	cfGet := ho.cfGet
-	if cfGet == nil {
-		cfGet = cloudflare.GetClient
-	}
-	geminiGet := ho.geminiGet
-	if geminiGet == nil {
-		geminiGet = gemini.GetClient
-	}
-	anthropicGet := ho.anthropicGet
-	if anthropicGet == nil {
-		anthropicGet = anthropic.GetClient
-	}
-
-	var rc Router
-	owned := false
-	var rcfg config.RouterConfig
-	if ho.router != nil {
-		rc = ho.router
-		rcfg = rc.Registry().Config()
-	} else {
-		loaded, loadErr := config.LoadRouterConfig(opts)
-		if loadErr != nil {
-			return nil, fmt.Errorf("gateway: %w", loadErr)
-		}
-		if err := config.ApplyAllowOverlay(&loaded, overlayPath); err != nil {
-			return nil, fmt.Errorf("gateway: allow overlay: %w", err)
-		}
-		rcfg = loaded
-		var clientOpts []router.ClientOption
-		if ho.cfGet != nil {
-			clientOpts = append(clientOpts, router.WithCloudflareClientGet(router.CloudflareClientGet(ho.cfGet)))
-		}
-		client, clientErr := router.NewClient(rcfg, clientOpts...)
-		if clientErr != nil {
-			return nil, fmt.Errorf("gateway: %w", clientErr)
-		}
-		rc = client
-		owned = true
-	}
-
-	proxyURL := rc.Registry().ProxyBackendURL()
-	proxy, err := newFallbackProxy(proxyURL)
+	rc, rcfg, owned, err := openRouter(opts, ho)
 	if err != nil {
-		if owned {
-			if c, ok := rc.(routerCloser); ok {
-				c.Close()
-			}
+		return nil, err
+	}
+	s, err := newShared(opts, ho, rc, rcfg, adminKeys)
+	if err != nil {
+		if c, ok := rc.(routerCloser); ok && owned {
+			c.Close()
 		}
+		return nil, err
+	}
+	s.ownedRouter = owned
+	return wrapGatewayAccess(adminKeys, &Gateway{shared: s}), nil
+}
+
+// openRouter returns the injected router, or loads the router config, applies the
+// allow overlay and builds a Bifrost client that the gateway then owns.
+func openRouter(opts config.ServeOptions, ho handlerOptions) (rc Router, rcfg config.RouterConfig, owned bool, err error) {
+	if ho.router != nil {
+		return ho.router, ho.router.Registry().Config(), false, nil
+	}
+	loaded, err := config.LoadRouterConfig(opts)
+	if err != nil {
+		return nil, config.RouterConfig{}, false, fmt.Errorf("gateway: %w", err)
+	}
+	if err := config.ApplyAllowOverlay(&loaded, ho.overlayPath); err != nil {
+		return nil, config.RouterConfig{}, false, fmt.Errorf("gateway: allow overlay: %w", err)
+	}
+	var clientOpts []router.ClientOption
+	if ho.cfGet != nil {
+		clientOpts = append(clientOpts, router.WithCloudflareClientGet(router.CloudflareClientGet(ho.cfGet)))
+	}
+	client, err := router.NewClient(loaded, clientOpts...)
+	if err != nil {
+		return nil, config.RouterConfig{}, false, fmt.Errorf("gateway: %w", err)
+	}
+	return client, loaded, true, nil
+}
+
+// newShared builds the per-gateway state: fallback proxy, timeouts, batch store
+// and UI mounts. The caller closes an owned router when it fails.
+func newShared(opts config.ServeOptions, ho handlerOptions, rc Router, rcfg config.RouterConfig, adminKeys *keys.Store) (*shared, error) {
+	proxy, err := newFallbackProxy(rc.Registry().ProxyBackendURL())
+	if err != nil {
 		return nil, err
 	}
 	timeouts := rcfg.Timeouts
 	if timeouts.Max == 0 {
 		timeouts = config.DefaultTimeouts()
 	}
-	var batchStore *batch.DiskStore
-	batchRoot, batchStoreErr := config.ResolveBatchDir()
-	if batchStoreErr == nil {
-		batchStore, batchStoreErr = batch.NewDiskStore(batchRoot, func() time.Time { return time.Now().UTC() })
+	batchRoot, err := config.ResolveBatchDir()
+	if err != nil {
+		return nil, fmt.Errorf("gateway: batch store: %w", err)
 	}
-	if batchStoreErr != nil {
-		if owned {
-			if c, ok := rc.(routerCloser); ok {
-				c.Close()
-			}
-		}
-		return nil, fmt.Errorf("gateway: batch store: %w", batchStoreErr)
+	batchStore, err := batch.NewDiskStore(batchRoot, ho.clock)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: batch store: %w", err)
 	}
-	uiMounts, uiErr := buildUIMounts(rcfg.UIProxies)
-	if uiErr != nil {
-		if owned {
-			if c, ok := rc.(routerCloser); ok {
-				c.Close()
-			}
-		}
-		return nil, uiErr
+	uiMounts, err := buildUIMounts(rcfg.UIProxies)
+	if err != nil {
+		return nil, err
 	}
-	s := &shared{
+	return &shared{
 		opts:         opts,
 		router:       rc,
-		ownedRouter:  owned,
 		proxy:        proxy,
 		invCache:     newModelsInventoryCache(),
 		timeouts:     timeouts,
 		client:       newChatProxyClient(timeouts.Max),
 		upstreams:    upstream.NewBoard(),
-		cfGet:        cfGet,
-		geminiGet:    geminiGet,
-		anthropicGet: anthropicGet,
+		cfGet:        ho.cfGet,
+		geminiGet:    ho.geminiGet,
+		anthropicGet: ho.anthropicGet,
 		batchStore:   batchStore,
-		batchNow:     jobClock,
-		overlayPath:  overlayPath,
+		batchNow:     ho.clock,
+		overlayPath:  ho.overlayPath,
 		adminKeys:    adminKeys,
 		uiMounts:     uiMounts,
-	}
-	gw := &Gateway{shared: s}
-	return wrapGatewayAccess(adminKeys, gw), nil
+	}, nil
 }
 
 func (s *shared) batchNowTime() time.Time {
@@ -239,78 +203,132 @@ func newFallbackProxy(backendURL string) (http.Handler, error) {
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch {
-	case r.URL.Path == "/":
-		g.serveLanding(w, r)
-	case r.URL.Path == bannerAssetPath:
-		g.serveBannerWebP(w, r)
-	case r.URL.Path == "/health" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		healthHandler{g.shared}.serveHealth(w, r)
-	case r.URL.Path == "/health/backends" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		healthHandler{g.shared}.serveBackendHealth(w, r)
-	case r.URL.Path == "/health/upstreams" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		healthHandler{g.shared}.serveUpstreamHealth(w, r)
-	case strings.HasPrefix(r.URL.Path, "/debug/failures/") && r.Method == http.MethodGet:
-		healthHandler{g.shared}.serveFailureDump(w, r)
-	case r.URL.Path == "/v1/apis" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		apiCatalogHandler{g.shared}.serveCatalog(w, r)
-	case r.URL.Path == "/v1/apis/openai/openapi.yaml" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		serveOpenAPISpec(w, r)
-	case r.URL.Path == "/v1/apis/systemone/schema.json" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		cfg := config.RouterConfig{}
-		if g.router != nil {
-			cfg = g.router.Registry().Config()
-		}
-		if !systemOneAPIEnabled(cfg) {
-			writeAPINotConfigured(w)
-		} else {
-			serveSystemOneSchema(w, r)
-		}
-	case r.URL.Path == "/v1/apis/openai/models" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		modelsHandler{g.shared}.serveModelsListForSurface(surfaceOpenAI, w, r)
-	case strings.HasPrefix(r.URL.Path, "/v1/apis/openai/models/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		modelsHandler{g.shared}.serveModelRetrieveForSurface(surfaceOpenAI, "/v1/apis/openai/models/", w, r)
-	case r.URL.Path == "/v1/apis/systemone/models" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		modelsHandler{g.shared}.serveModelsListForSurface(surfaceSystemOne, w, r)
-	case strings.HasPrefix(r.URL.Path, "/v1/apis/systemone/models/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		modelsHandler{g.shared}.serveModelRetrieveForSurface(surfaceSystemOne, "/v1/apis/systemone/models/", w, r)
-	case r.URL.Path == "/v1/models" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		modelsHandler{g.shared}.serveModelsList(w, r)
-	case strings.HasPrefix(r.URL.Path, "/v1/models/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		modelsHandler{g.shared}.serveModelRetrieve(w, r)
-	case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
-		chatHandler{g.shared}.serveChatCompletions(w, r)
-	case r.URL.Path == "/v1/embeddings" && r.Method == http.MethodPost:
-		chatHandler{g.shared}.serveEmbeddings(w, r)
-	case r.URL.Path == "/v1/audio/speech" && r.Method == http.MethodPost:
-		speechHandler{g.shared}.serveSpeech(w, r)
-	case r.URL.Path == "/v1/audio/transcriptions" && r.Method == http.MethodPost:
-		speechHandler{g.shared}.serveTranscription(w, r)
-	case r.URL.Path == "/v1/audio/voices" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-		g.proxy.ServeHTTP(w, r)
-	case r.URL.Path == "/v1/systemone" && r.Method == http.MethodPost:
-		systemOneHandler{g.shared}.serveSystemOne(w, r)
-	case strings.HasPrefix(r.URL.Path, "/v1/files"):
-		filesHandler{g.shared}.serveFiles(w, r)
-	case r.URL.Path == "/v1/batches":
-		batchesHandler{g.shared}.serveBatches(w, r)
-	case strings.HasPrefix(r.URL.Path, "/v1/batches/"):
-		batchesHandler{g.shared}.serveBatchByID(w, r)
-	case r.URL.Path == "/v1/admin/models/allow":
-		h := adminHandler{g.shared}
-		switch r.Method {
-		case http.MethodGet, http.MethodHead:
-			h.serveModelsAllowOverlay(w, r)
-		case http.MethodPost:
-			h.serveModelsAllow(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	default:
-		if g.serveUIProxy(w, r) {
+	for _, rt := range gatewayRoutes {
+		if rt.matches(r) {
+			rt.serve(g, w, r)
 			return
 		}
-		http.NotFound(w, r)
+	}
+	if g.serveUIProxy(w, r) {
+		return
+	}
+	http.NotFound(w, r)
+}
+
+// Which methods a route answers.
+const (
+	methodsRead = iota // GET and HEAD
+	methodsGet         // GET only
+	methodsPost        // POST only
+	methodsAny         // the handler checks the method itself
+)
+
+// gatewayRoute is one entry of the routing table. Routes are tried in order, so a
+// prefix route must come after the exact routes it would otherwise shadow.
+type gatewayRoute struct {
+	path    string
+	prefix  bool
+	methods int
+	serve   func(g *Gateway, w http.ResponseWriter, r *http.Request)
+}
+
+func (rt gatewayRoute) matches(r *http.Request) bool {
+	if rt.prefix {
+		if !strings.HasPrefix(r.URL.Path, rt.path) {
+			return false
+		}
+	} else if r.URL.Path != rt.path {
+		return false
+	}
+	switch rt.methods {
+	case methodsRead:
+		return r.Method == http.MethodGet || r.Method == http.MethodHead
+	case methodsGet:
+		return r.Method == http.MethodGet
+	case methodsPost:
+		return r.Method == http.MethodPost
+	default:
+		return true
+	}
+}
+
+var gatewayRoutes = []gatewayRoute{
+	{path: "/", methods: methodsAny, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { g.serveLanding(w, r) }},
+	{path: bannerAssetPath, methods: methodsAny, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { g.serveBannerWebP(w, r) }},
+	{path: "/health", methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { healthHandler{g.shared}.serveHealth(w, r) }},
+	{path: "/health/backends", methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		healthHandler{g.shared}.serveBackendHealth(w, r)
+	}},
+	{path: "/health/upstreams", methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		healthHandler{g.shared}.serveUpstreamHealth(w, r)
+	}},
+	{path: "/debug/failures/", prefix: true, methods: methodsGet, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		healthHandler{g.shared}.serveFailureDump(w, r)
+	}},
+	{path: "/v1/apis", methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		apiCatalogHandler{g.shared}.serveCatalog(w, r)
+	}},
+	{path: "/v1/apis/openai/openapi.yaml", methods: methodsRead, serve: func(_ *Gateway, w http.ResponseWriter, r *http.Request) { serveOpenAPISpec(w, r) }},
+	{path: "/v1/apis/systemone/schema.json", methods: methodsRead, serve: (*Gateway).serveSystemOneSchemaRoute},
+	{path: pathOpenAIModels, methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		modelsHandler{g.shared}.serveModelsListForSurface(surfaceOpenAI, w, r)
+	}},
+	{path: pathOpenAIModels + "/", prefix: true, methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		modelsHandler{g.shared}.serveModelRetrieveForSurface(surfaceOpenAI, pathOpenAIModels+"/", w, r)
+	}},
+	{path: pathSystemOneModels, methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		modelsHandler{g.shared}.serveModelsListForSurface(surfaceSystemOne, w, r)
+	}},
+	{path: pathSystemOneModels + "/", prefix: true, methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		modelsHandler{g.shared}.serveModelRetrieveForSurface(surfaceSystemOne, pathSystemOneModels+"/", w, r)
+	}},
+	{path: "/v1/models", methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		modelsHandler{g.shared}.serveModelsList(w, r)
+	}},
+	{path: "/v1/models/", prefix: true, methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		modelsHandler{g.shared}.serveModelRetrieve(w, r)
+	}},
+	{path: "/v1/chat/completions", methods: methodsPost, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		chatHandler{g.shared}.serveChatCompletions(w, r)
+	}},
+	{path: "/v1/embeddings", methods: methodsPost, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { chatHandler{g.shared}.serveEmbeddings(w, r) }},
+	{path: "/v1/audio/speech", methods: methodsPost, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { speechHandler{g.shared}.serveSpeech(w, r) }},
+	{path: "/v1/audio/transcriptions", methods: methodsPost, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		speechHandler{g.shared}.serveTranscription(w, r)
+	}},
+	{path: "/v1/audio/voices", methods: methodsRead, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { g.proxy.ServeHTTP(w, r) }},
+	{path: "/v1/systemone", methods: methodsPost, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		systemOneHandler{g.shared}.serveSystemOne(w, r)
+	}},
+	{path: "/v1/files", prefix: true, methods: methodsAny, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { filesHandler{g.shared}.serveFiles(w, r) }},
+	{path: "/v1/batches", methods: methodsAny, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { batchesHandler{g.shared}.serveBatches(w, r) }},
+	{path: "/v1/batches/", prefix: true, methods: methodsAny, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+		batchesHandler{g.shared}.serveBatchByID(w, r)
+	}},
+	{path: "/v1/admin/models/allow", methods: methodsAny, serve: (*Gateway).serveModelsAllowRoute},
+}
+
+func (g *Gateway) serveSystemOneSchemaRoute(w http.ResponseWriter, r *http.Request) {
+	cfg := config.RouterConfig{}
+	if g.router != nil {
+		cfg = g.router.Registry().Config()
+	}
+	if !systemOneAPIEnabled(cfg) {
+		writeAPINotConfigured(w)
+		return
+	}
+	serveSystemOneSchema(w, r)
+}
+
+func (g *Gateway) serveModelsAllowRoute(w http.ResponseWriter, r *http.Request) {
+	h := adminHandler{g.shared}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		h.serveModelsAllowOverlay(w, r)
+	case http.MethodPost:
+		h.serveModelsAllow(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 

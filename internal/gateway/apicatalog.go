@@ -16,7 +16,13 @@ const (
 	surfaceSystemOne
 )
 
-const openAIModelsCanonicalPath = "/v1/apis/openai/models"
+// Model list paths of the two API surfaces.
+const (
+	pathOpenAIModels    = "/v1/apis/openai/models"
+	pathSystemOneModels = "/v1/apis/systemone/models"
+)
+
+const openAIModelsCanonicalPath = pathOpenAIModels
 
 // apiOperation describes one HTTP operation for discovery clients.
 type apiOperation struct {
@@ -56,18 +62,18 @@ func openAICatalogEntry() apiCatalogEntry {
 		ID:     "openai",
 		Title:  "OpenAI-compatible",
 		Flavor: "openai",
-		Models: "/v1/apis/openai/models",
+		Models: pathOpenAIModels,
 		Schema: "/v1/apis/openai/openapi.yaml",
 		Operations: map[string]apiOperation{
-			"list_models":          {Method: "GET", Path: "/v1/apis/openai/models"},
-			"retrieve_model":       {Method: "GET", Path: "/v1/apis/openai/models/{id}"},
-			"chat_completions":     {Method: "POST", Path: "/v1/chat/completions"},
-			"embeddings":           {Method: "POST", Path: "/v1/embeddings"},
-			"audio_speech":         {Method: "POST", Path: "/v1/audio/speech"},
-			"audio_transcriptions": {Method: "POST", Path: "/v1/audio/transcriptions"},
-			"audio_voices":         {Method: "GET", Path: "/v1/audio/voices"},
-			"files":                {Method: "GET", Path: "/v1/files"},
-			"batches":              {Method: "POST", Path: "/v1/batches"},
+			"list_models":          {Method: http.MethodGet, Path: pathOpenAIModels},
+			"retrieve_model":       {Method: http.MethodGet, Path: "/v1/apis/openai/models/{id}"},
+			"chat_completions":     {Method: http.MethodPost, Path: "/v1/chat/completions"},
+			"embeddings":           {Method: http.MethodPost, Path: "/v1/embeddings"},
+			"audio_speech":         {Method: http.MethodPost, Path: "/v1/audio/speech"},
+			"audio_transcriptions": {Method: http.MethodPost, Path: "/v1/audio/transcriptions"},
+			"audio_voices":         {Method: http.MethodGet, Path: "/v1/audio/voices"},
+			"files":                {Method: http.MethodGet, Path: "/v1/files"},
+			"batches":              {Method: http.MethodPost, Path: "/v1/batches"},
 		},
 	}
 }
@@ -77,12 +83,12 @@ func systemOneCatalogEntry() apiCatalogEntry {
 		ID:     "systemone",
 		Title:  "SystemOne",
 		Flavor: "systemone",
-		Models: "/v1/apis/systemone/models",
+		Models: pathSystemOneModels,
 		Schema: "/v1/apis/systemone/schema.json",
 		Operations: map[string]apiOperation{
-			"list_models":    {Method: "GET", Path: "/v1/apis/systemone/models"},
-			"retrieve_model": {Method: "GET", Path: "/v1/apis/systemone/models/{id}"},
-			"evaluate":       {Method: "POST", Path: "/v1/systemone"},
+			"list_models":    {Method: http.MethodGet, Path: pathSystemOneModels},
+			"retrieve_model": {Method: http.MethodGet, Path: "/v1/apis/systemone/models/{id}"},
+			"evaluate":       {Method: http.MethodPost, Path: "/v1/systemone"},
 		},
 	}
 }

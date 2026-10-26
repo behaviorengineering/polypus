@@ -126,4 +126,47 @@ func WithAdminStateDir(dir string) HandlerOption {
 	}
 }
 
+// WithClock sets the job clock that stamps admin keys and batch records (tests).
+// Panics if now is nil.
+func WithClock(now func() time.Time) HandlerOption {
+	if now == nil {
+		panic("gateway: WithClock(nil)")
+	}
+	return func(o *handlerOptions) {
+		o.clock = now
+	}
+}
+
+// fillDefaults resolves every option the caller left unset: state paths, the job
+// clock and the provider client getters.
+func (o *handlerOptions) fillDefaults() error {
+	if o.overlayPath == "" {
+		p, err := config.ResolveModelsAllowOverlayPath()
+		if err != nil {
+			return err
+		}
+		o.overlayPath = p
+	}
+	if o.adminKeysPath == "" {
+		p, err := config.ResolveAdminKeysPath()
+		if err != nil {
+			return err
+		}
+		o.adminKeysPath = p
+	}
+	if o.clock == nil {
+		o.clock = func() time.Time { return time.Now().UTC() }
+	}
+	if o.cfGet == nil {
+		o.cfGet = cloudflare.GetClient
+	}
+	if o.geminiGet == nil {
+		o.geminiGet = gemini.GetClient
+	}
+	if o.anthropicGet == nil {
+		o.anthropicGet = anthropic.GetClient
+	}
+	return nil
+}
+
 var _ Router = (*router.Client)(nil)

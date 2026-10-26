@@ -294,47 +294,30 @@ func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openai
 }
 
 func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef) []openaiModel {
-	modelsCfg := b.Models
+	syncOff := b.Models != nil && !b.Models.ShouldSync()
 	if list := h.liveCatalogLister(b); list != nil {
-		if modelsCfg != nil && !modelsCfg.ShouldSync() {
+		if syncOff {
 			return mergeEnabledSyntheticMissing(b, nil)
 		}
-		if live := h.catalogInventory(r, b, list); len(live) > 0 {
-			live = mergeEnabledSyntheticMissing(b, live)
-			if h.invCache != nil {
-				h.invCache.put(b.ID, live)
-			}
-			return live
-		}
-		if h.invCache != nil {
-			if cached, ok := h.invCache.get(b.ID); ok {
-				return cached
-			}
-		}
-		return mergeEnabledSyntheticMissing(b, nil)
+		return h.liveOrCached(b, h.catalogInventory(r, b, list), nil)
 	}
-	if b.IsCloudflareExtension() && (modelsCfg == nil || modelsCfg.ShouldSync()) {
-		if live := h.cloudflareInventory(r, b); len(live) > 0 {
-			live = mergeEnabledSyntheticMissing(b, live)
-			if h.invCache != nil {
-				h.invCache.put(b.ID, live)
-			}
-			return live
-		}
-		if h.invCache != nil {
-			if cached, ok := h.invCache.get(b.ID); ok {
-				return cached
-			}
-		}
-		return mergeEnabledSyntheticMissing(b, nil)
+	if b.IsCloudflareExtension() && !syncOff {
+		return h.liveOrCached(b, h.cloudflareInventory(r, b), nil)
 	}
-	if modelsCfg != nil && !modelsCfg.ShouldSync() {
+	if syncOff {
 		return mergeEnabledSyntheticMissing(b, nil)
 	}
 	live := h.fetchBackendModelsProtected(r, b)
 	if isOpenRouterHost(b.BaseURL) {
 		live = mergeOpenRouterDecisionModels(r, b, live)
 	}
+	// No catalog and no cache: the configured seeds.
+	return h.liveOrCached(b, live, seedModelsForBackend(h.router.Registry().Config(), b.ID))
+}
+
+// liveOrCached returns the live list (and caches it), else the last cached list,
+// else fallback. Live and fallback lists gain the enabled synthetic models.
+func (h modelsHandler) liveOrCached(b config.BackendDef, live, fallback []openaiModel) []openaiModel {
 	if len(live) > 0 {
 		live = mergeEnabledSyntheticMissing(b, live)
 		if h.invCache != nil {
@@ -347,10 +330,7 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 			return cached
 		}
 	}
-	// No catalog: seeds + optional synthetic allow when gated.
-	out := seedModelsForBackend(h.router.Registry().Config(), b.ID)
-	out = mergeEnabledSyntheticMissing(b, out)
-	return out
+	return mergeEnabledSyntheticMissing(b, fallback)
 }
 
 func syntheticModels(backendID string, allow []string) []openaiModel {

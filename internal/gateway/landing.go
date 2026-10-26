@@ -148,14 +148,14 @@ func landingModelLinks(cfg config.RouterConfig) []landingLink {
 			Description: "Discovery index with model list URLs for each API surface.",
 		},
 		{
-			Href:        "/v1/apis/openai/models",
+			Href:        pathOpenAIModels,
 			Title:       "OpenAI models (enabled)",
 			Description: "Chat, vision, embed, audio, and router models allowed on this gateway.",
 		},
 	}
 	if cfg.EffectiveSystemOneBackend() != "" {
 		links = append(links, landingLink{
-			Href:        "/v1/apis/systemone/models",
+			Href:        pathSystemOneModels,
 			Title:       "SystemOne models",
 			Description: "TypeSafe and JEV decider models (POST /v1/systemone).",
 		})
