@@ -90,8 +90,8 @@ func (b *Board) breaker(name string) *gobreaker.CircuitBreaker {
 			if err == nil {
 				return true
 			}
-			// Quota and capacity 429s are caller-visible, not a dead upstream.
-			return derrors.CodeOf(err) == derrors.CodeRateLimited
+			// Quota and capacity 429s and caller errors (4xx) are caller-visible, not a dead upstream.
+			return callerVisible(derrors.CodeOf(err))
 		},
 	})
 	b.cb[name] = c
@@ -113,4 +113,18 @@ func mapExecuteErr(name string, err error) error {
 		return fmt.Errorf("upstream %s unavailable: %w", name, err)
 	}
 	return err
+}
+
+// callerVisible reports codes that describe the request, not the upstream's health.
+func callerVisible(code derrors.Code) bool {
+	switch code {
+	case derrors.CodeRateLimited, derrors.CodeInvalid, derrors.CodeUnauthorized,
+		derrors.CodeNotFound, derrors.CodeConflict:
+		return true
+	case derrors.CodeTimeout, derrors.CodeCanceled, derrors.CodeFailedPrecondition,
+		derrors.CodeUnavailable, derrors.CodeNotReady, derrors.CodeInternal, derrors.CodeUnimplemented:
+		return false
+	default:
+		return false
+	}
 }

@@ -197,3 +197,12 @@ backends:
 #     route:
 #       type: passthrough
 #       target: cf_local/@cf/google/gemma-4-26b-a4b-it
+#   turno:
+#     capability: chat
+#     route:
+#       # Tries targets in order: the next one answers only when the previous is unavailable
+#       # (5xx, timeout, or a Claude out-of-credit or overloaded refusal). No retries first.
+#       type: fallback
+#       targets:
+#         - claude_team/claude-sonnet-5-5
+#         - openrouter/anthropic/claude-sonnet-5.5

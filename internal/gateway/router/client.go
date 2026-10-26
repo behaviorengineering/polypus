@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -251,7 +252,7 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string,
 	c.applyAutoPromptCache(backendID, body, chatReq)
 	resp, berr := c.bf.ChatCompletionRequest(bctx, chatReq)
 	if berr != nil {
-		return nil, bifrostErr(berr, bifrostProviderHeader(bctx))
+		return nil, c.chatBifrostErr(backendID, berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.ChatCompletionRaw", "empty chat response from backend").
@@ -293,7 +294,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 	c.applyAutoPromptCache(backendID, body, chatReq)
 	stream, berr := c.bf.ChatCompletionStreamRequest(bctx, chatReq)
 	if berr != nil {
-		return nil, nil, bifrostErr(berr, bifrostProviderHeader(bctx))
+		return nil, nil, c.chatBifrostErr(backendID, berr, bifrostProviderHeader(bctx))
 	}
 	out := make(chan ChatStreamChunk, 16)
 	errCh := make(chan error, 1)
@@ -305,7 +306,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 				continue
 			}
 			if chunk.BifrostError != nil {
-				errCh <- bifrostErr(chunk.BifrostError, bifrostProviderHeader(bctx))
+				errCh <- c.chatBifrostErr(backendID, chunk.BifrostError, bifrostProviderHeader(bctx))
 				return
 			}
 			if chunk.BifrostChatResponse == nil {
@@ -546,6 +547,81 @@ func bifrostProviderHeader(bctx *schemas.BifrostContext) http.Header {
 		h.Add(k, v)
 	}
 	return h
+}
+
+// chatBifrostErr maps a chat error from Bifrost. Anthropic backends get the fallback-route
+// classification first; every other backend keeps bifrostErr.
+func (c *Client) chatBifrostErr(backendID string, berr *schemas.BifrostError, header http.Header) error {
+	if c != nil && c.reg != nil {
+		if b, ok := c.reg.Backend(backendID); ok && b.IsAnthropicExtension() {
+			if err := anthropicChatErr(berr); err != nil {
+				return err
+			}
+		}
+	}
+	return bifrostErr(berr, header)
+}
+
+// anthropicChatErr classifies Claude refusals for fallback routes. Out of credit and
+// overloaded become CodeNotReady (HTTP 503), which Switchyard treats as unavailable and
+// falls back on at once. Any other 4xx except 429 keeps a caller-visible 4xx code, so it
+// neither falls back nor trips the breaker. Returns nil to defer to bifrostErr.
+func anthropicChatErr(berr *schemas.BifrostError) error {
+	if berr == nil {
+		return nil
+	}
+	status, errType, msg := 0, "", "request failed"
+	if berr.StatusCode != nil {
+		status = *berr.StatusCode
+	}
+	if berr.Error != nil {
+		if berr.Error.Type != nil {
+			errType = strings.TrimSpace(*berr.Error.Type)
+		}
+		if m := strings.TrimSpace(berr.Error.Message); m != "" {
+			msg = m
+		}
+	}
+	var code derrors.Code
+	switch {
+	case anthropicOutOfCredit(status, errType, msg), status == anthropicOverloadedStatus, errType == "overloaded_error":
+		code = derrors.CodeNotReady
+	case status == http.StatusTooManyRequests || status < 400 || status >= 500:
+		return nil
+	default:
+		code = clientErrorCode(status)
+	}
+	out := derrors.New(code, "router.anthropic", msg).With("status", strconv.Itoa(status))
+	if errType != "" {
+		out = out.With("type", errType)
+	}
+	return out
+}
+
+// anthropicOverloadedStatus is Anthropic's non-standard overloaded status.
+const anthropicOverloadedStatus = 529
+
+// anthropicOutOfCredit reports a billing refusal: 402 billing_error, or a 400 whose
+// message says the credit balance is too low.
+func anthropicOutOfCredit(status int, errType, msg string) bool {
+	if status == http.StatusPaymentRequired || errType == "billing_error" {
+		return true
+	}
+	return status == http.StatusBadRequest && strings.Contains(strings.ToLower(msg), "credit balance")
+}
+
+// clientErrorCode maps an upstream 4xx to the closest domain code (HTTPStatus maps it back).
+func clientErrorCode(status int) derrors.Code {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return derrors.CodeUnauthorized
+	case http.StatusNotFound:
+		return derrors.CodeNotFound
+	case http.StatusConflict:
+		return derrors.CodeConflict
+	default:
+		return derrors.CodeInvalid
+	}
 }
 
 func bifrostErr(berr *schemas.BifrostError, header http.Header) error {
