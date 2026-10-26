@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
@@ -274,6 +276,8 @@ func (h modelsHandler) collectModelsForRetrieve(r *http.Request, asInventory boo
 	if !ok {
 		return h.collectModels(r, false)
 	}
+	r, cancel := withModelsBudget(r, cfg)
+	defer cancel()
 	results := []backendInventory{{backend: backendID, models: h.inventoryForBackend(r, b)}}
 	h.invCache.flush()
 	byID := mergeBackendInventories(cfg, false, results)
@@ -281,11 +285,24 @@ func (h modelsHandler) collectModelsForRetrieve(r *http.Request, asInventory boo
 	return finalizeModelList(catalog, byID)
 }
 
+// tracedProbeClient carries the model-list and health probes: no client Timeout
+// (the caller's ctx deadline bounds each call) and a client span per request.
+var tracedProbeClient = &http.Client{Transport: observability.WrapTransport(http.DefaultTransport)}
+
+// withModelsBudget bounds one models pass: the gateway sets the budget here, once,
+// so the catalog hops below never invent one. A sooner caller deadline still wins.
+func withModelsBudget(r *http.Request, cfg config.RouterConfig) (*http.Request, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(r.Context(), modelsWarmupTimeout(cfg))
+	return r.WithContext(ctx), cancel
+}
+
 func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openaiModel {
 	// Callers fall back here when there is no router, so this is the one guard.
 	if h.shared == nil || h.router == nil {
 		return nil
 	}
+	r, cancel := withModelsBudget(r, h.router.Registry().Config())
+	defer cancel()
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	ids := cfg.BackendIDs()
@@ -449,9 +466,9 @@ func openRouterModelsListURL(base string, modality string) string {
 
 func fetchBackendModelsAtURL(r *http.Request, b config.BackendDef, target string) ([]openaiModel, error) {
 	const op = "gateway.fetchBackendModels"
+	// r carries the models pass budget (withModelsBudget); outbound.Do fails closed
+	// without a deadline.
 	ctx := r.Context()
-	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, modelsListTimeout)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, op, "request").With("backend", b.ID)
@@ -468,8 +485,7 @@ func fetchBackendModelsAtURL(r *http.Request, b config.BackendDef, target string
 	} else if a := r.Header.Get("Authorization"); a != "" && !b.Remote {
 		req.Header.Set("Authorization", a)
 	}
-	client := &http.Client{Timeout: modelsListTimeout}
-	resp, err := outbound.Do(ctx, outbound.DepGateway, client, req)
+	resp, err := outbound.Do(ctx, outbound.DepGateway, tracedProbeClient, req)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, op, "get").With("backend", b.ID)
 	}

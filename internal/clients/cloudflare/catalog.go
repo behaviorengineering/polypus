@@ -21,8 +21,6 @@ import (
 )
 
 const (
-	modelsTimeout  = 30 * time.Second
-	pingTimeout    = 5 * time.Second
 	modelsCacheTTL = 10 * time.Minute
 	modelsPerPage  = 100
 	modelsMaxBody  = 8 << 20
@@ -78,7 +76,6 @@ func newClient(apiBase, token string) (*Client, error) {
 		apiBase: apiBase,
 		apiKey:  token,
 		httpClient: &http.Client{
-			Timeout:   modelsTimeout,
 			Transport: transport,
 		},
 		// Timeout 0: hop deadline comes from context (gateway ResolveSpeech).
@@ -93,13 +90,12 @@ func newClient(apiBase, token string) (*Client, error) {
 	}, nil
 }
 
-// Ping checks Cloudflare Model Search reachability (used by gateway health).
+// Ping checks Cloudflare Model Search reachability (used by gateway health). The
+// caller's ctx deadline bounds it.
 func (c *Client) Ping(ctx context.Context) error {
 	if c == nil {
 		return fmt.Errorf("cloudflare: not configured")
 	}
-	ctx, cancel := context.WithTimeout(ctx, pingTimeout)
-	defer cancel()
 	_, _, err := c.fetchPage(ctx, 1)
 	return err
 }
@@ -211,8 +207,6 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, modelsTimeout)
-	defer cancel()
 	resp, err := outbound.Do(ctx, outbound.DepCloudflare, c.httpClient, req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("cloudflare models: fetch: %w", err)

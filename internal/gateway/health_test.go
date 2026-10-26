@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -242,7 +243,9 @@ func TestProbeCloudflareCredentialsFailsOnPing401(t *testing.T) {
 	getCF := func(def config.BackendDef) (*cloudflare.Client, error) {
 		return cloudflare.NewClient(def)
 	}
-	err := probeRemoteCredentials(context.Background(), cfg, getCF)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := probeRemoteCredentials(ctx, cfg, getCF)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -274,7 +277,9 @@ func TestProbeCloudflareCredentialsFailsOnGetError(t *testing.T) {
 	getCF := func(def config.BackendDef) (*cloudflare.Client, error) {
 		return nil, fmt.Errorf("bad creds")
 	}
-	err := probeRemoteCredentials(context.Background(), cfg, getCF)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := probeRemoteCredentials(ctx, cfg, getCF)
 	if err == nil {
 		t.Fatal("expected error")
 	}

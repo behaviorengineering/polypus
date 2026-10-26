@@ -503,14 +503,13 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 
 func probeSwitchyard(ctx context.Context, baseURL string) error {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, backendProbeTimeout)
-	defer cancel()
+	// The health handler bounds ctx (backendProbeTimeout); outbound.Do fails closed
+	// without a deadline.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/health", nil)
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: backendProbeTimeout}
-	resp, err := outbound.Do(ctx, outbound.DepHealth, client, req)
+	resp, err := outbound.Do(ctx, outbound.DepHealth, tracedProbeClient, req)
 	if err != nil {
 		return err
 	}

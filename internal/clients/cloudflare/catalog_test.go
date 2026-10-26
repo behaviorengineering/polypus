@@ -1,7 +1,6 @@
 package cloudflare
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -57,7 +56,7 @@ func TestCatalogPaginated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list := client.ListModels(context.Background())
+	list := client.ListModels(hopCtx(t))
 	if list.Object != "list" {
 		t.Fatalf("object: %q", list.Object)
 	}
@@ -91,7 +90,7 @@ func TestPing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Ping(context.Background()); err != nil {
+	if err := client.Ping(hopCtx(t)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -113,11 +112,11 @@ func TestCatalogFailureEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list := client.ListModels(context.Background())
+	list := client.ListModels(hopCtx(t))
 	if list.Object != "list" || len(list.Data) != 0 {
 		t.Fatalf("want empty list, got %+v", list)
 	}
-	_, strictErr := client.ListModelsStrict(context.Background())
+	_, strictErr := client.ListModelsStrict(hopCtx(t))
 	if strictErr == nil {
 		t.Fatal("expected strict error with no cache")
 	}
@@ -147,11 +146,11 @@ func TestCatalogUsesFreshCacheWithoutRefetch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := client.ListModelsStrict(context.Background())
+	first, err := client.ListModelsStrict(hopCtx(t))
 	if err != nil || len(first.Data) != 1 {
 		t.Fatalf("first: %+v err=%v", first, err)
 	}
-	second, err := client.ListModelsStrict(context.Background())
+	second, err := client.ListModelsStrict(hopCtx(t))
 	if err != nil || len(second.Data) != 1 {
 		t.Fatalf("second: %+v err=%v", second, err)
 	}
@@ -183,7 +182,7 @@ func TestCatalogUnauthorizedStopsPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.ListModelsStrict(context.Background())
+	_, err = client.ListModelsStrict(hopCtx(t))
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -218,7 +217,7 @@ func TestPingRejectedKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = client.Ping(context.Background())
+	err = client.Ping(hopCtx(t))
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -251,11 +250,11 @@ func TestCatalogFailureUsesStaleCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := client.ListModelsStrict(context.Background())
+	first, err := client.ListModelsStrict(hopCtx(t))
 	if err != nil || len(first.Data) != 1 {
 		t.Fatalf("first: %+v err=%v", first, err)
 	}
-	second, err := client.ListModelsStrict(context.Background())
+	second, err := client.ListModelsStrict(hopCtx(t))
 	if err != nil {
 		t.Fatal(err)
 	}

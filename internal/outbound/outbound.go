@@ -163,17 +163,6 @@ func retryableErr(name string, err error) bool {
 	}
 }
 
-// WithDeadlineIfMissing sets a hop budget when ctx has no deadline.
-func WithDeadlineIfMissing(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	if ctx == nil {
-		return context.Background(), func() {}
-	}
-	if _, ok := ctx.Deadline(); ok {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, d)
-}
-
 func retryPolicyFor(name string) failsafe.Policy[any] {
 	return retrypolicy.NewBuilder[any]().
 		HandleIf(func(_ any, err error) bool {

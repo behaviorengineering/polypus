@@ -19,7 +19,6 @@ import (
 
 const (
 	defaultOpenAIModelsURL = "https://generativelanguage.googleapis.com/v1beta/openai/models"
-	modelsTimeout          = 30 * time.Second
 	modelsCacheTTL         = 10 * time.Minute
 	modelsMaxBody          = 4 << 20
 )
@@ -68,7 +67,6 @@ func newClient(listURL, token string) (*Client, error) {
 		listURL: listURL,
 		apiKey:  token,
 		httpClient: &http.Client{
-			Timeout:   modelsTimeout,
 			Transport: transport,
 		},
 		cache: catalog.NewCache(modelsCacheTTL),
@@ -104,8 +102,6 @@ func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 }
 
 func (c *Client) fetch(ctx context.Context) ([]Model, error) {
-	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, modelsTimeout)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.listURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("gemini models: request: %w", err)

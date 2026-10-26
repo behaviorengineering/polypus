@@ -443,8 +443,9 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 	if req.Speed != nil {
 		params.Speed = req.Speed
 	}
-	ctx, cancel := ensureSpeechDeadline(ctx, c.reg.Config().Timeouts)
-	defer cancel()
+	if err := requireDeadline(ctx, "router.speech"); err != nil {
+		return nil, err
+	}
 	bctx := c.bifrostContext(ctx, 0, false)
 	resp, berr := c.bf.SpeechRequest(bctx, &schemas.BifrostSpeechRequest{
 		Provider: provider,
@@ -497,8 +498,9 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	if lang := strings.TrimSpace(req.Language); lang != "" {
 		params.Language = schemas.Ptr(lang)
 	}
-	ctx, cancel := ensureSpeechDeadline(ctx, c.reg.Config().Timeouts)
-	defer cancel()
+	if err := requireDeadline(ctx, "router.transcribe"); err != nil {
+		return nil, "", err
+	}
 	bctx := c.bifrostContext(ctx, 0, false)
 	resp, berr := c.bf.TranscriptionRequest(bctx, &schemas.BifrostTranscriptionRequest{
 		Provider: provider,
@@ -527,12 +529,13 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	return body, "application/json", nil
 }
 
-func ensureSpeechDeadline(ctx context.Context, timeouts config.Timeouts) (context.Context, context.CancelFunc) {
-	if _, ok := ctx.Deadline(); ok {
-		return ctx, func() {}
+// requireDeadline fails closed when ctx carries no deadline: the gateway handler
+// sets the speech hop budget, and a leaf never invents one.
+func requireDeadline(ctx context.Context, op string) error {
+	if _, ok := ctx.Deadline(); !ok {
+		return derrors.New(derrors.CodeFailedPrecondition, op, "context deadline required")
 	}
-	d := time.Duration(timeouts.SpeechSeconds()) * time.Second
-	return context.WithTimeout(ctx, d)
+	return nil
 }
 
 func bifrostProviderHeader(bctx *schemas.BifrostContext) http.Header {
