@@ -39,10 +39,11 @@ func newSmokeRoot() *cobra.Command {
 		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
-	addCLIGroups(root)
 	root.AddCommand(newSmokeVersionCmd())
 	root.AddCommand(newSmokeModelsCmd())
 	root.AddCommand(newSmokeRunCmd())
+	addUsedGroups(root)
+	root.SetVersionTemplate("polypus-smoke {{.Version}}\n")
 	return root
 }
 

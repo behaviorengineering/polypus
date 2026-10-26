@@ -97,6 +97,9 @@ func newClient(apiBase, token string) (*Client, error) {
 // Ping checks Cloudflare Model Search reachability (used by gateway health). The
 // caller's ctx deadline bounds it.
 func (c *Client) Ping(ctx context.Context) error {
+	if ctx == nil {
+		return derrors.New(derrors.CodeInvalid, "cloudflare.Ping", "context required")
+	}
 	if c == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "cloudflare", "not configured")
 	}
@@ -112,6 +115,9 @@ func (c *Client) Ping(ctx context.Context) error {
 // warning is logged. Operators should treat that as degraded inventory, not a
 // fresh sync. With no cache, the dial error is returned.
 func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
+	if ctx == nil {
+		return ModelList{}, derrors.New(derrors.CodeInvalid, "cloudflare.ListModelsStrict", "context required")
+	}
 	if c == nil {
 		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, "cloudflare", "not configured")
 	}

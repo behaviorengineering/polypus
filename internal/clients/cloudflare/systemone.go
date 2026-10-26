@@ -18,6 +18,9 @@ import (
 // (that returns "No route for that URI"). Response is unwrapped from the
 // Workers AI {success, result, errors} envelope when present.
 func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]byte, error) {
+	if ctx == nil {
+		return nil, derrors.New(derrors.CodeInvalid, "cloudflare.SystemOne", "context required")
+	}
 	if c == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.SystemOne", "not configured")
 	}

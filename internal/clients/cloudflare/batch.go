@@ -70,6 +70,9 @@ func ModelSupportsBatch(model string) bool {
 
 // SubmitBatch queues an async Workers AI batch for the given model.
 func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string, lines []batch.InputLine) (string, error) {
+	if ctx == nil {
+		return "", derrors.New(derrors.CodeInvalid, "cloudflare.SubmitBatch", "context required")
+	}
 	if c == nil {
 		return "", derrors.New(derrors.CodeFailedPrecondition, "cloudflare.SubmitBatch", "not configured")
 	}
@@ -103,6 +106,9 @@ func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string,
 
 // PollBatch checks status or fetches completed responses for a queued batch.
 func (c *Client) PollBatch(ctx context.Context, model, cfRequestID string) (BatchPollResult, error) {
+	if ctx == nil {
+		return BatchPollResult{}, derrors.New(derrors.CodeInvalid, "cloudflare.PollBatch", "context required")
+	}
 	if c == nil {
 		return BatchPollResult{}, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.PollBatch", "not configured")
 	}

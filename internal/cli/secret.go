@@ -32,7 +32,6 @@ func newSecretCmd() *cobra.Command {
 			return exitStatus(2)
 		},
 	}
-	addCLIGroups(secret)
 	var o secretSetOpts
 	setCmd := &cobra.Command{
 		Use:     "set <ENV> [value]",

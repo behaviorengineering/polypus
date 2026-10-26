@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,7 @@ import (
 type processesOpts struct {
 	configPath string
 	printKey   string
+	jsonOut    bool
 }
 
 func newProcessesCmd() *cobra.Command {
@@ -27,18 +29,12 @@ func newProcessesCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&o.configPath, "config", "", "router config path (default POLYPUS_CONFIG resolution)")
 	cmd.Flags().StringVar(&o.printKey, "print", "", "print one key as 0/1 for scripts (mlx); an unset key prints nothing and exits 3")
+	cmd.Flags().BoolVar(&o.jsonOut, "json", false, `print {"mlx": true|false|null}`)
 	return cmd
 }
 
 func runProcesses(o processesOpts) int {
-	if o.configPath != "" {
-		if err := os.Setenv("POLYPUS_CONFIG", o.configPath); err != nil {
-			fmt.Fprintf(os.Stderr, "polypus processes: set POLYPUS_CONFIG: %v\n", err)
-			return 1
-		}
-	}
-
-	flags, err := config.LoadProcessFlags()
+	flags, err := config.LoadProcessFlagsFrom(o.configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus processes: %v\n", err)
 		return 1
@@ -49,11 +45,23 @@ func runProcesses(o processesOpts) int {
 		return printProcessKey(key, flags)
 	}
 
-	if flags.MLXSet() {
-		fmt.Printf("mlx=%v\n", *flags.MLX)
-	} else {
-		fmt.Println("mlx=unset")
+	if o.jsonOut {
+		if err := json.NewEncoder(os.Stdout).Encode(struct {
+			MLX *bool `json:"mlx"`
+		}{flags.MLX}); err != nil {
+			fmt.Fprintf(os.Stderr, "polypus processes: write json: %v\n", err)
+			return 1
+		}
+		return 0
 	}
+	state := "unset (process-compose decides)"
+	if flags.MLXSet() {
+		state = "disabled"
+		if *flags.MLX {
+			state = "enabled"
+		}
+	}
+	fmt.Printf("MLX process: %s\n", state)
 	return 0
 }
 

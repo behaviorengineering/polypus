@@ -2,6 +2,7 @@ package observability
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -26,8 +27,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.OTLPEndpoint != defaultOTLPEndpoint {
 		t.Fatalf("otlp=%s", cfg.OTLPEndpoint)
 	}
-	if cfg.DumpDir != defaultDumpDir {
-		t.Fatalf("dump=%s", cfg.DumpDir)
+	if want, _ := filepath.Abs(defaultDumpDir); cfg.DumpDir != want {
+		t.Fatalf("the default dump root resolves to an absolute path: %s", cfg.DumpDir)
 	}
 	if len(cfg.SkipPaths) != 3 || cfg.SkipPaths[0] != "/health" || cfg.SkipPaths[1] != "/health/backends" || cfg.SkipPaths[2] != "/health/upstreams" {
 		t.Fatalf("skip=%v", cfg.SkipPaths)
@@ -73,7 +74,7 @@ func TestPathIsSkipped(t *testing.T) {
 func TestLoadConfigDumpDirOverride(t *testing.T) {
 	t.Setenv("POLYPUS_FAILURE_DUMP_DIR", os.TempDir())
 	cfg := mustLoadConfig(t)
-	if cfg.DumpDir != os.TempDir() {
+	if cfg.DumpDir != filepath.Clean(os.TempDir()) {
 		t.Fatalf("dump=%s", cfg.DumpDir)
 	}
 }

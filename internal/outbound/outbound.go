@@ -260,7 +260,7 @@ func (p *Policies) Do(ctx context.Context, name string, client *http.Client, req
 		return nil, err
 	}
 	if client == nil {
-		client = http.DefaultClient
+		return nil, derrors.New(derrors.CodeInvalid, "outbound", "http client is required")
 	}
 	if req == nil {
 		return nil, derrors.New(derrors.CodeInvalid, "outbound", "nil request")
@@ -322,7 +322,7 @@ func (p *Policies) DoOnce(ctx context.Context, name string, client *http.Client,
 		return nil, err
 	}
 	if client == nil {
-		client = http.DefaultClient
+		return nil, derrors.New(derrors.CodeInvalid, "outbound", "http client is required")
 	}
 	if req == nil {
 		return nil, derrors.New(derrors.CodeInvalid, "outbound", "nil request")

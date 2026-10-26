@@ -19,29 +19,30 @@ func WriteAtomic(path string, content []byte, fileMode os.FileMode) error {
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WriteAtomic", "temp")
 	}
 	tmpName := tmp.Name()
+	// Until the rename lands, any failure closes and removes the temp file.
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = tmp.Close()        // closed already if only the rename failed; closing twice is harmless.
+			_ = os.Remove(tmpName) // best effort: a stray .tmp-* is the only cost.
+		}
+	}()
 	if err := tmp.Chmod(fileMode); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WriteAtomic", "chmod")
 	}
 	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WriteAtomic", "write")
 	}
 	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WriteAtomic", "sync")
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WriteAtomic", "close")
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WriteAtomic", "rename")
 	}
+	renamed = true
 	syncDir(dir)
 	return nil
 }

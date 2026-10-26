@@ -28,10 +28,6 @@ func newRoot() *cobra.Command {
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
 
-	root.AddGroup(&cobra.Group{ID: groupInspect, Title: "Inspect & Validate"})
-	root.AddGroup(&cobra.Group{ID: groupSetup, Title: "Setup & secrets"})
-	root.AddGroup(&cobra.Group{ID: groupMutate, Title: "Execute & Mutate"})
-
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newProcessesCmd())
 	root.AddCommand(newInitCmd())
@@ -39,14 +35,14 @@ func newRoot() *cobra.Command {
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newSwitchyardRenderCmd())
 	root.AddCommand(newAdminKeyCmd())
-
+	addUsedGroups(root)
+	root.SetVersionTemplate("polypus {{.Version}}\n")
 	return root
 }
 
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "version",
-		Aliases: []string{"-version"},
 		Short:   "Build identity",
 		GroupID: groupInspect,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -56,12 +52,27 @@ func newVersionCmd() *cobra.Command {
 	}
 }
 
-func addCLIGroups(cmd *cobra.Command) {
-	cmd.AddGroup(
-		&cobra.Group{ID: groupInspect, Title: "Inspect & Validate"},
-		&cobra.Group{ID: groupSetup, Title: "Setup & secrets"},
-		&cobra.Group{ID: groupMutate, Title: "Execute & Mutate"},
-	)
+// groupTitles names the help groups, in the order help lists them.
+var groupTitles = []cobra.Group{
+	{ID: groupInspect, Title: "Inspect & Validate"},
+	{ID: groupSetup, Title: "Setup & secrets"},
+	{ID: groupMutate, Title: "Execute & Mutate"},
+}
+
+// addUsedGroups gives root and every command under it the help groups its
+// subcommands use, so help never shows an empty group heading.
+func addUsedGroups(root *cobra.Command) {
+	for _, cmd := range polypusCommands(root) {
+		used := make(map[string]bool)
+		for _, c := range cmd.Commands() {
+			used[c.GroupID] = true
+		}
+		for _, g := range groupTitles {
+			if used[g.ID] && !cmd.ContainsGroup(g.ID) {
+				cmd.AddGroup(&cobra.Group{ID: g.ID, Title: g.Title})
+			}
+		}
+	}
 }
 
 func newServeCmd() *cobra.Command {

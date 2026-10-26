@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"strings"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // streamSSEAction describes how the gateway treated one OpenAI chat stream chunk.
@@ -204,14 +206,15 @@ func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action strea
 
 // copyOpenAIChatStream applies sanitizeOpenAIStreamChunk to each SSE data frame from src.
 func copyOpenAIChatStream(ctx context.Context, dst io.Writer, src io.Reader, stripExtraFields bool) (int64, error) {
+	if ctx == nil {
+		return 0, derrors.New(derrors.CodeInvalid, "gateway.copyOpenAIChatStream", "context required")
+	}
 	c := &sseCopier{ctx: ctx, dst: dst, san: newOpenAIStreamSanitizer(), strip: stripExtraFields}
 	br := bufio.NewReader(src)
 	var event bytes.Buffer
 	for {
-		if ctx != nil {
-			if err := ctx.Err(); err != nil {
-				return c.written, err
-			}
+		if err := ctx.Err(); err != nil {
+			return c.written, err
 		}
 		line, err := br.ReadString('\n')
 		switch {

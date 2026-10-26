@@ -48,6 +48,9 @@ type TranscriptionRequest struct {
 
 // Synthesize calls Workers AI TTS (Deepgram Aura).
 func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, string, error) {
+	if ctx == nil {
+		return nil, "", derrors.New(derrors.CodeInvalid, "cloudflare.Synthesize", "context required")
+	}
 	if c == nil {
 		return nil, "", derrors.New(derrors.CodeFailedPrecondition, "cloudflare.Synthesize", "not configured")
 	}
@@ -101,6 +104,9 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, str
 
 // Transcribe calls Workers AI STT (Deepgram Nova-3).
 func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (string, error) {
+	if ctx == nil {
+		return "", derrors.New(derrors.CodeInvalid, "cloudflare.Transcribe", "context required")
+	}
 	if c == nil {
 		return "", derrors.New(derrors.CodeFailedPrecondition, "cloudflare.Transcribe", "not configured")
 	}

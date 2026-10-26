@@ -48,11 +48,30 @@ func LoadProcessFlags() (ProcessFlags, error) {
 }
 
 // loadProcessFlags is LoadProcessFlags before its error is typed at the package boundary.
+// LoadProcessFlagsFrom reads process toggles from the config at path, or from the
+// resolved config when path is empty.
+func LoadProcessFlagsFrom(path string) (ProcessFlags, error) {
+	if strings.TrimSpace(path) == "" {
+		return LoadProcessFlags()
+	}
+	out, err := readProcessFlags(path)
+	if err != nil {
+		return ProcessFlags{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.LoadProcessFlagsFrom", "process flags")
+	}
+	return out, nil
+}
+
 func loadProcessFlags() (ProcessFlags, error) {
 	path, err := ResolveConfigPathWithError()
 	if err != nil {
 		return ProcessFlags{}, fmt.Errorf("process flags: %w", err)
 	}
+	return readProcessFlags(path)
+}
+
+// readProcessFlags reads the processes block of the config at path; no path means
+// no flags.
+func readProcessFlags(path string) (ProcessFlags, error) {
 	if path == "" {
 		return ProcessFlags{}, nil
 	}

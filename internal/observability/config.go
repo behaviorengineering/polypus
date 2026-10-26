@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -72,6 +73,15 @@ func LoadConfig() (Config, error) {
 		cfg.OTLPEndpoint = defaultOTLPEndpoint
 	}
 	cfg.Enabled = boolEnv("POLYPUS_OTEL_ENABLED", cfg.Enabled)
+	// Dumps must be findable after the process exits: resolve the root against the
+	// working directory now, so the logged path is the real one.
+	if cfg.DumpDir != "" {
+		abs, err := filepath.Abs(cfg.DumpDir)
+		errs = append(errs, err)
+		if err == nil {
+			cfg.DumpDir = abs
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		return cfg, derrors.Wrap(err, derrors.CodeInvalid, "observability.LoadConfig", "environment")
 	}

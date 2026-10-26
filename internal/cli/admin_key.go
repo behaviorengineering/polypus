@@ -43,7 +43,6 @@ func newAdminKeyCmd() *cobra.Command {
 			return exitStatus(2)
 		},
 	}
-	addCLIGroups(adminKey)
 	adminKey.AddCommand(newAdminKeySubcommand("list", "List gateway access key metadata (no secrets)", groupInspect, false, runAdminKeyList))
 	adminKey.AddCommand(newAdminKeySubcommand("generate", "Create gateway access key (plaintext once)", groupMutate, true, runAdminKeyGenerate))
 	adminKey.AddCommand(newAdminKeySubcommand("rotate", "Rotate gateway access key secret", groupMutate, true, runAdminKeyRotate))
@@ -93,13 +92,13 @@ func runAdminKeyDelete(o adminKeyOpts) int {
 	if !o.yes && !confirmed("delete", "delete admin API key", o.name) {
 		return 1
 	}
-	if o.dryRun {
-		return 0
-	}
 	s, err := openAdminKeyStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus admin-key delete: %v\n", err)
 		return 1
+	}
+	if o.dryRun {
+		return dryRunDelete(s, o.name)
 	}
 	if err := s.Delete(o.name); err != nil {
 		fmt.Fprintf(os.Stderr, "polypus admin-key delete: %v\n", err)
@@ -110,6 +109,23 @@ func runAdminKeyDelete(o adminKeyOpts) int {
 	}
 	fmt.Fprintf(os.Stderr, "polypus admin-key delete: removed %s\n", o.name)
 	return 0
+}
+
+// dryRunDelete reports what delete would remove, failing when the key is not there.
+func dryRunDelete(s *keys.Store, name string) int {
+	recs, err := s.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "polypus admin-key delete: %v\n", err)
+		return 1
+	}
+	for _, r := range recs {
+		if r.Name == name {
+			fmt.Fprintf(os.Stderr, "polypus admin-key delete: dry-run: would remove %s (%s)\n", name, r.Prefix)
+			return 0
+		}
+	}
+	fmt.Fprintf(os.Stderr, "polypus admin-key delete: dry-run: no key named %s\n", name)
+	return 1
 }
 
 func runAdminKeyList(o adminKeyOpts) int {
@@ -125,6 +141,10 @@ func runAdminKeyList(o adminKeyOpts) int {
 	}
 	if o.jsonOut {
 		return writeJSONResult("list", adminKeyListJSON{Keys: recs})
+	}
+	if len(recs) == 0 {
+		fmt.Println("No admin keys.")
+		return 0
 	}
 	for _, r := range recs {
 		fmt.Printf("Name: %s\n", r.Name)
