@@ -189,15 +189,23 @@ func landingOTLPEndpointURL(r *http.Request, port string) string {
 	return requestScheme(r) + "://" + requestHostname(r) + ":" + port
 }
 
+// Ports of the local observability stack the landing page links to.
+const (
+	phoenixUIPort = "6006"
+	hyperdxUIPort = "8080"
+	otlpGRPCPort  = "4317"
+	otlpHTTPPort  = "4318"
+)
+
 func landingObservabilityUILinks(r *http.Request) []landingLink {
 	return []landingLink{
 		{
-			Href:        landingHostPortURL(r, "6006") + "/",
+			Href:        landingHostPortURL(r, phoenixUIPort) + "/",
 			Title:       "Phoenix (Arize)",
 			Description: "OpenInference LLM traces for chat and router spans.",
 		},
 		{
-			Href:        landingHostPortURL(r, "8080") + "/",
+			Href:        landingHostPortURL(r, hyperdxUIPort) + "/",
 			Title:       "HyperDX (OpenTelemetry)",
 			Description: "APM traces and logs.",
 		},
@@ -205,8 +213,8 @@ func landingObservabilityUILinks(r *http.Request) []landingLink {
 }
 
 func landingOTLPNote(r *http.Request) string {
-	grpc := landingOTLPEndpointURL(r, "4317")
-	httpURL := landingOTLPEndpointURL(r, "4318")
+	grpc := landingOTLPEndpointURL(r, otlpGRPCPort)
+	httpURL := landingOTLPEndpointURL(r, otlpHTTPPort)
 	return "OTEL_EXPORTER_OTLP_ENDPOINT\n" +
 		"grpc: " + grpc + "\n" +
 		"http: " + httpURL

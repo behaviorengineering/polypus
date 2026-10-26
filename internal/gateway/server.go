@@ -53,6 +53,7 @@ type shared struct {
 	uiMounts      []uiProxyMount
 	log           *slog.Logger
 	compat        openaicompat.Client
+	models        config.ModelsInventory
 }
 
 // gatewayHandler is the Polypus HTTP mux (controller) over capability handlers.
@@ -154,10 +155,15 @@ func newShared(opts config.ServeOptions, ho handlerOptions, rc gatewayRouter, rc
 	if err != nil {
 		return nil, fmt.Errorf("gateway: batch store: %w", err)
 	}
+	models, err := config.LoadModelsInventory()
+	if err != nil {
+		return nil, fmt.Errorf("gateway: %w", err)
+	}
 	sh := &shared{
+		models:        models,
 		opts:          opts,
 		router:        rc,
-		invCache:      newModelsInventoryCache(ho.logger),
+		invCache:      newModelsInventoryCache(ho.logger, models.CacheTTL),
 		timeouts:      timeouts,
 		client:        newChatProxyClient(timeouts.Max),
 		upstreams:     upstream.NewBoard(),
@@ -628,7 +634,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	hop := h.timeouts.ResolveEmbed(r.Header.Get(config.TimeoutHeader))
 	err = h.upstreams.Execute(backendID, func() error {
 		if h.router.UsesBifrost(backendID) {
-			raw, bifrostErr := h.router.EmbeddingRaw(r.Context(), backendID, downstream, rewritten, hop)
+			raw, bifrostErr := h.router.EmbeddingRaw(r.Context(), router.Call{BackendID: backendID, Model: downstream, Body: rewritten, Timeout: hop})
 			if bifrostErr != nil {
 				return bifrostErr
 			}
@@ -647,6 +653,10 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+
+// transcriptionMaxMemory is how much of a multipart upload stays in memory; the rest
+// spills to temp files.
+const transcriptionMaxMemory = 32 << 20
 
 // Request body caps. Past them MaxBytesReader fails the read and writeHandlerError
 // answers 413.
@@ -719,7 +729,7 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 
 func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, transcriptionMaxBody)
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	if err := r.ParseMultipartForm(transcriptionMaxMemory); err != nil {
 		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "multipart"))
 		return
 	}

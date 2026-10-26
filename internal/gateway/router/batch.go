@@ -68,17 +68,12 @@ func (b *ClaudeBatches) Create(ctx context.Context, backendID, model string, lin
 }
 
 func (c *Client) claudeBatchParams(bctx *schemas.BifrostContext, backendID, model string, body []byte) (map[string]any, error) {
-	var envelope struct {
-		Messages []schemas.ChatMessage `json:"messages"`
-	}
 	const op = "router.claudeBatchParams"
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInvalid, op, "parse line body")
+	messages, err := parseChatMessages(op, body)
+	if err != nil {
+		return nil, err
 	}
-	if len(envelope.Messages) == 0 {
-		return nil, derrors.New(derrors.CodeInvalid, op, "messages required")
-	}
-	req, err := bifrostChatRequest(backendID, model, envelope.Messages, body, false)
+	req, err := bifrostChatRequest(backendID, model, messages, body, false)
 	if err != nil {
 		return nil, err
 	}

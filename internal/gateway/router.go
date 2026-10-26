@@ -26,9 +26,9 @@ type registryProvider interface {
 // chatRouter is the Bifrost/OpenAI chat and embed dial surface (≤4 methods).
 type chatRouter interface {
 	UsesBifrost(backendID string) bool
-	ChatCompletionRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) ([]byte, error)
-	ChatCompletionStreamRaw(ctx context.Context, backendID, model string, body []byte) (<-chan router.ChatStreamChunk, <-chan error, error)
-	EmbeddingRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) ([]byte, error)
+	ChatCompletionRaw(ctx context.Context, call router.Call) ([]byte, error)
+	ChatCompletionStreamRaw(ctx context.Context, call router.Call) (<-chan router.ChatStreamChunk, <-chan error, error)
+	EmbeddingRaw(ctx context.Context, call router.Call) ([]byte, error)
 }
 
 // speechRouter is the TTS/STT dial surface (≤2 methods).
@@ -39,7 +39,7 @@ type speechRouter interface {
 
 // systemOneRouter is the Bifrost Decision dial surface for native OpenRouter SystemOne.
 type systemOneRouter interface {
-	SystemOneDecisionRaw(ctx context.Context, backendID, downstream string, body []byte, timeout time.Duration) ([]byte, error)
+	SystemOneDecisionRaw(ctx context.Context, call router.Call) ([]byte, error)
 }
 
 // gatewayRouter is the composed gateway dial dependency (Registry + Chat + Speech + SystemOne).

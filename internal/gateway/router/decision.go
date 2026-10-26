@@ -3,7 +3,6 @@ package router
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/maximhq/bifrost/core/providers/typesafe"
@@ -12,7 +11,8 @@ import (
 
 // SystemOneDecisionRaw sends a TypeSafe-shaped SystemOne body via Bifrost Decision.
 // The backend must be registered as native OpenRouter (CustomProviderConfig nil).
-func (c *Client) SystemOneDecisionRaw(ctx context.Context, backendID, downstream string, body []byte, timeout time.Duration) ([]byte, error) {
+func (c *Client) SystemOneDecisionRaw(ctx context.Context, call Call) ([]byte, error) {
+	backendID, downstream, body, timeout := call.BackendID, call.Model, call.Body, call.Timeout
 	if c == nil || c.bf == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.SystemOneDecisionRaw", "bifrost not configured")
 	}

@@ -1,6 +1,9 @@
 package upstream
 
 import (
+	"slices"
+	"strings"
+
 	"github.com/sony/gobreaker"
 )
 
@@ -36,6 +39,8 @@ func (b *Board) Snapshot() []Snapshot {
 			ConsecutiveFailures: counts.ConsecutiveFailures,
 		})
 	}
+	// A stable order, so /health/upstreams lists the same way on every call.
+	slices.SortFunc(out, func(a, b Snapshot) int { return strings.Compare(a.Name, b.Name) })
 	return out
 }
 

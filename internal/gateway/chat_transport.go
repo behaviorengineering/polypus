@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -65,14 +66,14 @@ func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, 
 func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request, c chatCall) error {
 	backendID, model, body, hop := c.target.id, c.target.downstream, c.body, c.hop
 	if c.stream {
-		chunks, errCh, err := h.router.ChatCompletionStreamRaw(r.Context(), backendID, model, body)
+		chunks, errCh, err := h.router.ChatCompletionStreamRaw(r.Context(), router.Call{BackendID: backendID, Model: model, Body: body})
 		if err != nil {
 			return gatewayErr(err, "gateway.bifrostChatResponse", "stream").With("backend", backendID)
 		}
 		ctx := withStreamChunkCounter(r.Context(), h.log)
 		return writeBifrostChatSSE(ctx, w, chunks, errCh)
 	}
-	raw, err := h.router.ChatCompletionRaw(r.Context(), backendID, model, body, hop)
+	raw, err := h.router.ChatCompletionRaw(r.Context(), router.Call{BackendID: backendID, Model: model, Body: body, Timeout: hop})
 	if err != nil {
 		return gatewayErr(err, "gateway.bifrostChatResponse", "chat").With("backend", backendID)
 	}
@@ -80,7 +81,7 @@ func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request,
 		raw = fixed
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(raw)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 	w.WriteHeader(http.StatusOK)
 	_, err = w.Write(raw)
 	if err != nil {

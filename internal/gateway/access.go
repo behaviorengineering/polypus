@@ -99,11 +99,12 @@ func bearerOrBasicToken(header string) string {
 	if header == "" {
 		return ""
 	}
-	if len(header) >= 7 && strings.EqualFold(header[:6], "bearer") {
-		return strings.TrimSpace(header[6:])
+	// The scheme needs its separating space: "BearerXYZ" is not a bearer token.
+	if len(header) > 7 && strings.EqualFold(header[:7], "bearer ") {
+		return strings.TrimSpace(header[7:])
 	}
-	if len(header) >= 6 && strings.EqualFold(header[:5], "basic") {
-		raw := strings.TrimSpace(header[5:])
+	if len(header) > 6 && strings.EqualFold(header[:6], "basic ") {
+		raw := strings.TrimSpace(header[6:])
 		dec, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil {
 			return ""

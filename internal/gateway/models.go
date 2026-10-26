@@ -23,8 +23,7 @@ import (
 )
 
 const (
-	modelsListTimeout       = 5 * time.Second
-	modelsInventoryCacheTTL = time.Hour
+	modelsListTimeout = 5 * time.Second
 )
 
 // openaiModel is the OpenAI Models API object (list + retrieve).
@@ -57,13 +56,7 @@ type modelsCacheEntry struct {
 	Models []openaiModel `json:"models"`
 }
 
-func newModelsInventoryCache(log *slog.Logger) *modelsInventoryCache {
-	ttl := modelsInventoryCacheTTL
-	if raw := strings.TrimSpace(os.Getenv("POLYPUS_MODELS_CACHE_TTL")); raw != "" {
-		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
-			ttl = d
-		}
-	}
+func newModelsInventoryCache(log *slog.Logger, ttl time.Duration) *modelsInventoryCache {
 	path, err := config.ResolveModelsInventoryCachePath()
 	if err != nil {
 		// The disk cache is optional: run memory-only and say why.

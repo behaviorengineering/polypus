@@ -107,6 +107,31 @@ func (p *runSpeechPlugin) cfBackend(provider schemas.ModelProvider) (config.Back
 	return b, true
 }
 
+// resolveClient checks the call has a deadline and gets the backend's client, or
+// returns the short circuit that reports why it cannot run.
+func (p *runSpeechPlugin) resolveClient(ctx *schemas.BifrostContext, b config.BackendDef, model, kind string) (*Client, *schemas.LLMPluginShortCircuit) {
+	if _, ok := ctx.Deadline(); !ok {
+		err := derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
+			With("backend", b.ID).
+			With("model", model)
+		return nil, p.shortCircuitFail(ctx, b, model, kind, err, true)
+	}
+	cf, err := p.get(b)
+	if err != nil {
+		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "client").
+			With("backend", b.ID).
+			With("model", model)
+		return nil, p.shortCircuitFail(ctx, b, model, kind, wrapped, false)
+	}
+	if cf == nil {
+		err := derrors.New(derrors.CodeInternal, "cloudflare.runSpeech", "client nil").
+			With("backend", b.ID).
+			With("model", model)
+		return nil, p.shortCircuitFail(ctx, b, model, kind, err, true)
+	}
+	return cf, nil
+}
+
 func (p *runSpeechPlugin) shortCircuitSpeech(
 	ctx *schemas.BifrostContext,
 	b config.BackendDef,
@@ -117,24 +142,9 @@ func (p *runSpeechPlugin) shortCircuitSpeech(
 		return p.shortCircuitFail(ctx, b, "", "speech", err, true)
 	}
 	model := sr.Model
-	if _, ok := ctx.Deadline(); !ok {
-		err := derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
-			With("backend", b.ID).
-			With("model", model)
-		return p.shortCircuitFail(ctx, b, model, "speech", err, true)
-	}
-	cf, err := p.get(b)
-	if err != nil {
-		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "client").
-			With("backend", b.ID).
-			With("model", model)
-		return p.shortCircuitFail(ctx, b, model, "speech", wrapped, false)
-	}
-	if cf == nil {
-		err := derrors.New(derrors.CodeInternal, "cloudflare.runSpeech", "client nil").
-			With("backend", b.ID).
-			With("model", model)
-		return p.shortCircuitFail(ctx, b, model, "speech", err, true)
+	cf, fail := p.resolveClient(ctx, b, model, "speech")
+	if fail != nil {
+		return fail
 	}
 	input := ""
 	if sr.Input != nil {
@@ -183,24 +193,9 @@ func (p *runSpeechPlugin) shortCircuitTranscription(
 		return p.shortCircuitFail(ctx, b, "", "transcription", err, true)
 	}
 	model := tr.Model
-	if _, ok := ctx.Deadline(); !ok {
-		err := derrors.New(derrors.CodeFailedPrecondition, "cloudflare.runSpeech", "context deadline required").
-			With("backend", b.ID).
-			With("model", model)
-		return p.shortCircuitFail(ctx, b, model, "transcription", err, true)
-	}
-	cf, err := p.get(b)
-	if err != nil {
-		wrapped := derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.runSpeech", "client").
-			With("backend", b.ID).
-			With("model", model)
-		return p.shortCircuitFail(ctx, b, model, "transcription", wrapped, false)
-	}
-	if cf == nil {
-		err := derrors.New(derrors.CodeInternal, "cloudflare.runSpeech", "client nil").
-			With("backend", b.ID).
-			With("model", model)
-		return p.shortCircuitFail(ctx, b, model, "transcription", err, true)
+	cf, fail := p.resolveClient(ctx, b, model, "transcription")
+	if fail != nil {
+		return fail
 	}
 	var file []byte
 	filename := ""

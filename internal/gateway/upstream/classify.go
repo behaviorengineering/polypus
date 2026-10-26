@@ -97,16 +97,12 @@ func hasCloudflareMetadata(err error) bool {
 }
 
 func hasCloudflareOp(err error) bool {
-	var de *derrors.Error
-	for e := err; e != nil; {
-		if errors.As(e, &de) && de != nil {
-			if strings.HasPrefix(de.Op(), "cloudflare.") {
-				return true
-			}
-		}
-		e = errors.Unwrap(e)
-	}
-	return false
+	found := false
+	derrors.Walk(err, func(de *derrors.Error) bool {
+		found = strings.HasPrefix(de.Op(), "cloudflare.")
+		return !found
+	})
+	return found
 }
 
 // upstreamNameFromUnavailable is the upstream a breaker refusal names, if any.

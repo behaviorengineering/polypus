@@ -21,6 +21,18 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// Call is one request to a backend through Bifrost.
+type Call struct {
+	BackendID string
+	// Model is the model id the backend receives.
+	Model string
+	// Body is the OpenAI-shaped request body.
+	Body []byte
+	// Timeout bounds a non-stream call; streams ignore it (the client's cancel and
+	// the gateway's idle limit bound them).
+	Timeout time.Duration
+}
+
 // Client wraps Bifrost for Polypus multi-backend routing (speech, chat, embed).
 type Client struct {
 	bf               *bifrost.Bifrost
@@ -246,22 +258,18 @@ func chatParamsFromOpenAIBody(body []byte) (*schemas.ChatParameters, error) {
 }
 
 // ChatCompletionRaw sends an OpenAI-shaped chat body via Bifrost (non-streaming).
-func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) ([]byte, error) {
+func (c *Client) ChatCompletionRaw(ctx context.Context, call Call) ([]byte, error) {
+	backendID, model, body, timeout := call.BackendID, call.Model, call.Body, call.Timeout
 	if c == nil || c.bf == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.ChatCompletionRaw", "bifrost not configured")
 	}
-	var envelope struct {
-		Messages []schemas.ChatMessage `json:"messages"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInvalid, "router.ChatCompletionRaw", "parse chat body")
-	}
-	if len(envelope.Messages) == 0 {
-		return nil, derrors.New(derrors.CodeInvalid, "router.ChatCompletionRaw", "messages required")
+	messages, err := parseChatMessages("router.ChatCompletionRaw", body)
+	if err != nil {
+		return nil, err
 	}
 	useRaw := c.bifrostUseRawChatBody(backendID)
 	bctx := c.bifrostContext(ctx, timeout, useRaw)
-	chatReq, err := bifrostChatRequest(backendID, model, envelope.Messages, body, useRaw)
+	chatReq, err := bifrostChatRequest(backendID, model, messages, body, useRaw)
 	if err != nil {
 		return nil, err
 	}
@@ -285,24 +293,20 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string,
 // ChatCompletionStreamRaw streams OpenAI-shaped chat via Bifrost.
 // Each channel value is one JSON chat.completion.chunk object (not SSE-framed).
 // The channel is closed when the stream ends; streamErr receives at most one terminal error.
-func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model string, body []byte) (<-chan ChatStreamChunk, <-chan error, error) {
+func (c *Client) ChatCompletionStreamRaw(ctx context.Context, call Call) (<-chan ChatStreamChunk, <-chan error, error) {
+	backendID, model, body := call.BackendID, call.Model, call.Body
 	if c == nil || c.bf == nil {
 		return nil, nil, derrors.New(derrors.CodeFailedPrecondition, "router.ChatCompletionStreamRaw", "bifrost not configured")
 	}
-	var envelope struct {
-		Messages []schemas.ChatMessage `json:"messages"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, nil, derrors.Wrap(err, derrors.CodeInvalid, "router.ChatCompletionStreamRaw", "parse chat body")
-	}
-	if len(envelope.Messages) == 0 {
-		return nil, nil, derrors.New(derrors.CodeInvalid, "router.ChatCompletionStreamRaw", "messages required")
+	messages, err := parseChatMessages("router.ChatCompletionStreamRaw", body)
+	if err != nil {
+		return nil, nil, err
 	}
 	// Streams use client cancel only (no Bifrost wall-clock deadline), matching hop
 	// timeout rules on the HTTP proxy path; the gateway's idle limit bounds a stall.
 	useRaw := c.bifrostUseRawChatBody(backendID)
 	bctx := c.bifrostContext(ctx, 0, useRaw)
-	chatReq, err := bifrostChatRequest(backendID, model, envelope.Messages, body, useRaw)
+	chatReq, err := bifrostChatRequest(backendID, model, messages, body, useRaw)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -344,7 +348,8 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 }
 
 // EmbeddingRaw sends an OpenAI-shaped embeddings body via Bifrost.
-func (c *Client) EmbeddingRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) ([]byte, error) {
+func (c *Client) EmbeddingRaw(ctx context.Context, call Call) ([]byte, error) {
+	backendID, model, body, timeout := call.BackendID, call.Model, call.Body, call.Timeout
 	if c == nil || c.bf == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.EmbeddingRaw", "bifrost not configured")
 	}
@@ -748,4 +753,19 @@ func rawProviderJSON(raw any) ([]byte, error) {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// parseChatMessages reads the messages of an OpenAI chat body; a body without any is
+// invalid input. op names the caller in the error.
+func parseChatMessages(op string, body []byte) ([]schemas.ChatMessage, error) {
+	var envelope struct {
+		Messages []schemas.ChatMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, op, "parse chat body")
+	}
+	if len(envelope.Messages) == 0 {
+		return nil, derrors.New(derrors.CodeInvalid, op, "messages required")
+	}
+	return envelope.Messages, nil
 }

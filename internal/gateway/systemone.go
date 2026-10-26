@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -106,7 +107,7 @@ func (h systemOneHandler) proxyBifrostSystemOne(w http.ResponseWriter, r *http.R
 	if h.router == nil {
 		return derrors.New(derrors.CodeNotReady, "gateway.proxyBifrostSystemOne", "router not configured")
 	}
-	raw, err := h.router.SystemOneDecisionRaw(r.Context(), c.backend.ID, c.downstream, c.body, c.hop)
+	raw, err := h.router.SystemOneDecisionRaw(r.Context(), router.Call{BackendID: c.backend.ID, Model: c.downstream, Body: c.body, Timeout: c.hop})
 	if err != nil {
 		return gatewayErr(err, "gateway.proxyBifrostSystemOne", "decision").With("backend", c.backend.ID)
 	}

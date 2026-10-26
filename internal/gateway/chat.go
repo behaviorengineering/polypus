@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -196,7 +197,7 @@ func (d chatDial) writeResponse(w http.ResponseWriter, r *http.Request, resp *ht
 		}
 	}
 	copyChatResponseHeaders(w, resp.Header)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(raw)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 	w.WriteHeader(status)
 	if _, err := w.Write(raw); err != nil {
 		return afterHeaders(r.Context(), err, true, "gateway.proxyChat", "write response")
@@ -218,7 +219,7 @@ func (d chatDial) writeStreamResponse(w http.ResponseWriter, r *http.Request, re
 			status = http.StatusTooManyRequests
 		}
 		copyChatResponseHeaders(w, resp.Header)
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(raw)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 		w.WriteHeader(status)
 		_, err = w.Write(raw)
 		observability.RecordProxyIO(r.Context(), target, streaming, status, len(raw))

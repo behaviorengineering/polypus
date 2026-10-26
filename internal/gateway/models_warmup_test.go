@@ -7,27 +7,6 @@ import (
 	"time"
 )
 
-func TestModelsRefreshIntervalDefault(t *testing.T) {
-	t.Setenv("POLYPUS_MODELS_REFRESH_INTERVAL", "")
-	if modelsRefreshInterval() != defaultModelsRefreshInterval {
-		t.Fatalf("got %v", modelsRefreshInterval())
-	}
-}
-
-func TestModelsRefreshDisabled(t *testing.T) {
-	for _, v := range []string{"off", "0", "false"} {
-		t.Setenv("POLYPUS_MODELS_REFRESH_INTERVAL", v)
-		if modelsRefreshInterval() != 0 {
-			t.Fatalf("value %q: got %v", v, modelsRefreshInterval())
-		}
-	}
-	t.Setenv("POLYPUS_MODELS_WARMUP", "off")
-	t.Setenv("POLYPUS_MODELS_REFRESH_INTERVAL", "30m")
-	if modelsRefreshEnabled() {
-		t.Fatal("warmup off should disable refresh loop")
-	}
-}
-
 func TestModelsRefreshLoopCancels(t *testing.T) {
 	tick := make(chan time.Time)
 	factory := func(time.Duration) (<-chan time.Time, func()) {

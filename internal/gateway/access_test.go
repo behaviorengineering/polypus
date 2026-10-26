@@ -137,3 +137,12 @@ func TestAccessCorruptKeyStoreFailsClosed(t *testing.T) {
 		t.Fatalf("corrupt store: health status %d want 503", rec.Code)
 	}
 }
+
+func TestBearerNeedsItsSeparator(t *testing.T) {
+	if got := bearerOrBasicToken("Bearer ppk.a.b"); got != "ppk.a.b" {
+		t.Fatalf("bearer: %q", got)
+	}
+	if got := bearerOrBasicToken("Bearerppk.a.b"); got != "" {
+		t.Fatalf("no separator, no token: %q", got)
+	}
+}

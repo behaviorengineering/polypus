@@ -99,17 +99,9 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 		baseURL = anthropicBaseURL(b.BaseURL)
 	}
 	return &schemas.ProviderConfig{
-		NetworkConfig: schemas.NetworkConfig{
-			BaseURL:                        baseURL,
-			DefaultRequestTimeoutInSeconds: a.timeouts.ProviderSeconds(),
-			AllowPrivateNetwork:            true,
-			ExtraHeaders:                   secretExtraHeaders(b.ExtraHeaders),
-		},
-		ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
-			Concurrency: 8,
-			BufferSize:  32,
-		},
-		SendBackRawResponse: true,
+		NetworkConfig:            networkConfig(baseURL, b, a.timeouts),
+		ConcurrencyAndBufferSize: providerPool,
+		SendBackRawResponse:      true,
 		CustomProviderConfig: &schemas.CustomProviderConfig{
 			BaseProviderType: baseType,
 			AllowedRequests:  allowedRequestsForBackend(b),
@@ -124,19 +116,25 @@ func anthropicBaseURL(raw string) string {
 	return strings.TrimSuffix(base, "/v1")
 }
 
+// networkConfig is how Bifrost reaches a backend at baseURL.
+func networkConfig(baseURL string, b config.BackendDef, timeouts config.Timeouts) schemas.NetworkConfig {
+	return schemas.NetworkConfig{
+		BaseURL:                        baseURL,
+		DefaultRequestTimeoutInSeconds: timeouts.ProviderSeconds(),
+		AllowPrivateNetwork:            true,
+		ExtraHeaders:                   secretExtraHeaders(b.ExtraHeaders),
+	}
+}
+
+// providerPool is each backend's Bifrost worker pool: concurrent requests and the
+// queue behind them.
+var providerPool = schemas.ConcurrencyAndBufferSize{Concurrency: 8, BufferSize: 32}
+
 func openRouterProviderConfig(b config.BackendDef, timeouts config.Timeouts) *schemas.ProviderConfig {
 	return &schemas.ProviderConfig{
-		NetworkConfig: schemas.NetworkConfig{
-			BaseURL:                        openAIBaseURL(b.BaseURL),
-			DefaultRequestTimeoutInSeconds: timeouts.ProviderSeconds(),
-			AllowPrivateNetwork:            true,
-			ExtraHeaders:                   secretExtraHeaders(b.ExtraHeaders),
-		},
-		ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
-			Concurrency: 8,
-			BufferSize:  32,
-		},
-		SendBackRawResponse: true,
+		NetworkConfig:            networkConfig(openAIBaseURL(b.BaseURL), b, timeouts),
+		ConcurrencyAndBufferSize: providerPool,
+		SendBackRawResponse:      true,
 	}
 }
 

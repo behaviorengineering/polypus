@@ -2,39 +2,10 @@ package gateway
 
 import (
 	"context"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 )
-
-const defaultModelsRefreshInterval = 30 * time.Minute
-
-func modelsWarmupEnabled() bool {
-	return config.EnvBool("POLYPUS_MODELS_WARMUP", true)
-}
-
-// modelsRefreshInterval reads POLYPUS_MODELS_REFRESH_INTERVAL: a duration, or a false
-// word (0, false, no, off) to turn the refresh off.
-func modelsRefreshInterval() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("POLYPUS_MODELS_REFRESH_INTERVAL"))
-	if on, ok := config.ParseBoolishEnv(raw); ok && !on {
-		return 0
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return defaultModelsRefreshInterval
-	}
-	return d
-}
-
-func modelsRefreshEnabled() bool {
-	if !modelsWarmupEnabled() {
-		return false
-	}
-	return modelsRefreshInterval() > 0
-}
 
 func modelsWarmupTimeout(cfg config.RouterConfig) time.Duration {
 	n := len(cfg.BackendIDs())
@@ -92,10 +63,10 @@ func (h modelsHandler) warmInventory(ctx context.Context, asInventory bool) {
 }
 
 func (h modelsHandler) startModelsRefreshLoop(refreshCtx context.Context, cfg config.RouterConfig) {
-	if !modelsRefreshEnabled() {
+	if !h.models.RefreshEnabled() {
 		return
 	}
-	interval := modelsRefreshInterval()
+	interval := h.models.RefreshInterval
 	warm := func(iterCtx context.Context) {
 		timeout := modelsWarmupTimeout(cfg)
 		runCtx, cancel := context.WithTimeout(iterCtx, timeout)

@@ -47,33 +47,43 @@ func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (Meta, bool
 		return meta, false, nil
 	}
 
+	// A failure after an output file is saved removes the files this call wrote, so
+	// nothing unreferenced is left under files/.
+	var written []string
+	fail := func(err error) (Meta, bool, error) {
+		for _, id := range written {
+			err = errors.Join(err, s.removeFileUnlocked(id))
+		}
+		return meta, false, err
+	}
+	save := func(name string, content []byte) (string, error) {
+		rec := &FileRecord{Filename: meta.ID + name, Purpose: FilePurposeBatch}
+		if err := s.prepareFileRecordLocked(rec, content); err != nil {
+			return "", err
+		}
+		if err := s.saveFileUnlocked(rec, content); err != nil {
+			return "", err
+		}
+		written = append(written, rec.ID)
+		return rec.ID, nil
+	}
 	meta.RequestCounts = patch.RequestCounts
 	if len(patch.OkJSONL) > 0 {
-		rec := &FileRecord{Filename: meta.ID + "_output.jsonl", Purpose: FilePurposeBatch}
-		if err := s.prepareFileRecordLocked(rec, patch.OkJSONL); err != nil {
-			return meta, false, err
+		if meta.OutputFileID, err = save("_output.jsonl", patch.OkJSONL); err != nil {
+			return fail(err)
 		}
-		if err := s.saveFileUnlocked(rec, patch.OkJSONL); err != nil {
-			return meta, false, err
-		}
-		meta.OutputFileID = rec.ID
 	}
 	if len(patch.ErrJSONL) > 0 {
-		rec := &FileRecord{Filename: meta.ID + "_error.jsonl", Purpose: FilePurposeBatch}
-		if err := s.prepareFileRecordLocked(rec, patch.ErrJSONL); err != nil {
-			return meta, false, err
+		if meta.ErrorFileID, err = save("_error.jsonl", patch.ErrJSONL); err != nil {
+			return fail(err)
 		}
-		if err := s.saveFileUnlocked(rec, patch.ErrJSONL); err != nil {
-			return meta, false, err
-		}
-		meta.ErrorFileID = rec.ID
 	}
 	meta.Status = patch.Status
 	meta.CompletedAt = patch.CompletedAt
 	meta.FailedAt = patch.FailedAt
 	meta.CancelledAt = patch.CancelledAt
 	if err := s.writeBatchMeta(&meta); err != nil {
-		return meta, false, err
+		return fail(err)
 	}
 	return meta, true, nil
 }

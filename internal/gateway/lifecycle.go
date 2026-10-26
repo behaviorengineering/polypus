@@ -78,7 +78,7 @@ func prepare(ctx, refreshCtx context.Context, g *gatewayHandler, opts config.Ser
 	if err := probeRemoteCredentials(probeCtx, g.router.Registry().Config(), g.cfGet); err != nil {
 		return fmt.Errorf("gateway: %w", err)
 	}
-	if modelsWarmupEnabled() {
+	if g.models.Warmup {
 		cfg := g.router.Registry().Config()
 		warmCtx, warmCancel := context.WithTimeout(ctx, modelsWarmupTimeout(cfg))
 		defer warmCancel()

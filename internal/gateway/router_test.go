@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -30,15 +29,15 @@ func (f *fakeRouter) Registry() *router.Registry { return f.reg }
 
 func (f *fakeRouter) UsesBifrost(string) bool { return false }
 
-func (f *fakeRouter) ChatCompletionRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
+func (f *fakeRouter) ChatCompletionRaw(context.Context, router.Call) ([]byte, error) {
 	return nil, fmt.Errorf("fakeRouter: ChatCompletionRaw not used when UsesBifrost is false")
 }
 
-func (f *fakeRouter) ChatCompletionStreamRaw(context.Context, string, string, []byte) (<-chan router.ChatStreamChunk, <-chan error, error) {
+func (f *fakeRouter) ChatCompletionStreamRaw(context.Context, router.Call) (<-chan router.ChatStreamChunk, <-chan error, error) {
 	return nil, nil, fmt.Errorf("fakeRouter: ChatCompletionStreamRaw not used when UsesBifrost is false")
 }
 
-func (f *fakeRouter) EmbeddingRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
+func (f *fakeRouter) EmbeddingRaw(context.Context, router.Call) ([]byte, error) {
 	return nil, fmt.Errorf("fakeRouter: EmbeddingRaw not used when UsesBifrost is false")
 }
 
@@ -50,7 +49,7 @@ func (f *fakeRouter) Transcribe(context.Context, router.TranscriptionRequest) ([
 	return nil, "", fmt.Errorf("fakeRouter: Transcribe not implemented")
 }
 
-func (f *fakeRouter) SystemOneDecisionRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
+func (f *fakeRouter) SystemOneDecisionRaw(context.Context, router.Call) ([]byte, error) {
 	return nil, fmt.Errorf("fakeRouter: SystemOneDecisionRaw not used when UsesBifrost is false")
 }
 
@@ -83,13 +82,13 @@ func (r *recordingRouter) UsesBifrost(id string) bool {
 	return false
 }
 
-func (r *recordingRouter) ChatCompletionRaw(_ context.Context, backendID, model string, _ []byte, _ time.Duration) ([]byte, error) {
-	r.chatProviders = append(r.chatProviders, backendID+":"+model)
+func (r *recordingRouter) ChatCompletionRaw(_ context.Context, call router.Call) ([]byte, error) {
+	r.chatProviders = append(r.chatProviders, call.BackendID+":"+call.Model)
 	return []byte(`{"choices":[{"message":{"content":"via-bifrost"}}]}`), nil
 }
 
-func (r *recordingRouter) ChatCompletionStreamRaw(_ context.Context, backendID, model string, _ []byte) (<-chan router.ChatStreamChunk, <-chan error, error) {
-	r.streamProviders = append(r.streamProviders, backendID+":"+model)
+func (r *recordingRouter) ChatCompletionStreamRaw(_ context.Context, call router.Call) (<-chan router.ChatStreamChunk, <-chan error, error) {
+	r.streamProviders = append(r.streamProviders, call.BackendID+":"+call.Model)
 	chunks := make(chan router.ChatStreamChunk, 1)
 	errCh := make(chan error)
 	go func() {
@@ -100,8 +99,8 @@ func (r *recordingRouter) ChatCompletionStreamRaw(_ context.Context, backendID, 
 	return chunks, errCh, nil
 }
 
-func (r *recordingRouter) EmbeddingRaw(_ context.Context, backendID, model string, _ []byte, _ time.Duration) ([]byte, error) {
-	r.embedProviders = append(r.embedProviders, backendID+":"+model)
+func (r *recordingRouter) EmbeddingRaw(_ context.Context, call router.Call) ([]byte, error) {
+	r.embedProviders = append(r.embedProviders, call.BackendID+":"+call.Model)
 	return []byte(`{"data":[{"embedding":[0.1]}]}`), nil
 }
 
@@ -113,7 +112,7 @@ func (r *recordingRouter) Transcribe(context.Context, router.TranscriptionReques
 	return nil, "", fmt.Errorf("recordingRouter: Transcribe not implemented")
 }
 
-func (r *recordingRouter) SystemOneDecisionRaw(context.Context, string, string, []byte, time.Duration) ([]byte, error) {
+func (r *recordingRouter) SystemOneDecisionRaw(context.Context, router.Call) ([]byte, error) {
 	return nil, fmt.Errorf("recordingRouter: SystemOneDecisionRaw not implemented")
 }
 

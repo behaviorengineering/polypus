@@ -170,9 +170,14 @@ func (s *DiskStore) DeleteFile(id string) error {
 	} else if inUse {
 		return derrors.New(derrors.CodeConflict, "batch.DeleteFile", "file referenced by a batch")
 	}
+	return s.removeFileUnlocked(id)
+}
+
+// removeFileUnlocked deletes a file's metadata and content; the caller holds s.mu.
+func (s *DiskStore) removeFileUnlocked(id string) error {
 	for _, path := range []string{filepath.Join(s.root, fileMetaDir, id+".json"), filepath.Join(s.root, fileContentDir, id)} {
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return derrors.Wrap(err, derrors.CodeInternal, "batch.DeleteFile", "remove").With("file_id", id)
+			return derrors.Wrap(err, derrors.CodeInternal, "batch.removeFile", "remove").With("file_id", id)
 		}
 	}
 	return nil
@@ -280,14 +285,15 @@ func (s *DiskStore) ListBatches() ([]Meta, error) {
 	if s == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "batch.ListBatches", "not configured")
 	}
+	// Read the directory under the lock, so a batch saved meanwhile is not missed.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	dir := filepath.Join(s.root, batchMetaDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "batch.ListBatches", "readdir")
 	}
 	out := make([]Meta, 0, len(entries))
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue

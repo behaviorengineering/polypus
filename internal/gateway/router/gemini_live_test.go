@@ -49,7 +49,7 @@ func TestGeminiGemmaLive(t *testing.T) {
 	ctx := context.Background()
 	timeout := 120 * time.Second
 
-	raw, err := client.ChatCompletionRaw(ctx, "gemini_studio", model, body, timeout)
+	raw, err := client.ChatCompletionRaw(ctx, Call{BackendID: "gemini_studio", Model: model, Body: body, Timeout: timeout})
 	if err != nil {
 		t.Fatalf("ChatCompletionRaw: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestGeminiGemmaLive(t *testing.T) {
 	}
 
 	streamBody := []byte(`{"messages":[{"role":"user","content":"Reply with exactly: ok"}],"model":"` + model + `","stream":true}`)
-	chunks, errCh, err := client.ChatCompletionStreamRaw(ctx, "gemini_studio", model, streamBody)
+	chunks, errCh, err := client.ChatCompletionStreamRaw(ctx, Call{BackendID: "gemini_studio", Model: model, Body: streamBody})
 	if err != nil {
 		t.Fatalf("ChatCompletionStreamRaw: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestGeminiToolCallLive(t *testing.T) {
 		"tools":[{"type":"function","function":{"name":"get_weather","description":"Current weather for a city",
 			"parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],
 		"tool_choice":"required"}`)
-	raw, err := client.ChatCompletionRaw(context.Background(), "gemini_paid", model, body, 120*time.Second)
+	raw, err := client.ChatCompletionRaw(context.Background(), Call{BackendID: "gemini_paid", Model: model, Body: body, Timeout: 120 * time.Second})
 	if err != nil {
 		t.Fatalf("ChatCompletionRaw: %v", err)
 	}
