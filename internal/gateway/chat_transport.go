@@ -54,7 +54,7 @@ func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request,
 	w.WriteHeader(http.StatusOK)
 	_, err = w.Write(raw)
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "gateway.bifrostChatResponse", "write response")
+		return afterHeaders(r.Context(), err, true, "gateway.bifrostChatResponse", "write response")
 	}
 	return nil
 }
@@ -83,6 +83,9 @@ func writeBifrostChatSSE(ctx context.Context, w http.ResponseWriter, chunks <-ch
 	}
 	for chunk := range chunks {
 		if ctx.Err() != nil {
+			if started {
+				return afterHeaders(ctx, ctx.Err(), true, "gateway.writeBifrostChatSSE", "context done")
+			}
 			return derrors.Wrap(ctx.Err(), derrors.CodeCanceled, "gateway.writeBifrostChatSSE", "context done")
 		}
 		start()
@@ -94,9 +97,7 @@ func writeBifrostChatSSE(ctx context.Context, w http.ResponseWriter, chunks <-ch
 		}
 		raw = out
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
-			return fmt.Errorf("%w: %w",
-				derrors.Wrap(err, derrors.CodeInternal, "gateway.writeBifrostChatSSE", "write stream"),
-				upstream.ErrResponseWritten)
+			return afterHeaders(ctx, err, true, "gateway.writeBifrostChatSSE", "write stream")
 		}
 		if flusher != nil {
 			flusher.Flush()
@@ -106,18 +107,27 @@ func writeBifrostChatSSE(ctx context.Context, w http.ResponseWriter, chunks <-ch
 		if !started {
 			return err
 		}
-		return fmt.Errorf("%w: %w",
-			derrors.Wrap(err, derrors.CodeUnavailable, "gateway.writeBifrostChatSSE", "stream error after headers"),
-			upstream.ErrResponseWritten)
+		return afterHeaders(ctx, err, false, "gateway.writeBifrostChatSSE", "stream error after headers")
 	}
 	start()
 	if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
-		return fmt.Errorf("%w: %w",
-			derrors.Wrap(err, derrors.CodeInternal, "gateway.writeBifrostChatSSE", "write stream done"),
-			upstream.ErrResponseWritten)
+		return afterHeaders(ctx, err, true, "gateway.writeBifrostChatSSE", "write stream done")
 	}
 	if flusher != nil {
 		flusher.Flush()
 	}
 	return nil
+}
+
+// afterHeaders wraps an error raised once the response status is on the wire. It is
+// tagged upstream.ErrResponseWritten so no second body is written. It is coded
+// CodeCanceled when the client has gone (a write to it failed, or its request
+// context ended), which the breaker ignores; otherwise CodeUnavailable, a backend
+// failure.
+func afterHeaders(ctx context.Context, err error, clientWrite bool, op, msg string) error {
+	code := derrors.CodeUnavailable
+	if clientWrite || ctx.Err() != nil {
+		code = derrors.CodeCanceled
+	}
+	return fmt.Errorf("%w: %w", derrors.Wrap(err, code, op, msg), upstream.ErrResponseWritten)
 }

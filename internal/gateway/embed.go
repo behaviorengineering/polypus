@@ -92,7 +92,7 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 	w.WriteHeader(resp.StatusCode)
 	_, err = io.Copy(w, io.LimitReader(resp.Body, embedMaxBody))
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyEmbeddings", "write response")
+		return afterHeaders(r.Context(), err, false, "gateway.proxyEmbeddings", "copy response")
 	}
 	return upstream.StatusFailure(resp.StatusCode)
 }

@@ -602,7 +602,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, writeErr := w.Write(raw)
 			if writeErr != nil {
-				return derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.serveEmbeddings", "write response")
+				return afterHeaders(r.Context(), writeErr, true, "gateway.serveEmbeddings", "write response")
 			}
 			return nil
 		}

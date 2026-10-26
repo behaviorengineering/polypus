@@ -8,6 +8,7 @@
 package errors
 
 import (
+	stderrors "errors"
 	"fmt"
 	"io"
 	"maps"
@@ -212,17 +213,12 @@ func (e *Error) Format(f fmt.State, verb rune) {
 	_, _ = io.WriteString(f, e.Error())
 }
 
-// CodeOf returns the outermost domain Code, or CodeInternal if err is not *Error.
+// CodeOf returns the outermost domain Code, or CodeInternal if err holds no *Error.
+// errors.As also follows multi-%w wraps such as fmt.Errorf("%w: %w", de, sentinel).
 func CodeOf(err error) Code {
-	for err != nil {
-		if e, ok := err.(*Error); ok {
-			return e.code
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			break
-		}
-		err = u.Unwrap()
+	var de *Error
+	if stderrors.As(err, &de) && de != nil {
+		return de.code
 	}
 	return CodeInternal
 }
@@ -253,6 +249,8 @@ func HTTPStatus(err error) int {
 		return http.StatusNotImplemented
 	case CodeInternal:
 		return http.StatusInternalServerError
+	case CodeUnavailable:
+		return http.StatusBadGateway
 	default:
 		return http.StatusBadGateway
 	}
@@ -264,19 +262,12 @@ func Field(err error, key string) string {
 	if err == nil || key == "" {
 		return ""
 	}
-	for err != nil {
-		if de, ok := err.(*Error); ok && de != nil {
-			if v := strings.TrimSpace(de.fields[key]); v != "" {
-				return v
-			}
-			err = de.cause
-			continue
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return ""
-		}
-		err = u.Unwrap()
+	var de *Error
+	if !stderrors.As(err, &de) || de == nil {
+		return ""
 	}
-	return ""
+	if v := strings.TrimSpace(de.fields[key]); v != "" {
+		return v
+	}
+	return Field(de.cause, key)
 }

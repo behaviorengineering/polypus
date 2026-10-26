@@ -108,7 +108,7 @@ func (h systemOneHandler) proxyBifrostSystemOne(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusOK)
 	_, writeErr := w.Write(raw)
 	if writeErr != nil {
-		return derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.proxyBifrostSystemOne", "write response")
+		return afterHeaders(r.Context(), writeErr, true, "gateway.proxyBifrostSystemOne", "write response")
 	}
 	return nil
 }
@@ -130,7 +130,7 @@ func (h systemOneHandler) proxyCloudflareSystemOne(w http.ResponseWriter, r *htt
 	w.WriteHeader(http.StatusOK)
 	_, writeErr := w.Write(out)
 	if writeErr != nil {
-		return derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.proxyCloudflareSystemOne", "write response")
+		return afterHeaders(r.Context(), writeErr, true, "gateway.proxyCloudflareSystemOne", "write response")
 	}
 	return nil
 }
@@ -187,7 +187,7 @@ func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusOK)
 	_, writeErr := w.Write(raw)
 	if writeErr != nil {
-		return derrors.Wrap(writeErr, derrors.CodeInternal, "gateway.proxySystemOnePassthrough", "write response")
+		return afterHeaders(r.Context(), writeErr, true, "gateway.proxySystemOnePassthrough", "write response")
 	}
 	return nil
 }
