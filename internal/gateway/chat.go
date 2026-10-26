@@ -102,25 +102,44 @@ func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) 
 		return derrors.New(derrors.CodeInternal, "gateway.proxyChat", "chat dial needs a logger")
 	}
 	target := chatCompletionsURL(d.backendURL)
-	streaming := d.stream
-	observability.RecordProxyIO(r.Context(), target, streaming, 0, -1)
+	observability.RecordProxyIO(r.Context(), target, d.stream, 0, -1)
 	hop := hopBudget(d.hop, config.DefaultTimeouts().Chat)
 	// Non-stream: the hop bounds the whole call. Stream: the hop bounds the wait for
 	// headers, then the idle limit bounds each gap between chunks.
 	var ctx context.Context
 	var cancel context.CancelFunc
-	if streaming {
+	if d.stream {
 		ctx, cancel = context.WithCancel(r.Context())
 	} else {
 		ctx, cancel = context.WithTimeout(r.Context(), hop)
 	}
 	defer cancel()
+	req, err := d.newRequest(ctx, r, target, body, hop)
+	if err != nil {
+		return err
+	}
+	resp, err := d.send(ctx, req, hop, cancel)
+	if err != nil {
+		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "post").
+			With("target", target)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if d.stream {
+		resp.Body = newIdleTimeoutBody(resp.Body, d.streamIdle, cancel)
+		return d.writeStreamResponse(w, r, resp, target)
+	}
+	return d.writeResponse(w, r, resp, target)
+}
+
+// newRequest builds the backend POST. The backend's own credential wins; without one
+// the caller's Authorization header is forwarded.
+func (d chatDial) newRequest(ctx context.Context, r *http.Request, target string, body []byte, hop time.Duration) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "request")
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "request")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if streaming {
+	if d.stream {
 		req.Header.Set("Accept", "text/event-stream, application/json")
 	} else {
 		req.Header.Set("Accept", "application/json")
@@ -131,42 +150,39 @@ func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) 
 		req.Header.Set("Authorization", auth)
 	}
 	req.Header.Set(config.TimeoutHeader, hop.String())
+	return req, nil
+}
 
-	client := d.client
-	var resp *http.Response
-	if streaming {
-		client = streamSafeClient(client)
+// send dials once. A stream must get its headers within hop (cancel ends it
+// otherwise); a non-stream call is bounded by ctx.
+func (d chatDial) send(ctx context.Context, req *http.Request, hop time.Duration, cancel context.CancelFunc) (*http.Response, error) {
+	if d.stream {
 		firstByte := time.AfterFunc(hop, cancel)
-		resp, err = client.Do(req) //nolint:gosec // G704: target is the operator-configured backend URL
+		resp, err := streamSafeClient(d.client).Do(req) //nolint:gosec // G704: target is the operator-configured backend URL
 		if !firstByte.Stop() && err != nil {
 			err = derrors.Wrap(err, derrors.CodeTimeout, "gateway.proxyChat", "no response headers within the hop budget").
 				With("hop", hop.String())
 		}
-	} else {
-		if client == nil {
-			client = newChatProxyClient(0)
-		}
-		// Sent once: retries belong to the caller and the fallback router, which
-		// get the first 429 or 5xx with its Retry-After.
-		resp, err = outbound.DoOnce(ctx, outbound.DepGateway, client, req)
+		return resp, err
 	}
-	if err != nil {
-		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "post").
-			With("target", target)
+	client := d.client
+	if client == nil {
+		client = newChatProxyClient(0)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	// Sent once: retries belong to the caller and the fallback router, which get the
+	// first 429 or 5xx with its Retry-After.
+	return outbound.DoOnce(ctx, outbound.DepGateway, client, req)
+}
 
-	if streaming {
-		resp.Body = newIdleTimeoutBody(resp.Body, d.streamIdle, cancel)
-		return d.writeStreamResponse(w, r, resp, target)
-	}
-
+// writeResponse relays a non-stream answer: a rate limit becomes an OpenAI 429 body,
+// and a success has reasoning merged into content (and the router's pick recorded).
+func (d chatDial) writeResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string) error {
 	raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
 	if err != nil {
-		observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, -1)
+		observability.RecordProxyIO(r.Context(), target, false, resp.StatusCode, -1)
 		return err
 	}
-	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, len(raw))
+	observability.RecordProxyIO(r.Context(), target, false, resp.StatusCode, len(raw))
 	status := resp.StatusCode
 	if rewritten, ok := openaiRateLimitBody(resp.StatusCode, resp.Header, raw); ok {
 		raw = rewritten
@@ -179,12 +195,10 @@ func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) 
 			observability.RecordDownstreamModel(r.Context(), extractRouterSelectedModel(resp.Header, raw))
 		}
 	}
-
 	copyChatResponseHeaders(w, resp.Header)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(raw)))
 	w.WriteHeader(status)
-	_, err = w.Write(raw)
-	if err != nil {
+	if _, err := w.Write(raw); err != nil {
 		return afterHeaders(r.Context(), err, true, "gateway.proxyChat", "write response")
 	}
 	return upstream.StatusFailure(status)
