@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -186,4 +187,24 @@ backends:
 
 func writeTestFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func TestLoadRouterRejectsUnknownCapability(t *testing.T) {
+	path := t.TempDir() + "/config.yaml"
+	content := `
+chat_backend:
+  enabled: true
+  default: local
+backends:
+  local:
+    base_url: http://127.0.0.1:9/v1
+    capabilities: [chat, vison]
+`
+	if err := writeTestFile(path, content); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+	if _, err := LoadRouterConfig(ServeOptions{}); err == nil || !strings.Contains(err.Error(), `unknown capability "vison"`) {
+		t.Fatalf("a capability typo must fail the load, got %v", err)
+	}
 }

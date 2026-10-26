@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -57,5 +58,12 @@ func TestClassifyDialFailureBreakerUpstreamParsed(t *testing.T) {
 	}
 	if cls.Layer != LayerPolypusBreaker {
 		t.Fatalf("layer=%q", cls.Layer)
+	}
+}
+
+func TestStatusFromTextEndingInStatusDoesNotPanic(t *testing.T) {
+	cls := ClassifyDialFailure(errors.New("upstream said invalid status "), "claude_team")
+	if cls.Upstream != "claude_team" {
+		t.Fatalf("classification: %+v", cls)
 	}
 }

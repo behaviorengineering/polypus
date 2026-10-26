@@ -140,8 +140,10 @@ func bifrostStatus(err error) int {
 	msg := strings.ToLower(err.Error())
 	if idx := strings.Index(msg, "status "); idx >= 0 {
 		rest := strings.TrimSpace(msg[idx+len("status "):])
-		if n, convErr := strconv.Atoi(strings.Fields(rest)[0]); convErr == nil {
-			return n
+		if f := strings.Fields(rest); len(f) > 0 {
+			if n, convErr := strconv.Atoi(f[0]); convErr == nil {
+				return n
+			}
 		}
 	}
 	return 0

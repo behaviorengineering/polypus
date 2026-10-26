@@ -402,11 +402,23 @@ func applyCloudflareThinkingEmit(root map[string]any, model string, wants bool) 
 	return changed
 }
 
-func setNestedReasoningEffort(root map[string]any, effort string) bool {
-	reasoning, _ := root["reasoning"].(map[string]any)
-	if reasoning == nil {
-		reasoning = map[string]any{}
+// reasoningObject returns root["reasoning"], creating it when absent. ok is false
+// when the caller sent a non-object reasoning value, which is left untouched.
+func reasoningObject(root map[string]any) (map[string]any, bool) {
+	raw, present := root["reasoning"]
+	if !present || raw == nil {
+		reasoning := map[string]any{}
 		root["reasoning"] = reasoning
+		return reasoning, true
+	}
+	reasoning, ok := raw.(map[string]any)
+	return reasoning, ok
+}
+
+func setNestedReasoningEffort(root map[string]any, effort string) bool {
+	reasoning, ok := reasoningObject(root)
+	if !ok {
+		return false
 	}
 	if cur, ok := reasoning["effort"]; ok && strings.EqualFold(strings.TrimSpace(fmt.Sprint(cur)), effort) {
 		return false
@@ -416,10 +428,9 @@ func setNestedReasoningEffort(root map[string]any, effort string) bool {
 }
 
 func setNestedReasoningMaxTokens(root map[string]any, tokens int) bool {
-	reasoning, _ := root["reasoning"].(map[string]any)
-	if reasoning == nil {
-		reasoning = map[string]any{}
-		root["reasoning"] = reasoning
+	reasoning, ok := reasoningObject(root)
+	if !ok {
+		return false
 	}
 	cur, ok := reasoning["max_tokens"]
 	if ok {

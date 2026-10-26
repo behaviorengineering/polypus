@@ -26,6 +26,16 @@ const (
 	CapBatch     Capability = "batch"
 )
 
+// Valid reports whether c is one of the known capabilities.
+func (c Capability) Valid() bool {
+	switch c {
+	case CapChat, CapVision, CapEmbed, CapTTS, CapSTT, CapVoices, CapSystemOne, CapBatch:
+		return true
+	default:
+		return false
+	}
+}
+
 // BackendDef is one OpenAI-compatible inference worker.
 type BackendDef struct {
 	ID           string            `yaml:"-"`
@@ -313,8 +323,12 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 			continue
 		}
 		caps := make([]Capability, 0, len(entry.Capabilities))
-		for _, c := range entry.Capabilities {
-			caps = append(caps, Capability(strings.TrimSpace(c)))
+		for _, raw := range entry.Capabilities {
+			c := Capability(strings.TrimSpace(raw))
+			if !c.Valid() {
+				return RouterConfig{}, false, fmt.Errorf("router config %s: backends.%s.capabilities: unknown capability %q", path, id, raw)
+			}
+			caps = append(caps, c)
 		}
 		baseURL := ExpandEnv(strings.TrimSpace(entry.BaseURL))
 		cfg.Backends[id] = BackendDef{

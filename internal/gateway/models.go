@@ -257,6 +257,10 @@ func (h modelsHandler) collectModelsForRetrieve(r *http.Request, asInventory boo
 }
 
 func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openaiModel {
+	// Callers fall back here when there is no router, so this is the one guard.
+	if h.shared == nil || h.router == nil {
+		return nil
+	}
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	ids := cfg.BackendIDs()
