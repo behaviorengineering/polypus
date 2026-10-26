@@ -130,7 +130,15 @@ const (
 
 func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
 	model, _ := extractChatModel(body)
-	return proxyChatCompletionsOpts(w, r, backendURL, body, client, hopTimeout, backendAuth, true, "", model, false)
+	return proxyChat(w, r, body, chatDial{
+		backendURL:    backendURL,
+		client:        client,
+		hop:           hopTimeout,
+		streamIdle:    config.DefaultTimeouts().StreamIdle,
+		backendAuth:   backendAuth,
+		patchThinking: true,
+		thinkingModel: model,
+	})
 }
 
 // extractRouterSelectedModel reads Switchyard routing metadata from response headers or JSON body.
@@ -149,23 +157,43 @@ func extractRouterSelectedModel(hdr http.Header, body []byte) string {
 	return strings.TrimSpace(root.Model)
 }
 
-func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string, patchThinking bool, thinkingExtension string, thinkingModel string, recordRouterSelectedModel bool) error {
-	if patchThinking {
-		if patched, ok := applyChatThinking(body, thinkingExtension, thinkingModel); ok {
+// chatDial is one chat completion sent to an OpenAI-shaped backend or Switchyard.
+type chatDial struct {
+	backendURL string
+	client     *http.Client
+	// hop bounds a non-stream call end to end, and a stream until its headers arrive.
+	hop time.Duration
+	// streamIdle is the longest gap allowed between stream chunks.
+	streamIdle  time.Duration
+	backendAuth string
+	// patchThinking applies the thinking defaults for thinkingModel.
+	patchThinking     bool
+	thinkingExtension string
+	thinkingModel     string
+	// recordRouterSelectedModel tags the span with the model a router picked.
+	recordRouterSelectedModel bool
+}
+
+func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) error {
+	if d.patchThinking {
+		if patched, ok := applyChatThinking(body, d.thinkingExtension, d.thinkingModel); ok {
 			body = patched
 		}
 	}
-	target := chatCompletionsURL(backendURL)
+	target := chatCompletionsURL(d.backendURL)
 	streaming := chatBodyIsStream(body)
 	observability.RecordProxyIO(r.Context(), target, streaming, 0, -1)
-	ctx := r.Context()
-	// Non-stream: hop wall-clock via context. Stream: only client cancel (r.Context);
-	// Client.Timeout must also stay unset for streams (see streamSafeClient).
-	if hopTimeout > 0 && !streaming {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hopTimeout)
-		defer cancel()
+	hop := hopBudget(d.hop, config.DefaultTimeouts().Chat)
+	// Non-stream: the hop bounds the whole call. Stream: the hop bounds the wait for
+	// headers, then the idle limit bounds each gap between chunks.
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if streaming {
+		ctx, cancel = context.WithCancel(r.Context())
+	} else {
+		ctx, cancel = context.WithTimeout(r.Context(), hop)
 	}
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "request")
@@ -176,25 +204,30 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 	} else {
 		req.Header.Set("Accept", "application/json")
 	}
-	if backendAuth != "" {
-		req.Header.Set("Authorization", backendAuth)
+	if d.backendAuth != "" {
+		req.Header.Set("Authorization", d.backendAuth)
 	} else if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
-	if hopTimeout > 0 {
-		req.Header.Set(config.TimeoutHeader, hopTimeout.String())
-	}
+	req.Header.Set(config.TimeoutHeader, hop.String())
 
-	if streaming {
-		client = streamSafeClient(client)
-	} else if client == nil {
-		client = newChatProxyClient(0)
-	}
+	client := d.client
 	var resp *http.Response
 	if streaming {
-		resp, err = client.Do(req)
+		client = streamSafeClient(client)
+		firstByte := time.AfterFunc(hop, cancel)
+		resp, err = client.Do(req) //nolint:gosec // G704: target is the operator-configured backend URL
+		if !firstByte.Stop() && err != nil {
+			err = derrors.Wrap(err, derrors.CodeTimeout, "gateway.proxyChat", "no response headers within the hop budget").
+				With("hop", hop.String())
+		}
 	} else {
-		resp, err = outbound.Do(ctx, outbound.DepGateway, client, req)
+		if client == nil {
+			client = newChatProxyClient(0)
+		}
+		// Sent once: retries belong to the caller and the fallback router, which
+		// get the first 429 or 5xx with its Retry-After.
+		resp, err = outbound.DoOnce(ctx, outbound.DepGateway, client, req)
 	}
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "post").
@@ -203,6 +236,7 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 	defer func() { _ = resp.Body.Close() }()
 
 	if streaming {
+		resp.Body = newIdleTimeoutBody(resp.Body, d.streamIdle, cancel)
 		return writeChatStreamResponse(w, r, resp, target, streaming)
 	}
 
@@ -220,7 +254,7 @@ func proxyChatCompletionsOpts(w http.ResponseWriter, r *http.Request, backendURL
 		if fixed, changed := mergeReasoningIntoContent(raw); changed {
 			raw = fixed
 		}
-		if recordRouterSelectedModel {
+		if d.recordRouterSelectedModel {
 			observability.RecordDownstreamModel(r.Context(), extractRouterSelectedModel(resp.Header, raw))
 		}
 	}

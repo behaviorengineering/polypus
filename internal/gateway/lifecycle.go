@@ -66,10 +66,14 @@ func ListenAndServe(opts config.ServeOptions) error {
 		modelsHandler{g.shared}.startModelsRefreshLoop(refreshCtx, cfg)
 	}
 
+	// No WriteTimeout: SSE chat streams outlive any fixed write budget; the hop
+	// budget and the stream idle limit bound them instead.
 	server := &http.Server{
 		Addr:              opts.ListenAddr(),
 		Handler:           observability.WrapHandler(handler),
 		ReadHeaderTimeout: 30 * time.Second,
+		ReadTimeout:       serverReadTimeout,
+		IdleTimeout:       serverIdleTimeout,
 	}
 	errCh := make(chan error, 1)
 	go func() {
@@ -104,3 +108,11 @@ func writeSwitchyardConfig(g *Gateway, opts config.ServeOptions) error {
 	}
 	return nil
 }
+
+const (
+	// serverReadTimeout bounds reading one request, headers and body: a 26 MiB
+	// audio upload on a slow link fits; a client that stalls mid-body does not.
+	serverReadTimeout = 5 * time.Minute
+	// serverIdleTimeout reaps idle keep-alive connections.
+	serverIdleTimeout = 2 * time.Minute
+)

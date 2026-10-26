@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/outbound"
+
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
@@ -45,12 +47,9 @@ func rewriteEmbedModel(body []byte, model string) ([]byte, error) {
 
 func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
 	target := embeddingsURL(backendURL)
-	ctx := r.Context()
-	if hopTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hopTimeout)
-		defer cancel()
-	}
+	hopTimeout = hopBudget(hopTimeout, config.DefaultTimeouts().Embed)
+	ctx, cancel := context.WithTimeout(r.Context(), hopTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyEmbeddings", "request")
@@ -62,14 +61,12 @@ func proxyEmbeddings(w http.ResponseWriter, r *http.Request, backendURL string, 
 	} else if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
-	if hopTimeout > 0 {
-		req.Header.Set(config.TimeoutHeader, hopTimeout.String())
-	}
+	req.Header.Set(config.TimeoutHeader, hopTimeout.String())
 
 	if client == nil {
 		client = newChatProxyClient(0)
 	}
-	resp, err := client.Do(req)
+	resp, err := outbound.DoOnce(ctx, outbound.DepGateway, client, req)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyEmbeddings", "post").
 			With("target", target)

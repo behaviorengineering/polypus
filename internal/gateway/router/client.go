@@ -137,10 +137,10 @@ func bifrostRawContext(parent context.Context, timeout time.Duration, useRaw boo
 
 func (c *Client) bifrostContext(parent context.Context, timeout time.Duration, useRaw bool) *schemas.BifrostContext {
 	bctx := bifrostRawContext(parent, timeout, useRaw)
-	if c != nil && c.bfTracer != nil {
-		c.bfTracer.Bind(parent)
-	}
-	if sc := trace.SpanFromContext(parent).SpanContext(); sc.HasSpanID() {
+	// The request's own trace and parent span ride on its context, so the shared
+	// tracer never has to guess which request a Bifrost span belongs to.
+	if sc := trace.SpanFromContext(parent).SpanContext(); sc.IsValid() {
+		bctx.SetValue(schemas.BifrostContextKeyTraceID, sc.TraceID().String())
 		bctx.SetValue(schemas.BifrostContextKeyParentSpanID, sc.SpanID().String())
 	}
 	return bctx

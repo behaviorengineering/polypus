@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -20,12 +19,13 @@ const (
 	bifrostTracerActiveKey  = "polypus.bifrost.tracer.active"
 )
 
-// BifrostOTelTracer maps Bifrost schemas.Tracer hooks to OpenTelemetry spans on the
-// active Polypus request context. Stream gate methods stay on the embedded NoOpTracer.
+// BifrostOTelTracer maps Bifrost schemas.Tracer hooks to OpenTelemetry spans. One
+// tracer serves every request, so it holds no per-request state: the parent span
+// comes from the context Bifrost passes in, and the router puts each request's
+// trace ID on its BifrostContext. Stream gate methods stay on the embedded NoOpTracer.
 type BifrostOTelTracer struct {
 	schemas.NoOpTracer
 
-	active  atomic.Pointer[context.Context]
 	handles sync.Map // span handle -> *otelSpanBridge
 }
 
@@ -34,33 +34,10 @@ func NewBifrostOTelTracer() *BifrostOTelTracer {
 	return &BifrostOTelTracer{}
 }
 
-// Bind records the Go context that carries polypus.chat (or the inbound W3C parent).
-// CreateTrace reads the trace ID from this context when Bifrost passes an empty parent.
-func (t *BifrostOTelTracer) Bind(ctx context.Context) {
-	if t == nil || ctx == nil {
-		return
-	}
-	t.active.Store(&ctx)
-}
-
-func (t *BifrostOTelTracer) boundContext() context.Context {
-	if t == nil {
-		return context.Background()
-	}
-	p := t.active.Load()
-	if p == nil || *p == nil {
-		return context.Background()
-	}
-	return *p
-}
-
-// CreateTrace returns the W3C trace ID hex for the bound context, or a new random ID.
+// CreateTrace returns parentID, or a new random trace ID. Bifrost calls it only when
+// the request context carries no BifrostContextKeyTraceID; the router sets that key
+// from the request's span, so traced requests never reach here.
 func (t *BifrostOTelTracer) CreateTrace(parentID string, _ ...string) string {
-	ctx := t.boundContext()
-	sc := trace.SpanFromContext(ctx).SpanContext()
-	if sc.HasTraceID() {
-		return sc.TraceID().String()
-	}
 	if parentID != "" {
 		return parentID
 	}
@@ -88,7 +65,8 @@ func (t *BifrostOTelTracer) StartSpan(ctx context.Context, name string, kind sch
 func (t *BifrostOTelTracer) StartSpanID(ctx context.Context, name string, kind schemas.SpanKind) (string, schemas.SpanHandle) {
 	parent := ctx
 	if parent == nil {
-		parent = t.boundContext()
+		// A new root span: never another request's context.
+		parent = context.Background()
 	}
 	oiKind := openInferenceKind(kind)
 	newCtx, otelSpan := Tracer().Start(parent, name, trace.WithSpanKind(otelSpanKind(kind)))

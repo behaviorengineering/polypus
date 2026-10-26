@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/outbound"
+
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
@@ -162,7 +164,7 @@ func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *ht
 	if client == nil {
 		client = newChatProxyClient(h.timeouts.Max)
 	}
-	resp, err := client.Do(req)
+	resp, err := outbound.DoOnce(r.Context(), outbound.DepGateway, client, req)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxySystemOnePassthrough", "dial").
 			With("target", target)

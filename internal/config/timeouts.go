@@ -19,6 +19,9 @@ const (
 	defaultTimeoutEmbed        = 60 * time.Second
 	defaultTimeoutSpeech       = 180 * time.Second
 	defaultTimeoutChatCF       = 60 * time.Second
+	// defaultStreamIdle is the longest gap allowed between chunks of a chat stream.
+	// Generous, so a long thinking pause is not cut off; Anthropic pings reset it.
+	defaultStreamIdle = 5 * time.Minute
 )
 
 // BackendTimeouts overrides capability buckets for one backend id.
@@ -26,6 +29,7 @@ type BackendTimeouts struct {
 	Chat         time.Duration
 	ChatThinking time.Duration
 	Vision       time.Duration
+	StreamIdle   time.Duration
 }
 
 // Timeouts are static per-hop budgets. Header overrides are clamped to Min..Max.
@@ -37,6 +41,7 @@ type Timeouts struct {
 	Vision       time.Duration
 	Embed        time.Duration
 	Speech       time.Duration
+	StreamIdle   time.Duration
 	Backends     map[string]BackendTimeouts
 }
 
@@ -48,6 +53,7 @@ type timeoutsFile struct {
 	Vision       string                   `yaml:"vision"`
 	Embed        string                   `yaml:"embed"`
 	Speech       string                   `yaml:"speech"`
+	StreamIdle   string                   `yaml:"stream_idle"`
 	Backends     map[string]backendTOFile `yaml:"backends"`
 }
 
@@ -55,6 +61,7 @@ type backendTOFile struct {
 	Chat         string `yaml:"chat"`
 	ChatThinking string `yaml:"chat_thinking"`
 	Vision       string `yaml:"vision"`
+	StreamIdle   string `yaml:"stream_idle"`
 }
 
 // DefaultTimeouts returns hang ceilings for chat (thinking off), vision, embed, and speech.
@@ -67,6 +74,7 @@ func DefaultTimeouts() Timeouts {
 		Vision:       defaultTimeoutVision,
 		Embed:        defaultTimeoutEmbed,
 		Speech:       defaultTimeoutSpeech,
+		StreamIdle:   defaultStreamIdle,
 		Backends: map[string]BackendTimeouts{
 			"cf_local": {Chat: defaultTimeoutChatCF},
 		},
@@ -97,6 +105,9 @@ func parseTimeoutsFile(file timeoutsFile) (Timeouts, error) {
 	if out.Speech, err = overlayDuration(file.Speech, out.Speech); err != nil {
 		return Timeouts{}, fmt.Errorf("timeouts.speech: %w", err)
 	}
+	if out.StreamIdle, err = overlayDuration(file.StreamIdle, out.StreamIdle); err != nil {
+		return Timeouts{}, fmt.Errorf("timeouts.stream_idle: %w", err)
+	}
 	if len(file.Backends) > 0 {
 		if out.Backends == nil {
 			out.Backends = map[string]BackendTimeouts{}
@@ -115,6 +126,9 @@ func parseTimeoutsFile(file timeoutsFile) (Timeouts, error) {
 			}
 			if cur.Vision, err = overlayDuration(entry.Vision, cur.Vision); err != nil {
 				return Timeouts{}, fmt.Errorf("timeouts.backends.%s.vision: %w", id, err)
+			}
+			if cur.StreamIdle, err = overlayDuration(entry.StreamIdle, cur.StreamIdle); err != nil {
+				return Timeouts{}, fmt.Errorf("timeouts.backends.%s.stream_idle: %w", id, err)
 			}
 			out.Backends[id] = cur
 		}
@@ -199,6 +213,18 @@ func (t Timeouts) ResolveChat(header, backendID string, vision, thinking bool) t
 		return t.Clamp(be.Chat)
 	}
 	return t.Clamp(t.Chat)
+}
+
+// ResolveStreamIdle returns the longest gap allowed between chunks of a chat stream
+// for backendID: its own stream_idle, else the global one, else the default.
+func (t Timeouts) ResolveStreamIdle(backendID string) time.Duration {
+	if be := t.Backends[strings.TrimSpace(backendID)]; be.StreamIdle > 0 {
+		return be.StreamIdle
+	}
+	if t.StreamIdle > 0 {
+		return t.StreamIdle
+	}
+	return defaultStreamIdle
 }
 
 // ResolveEmbed returns the embeddings hop timeout (header or embed bucket).
