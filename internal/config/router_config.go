@@ -512,41 +512,70 @@ func normalizeCapabilityBackend(cfg *RouterConfig, cap *CapabilityBackend, field
 	return nil
 }
 
+// capabilitySlot is one *_backend block: its YAML key, the capability its default
+// backend must have, and how it is normalised.
+type capabilitySlot struct {
+	field string
+	cap   Capability
+	get   func(*RouterConfig) *CapabilityBackend
+	// speech slots may stay without a default (normalizeCapabilityBackend's flag).
+	speech bool
+	// before fills a default from an earlier slot; it runs once those are normalised.
+	before func(*RouterConfig)
+}
+
+// capabilitySlots lists the slots in normalisation order: stt and proxy borrow the
+// tts default, and batch fills its own default, so they come after tts.
+var capabilitySlots = []capabilitySlot{
+	{field: "chat_backend", cap: CapChat, get: func(c *RouterConfig) *CapabilityBackend { return &c.Chat }},
+	{field: "vision_backend", cap: CapVision, get: func(c *RouterConfig) *CapabilityBackend { return &c.Vision }},
+	{field: "embed_backend", cap: CapEmbed, get: func(c *RouterConfig) *CapabilityBackend { return &c.Embed }},
+	{field: "tts_backend", cap: CapTTS, speech: true, get: func(c *RouterConfig) *CapabilityBackend { return &c.TTS }},
+	{field: "stt_backend", cap: CapSTT, speech: true, get: func(c *RouterConfig) *CapabilityBackend { return &c.STT }, before: func(c *RouterConfig) {
+		inheritTTSDefault(c, &c.STT)
+	}},
+	{field: "proxy_backend", cap: CapVoices, speech: true, get: func(c *RouterConfig) *CapabilityBackend { return &c.Proxy }, before: func(c *RouterConfig) {
+		inheritTTSDefault(c, &c.Proxy)
+	}},
+	{field: "systemone_backend", cap: CapSystemOne, get: func(c *RouterConfig) *CapabilityBackend { return &c.SystemOne }},
+	{field: "batch_backend", cap: CapBatch, get: func(c *RouterConfig) *CapabilityBackend { return &c.Batch }, before: fillDefaultBatchBackend},
+}
+
+// inheritTTSDefault gives an enabled slot without a default the tts default.
+func inheritTTSDefault(cfg *RouterConfig, slot *CapabilityBackend) {
+	if slot.Enabled && slot.Default == "" && cfg.TTS.Enabled && cfg.TTS.Default != "" {
+		slot.Default = cfg.TTS.Default
+	}
+}
+
 func normalizeRouterConfig(cfg *RouterConfig) error {
 	if len(cfg.Backends) == 0 {
 		return fmt.Errorf("router: no backends configured")
 	}
-	if err := normalizeCapabilityBackend(cfg, &cfg.Chat, "chat_backend", false); err != nil {
+	for _, sl := range capabilitySlots {
+		if sl.before != nil {
+			sl.before(cfg)
+		}
+		if err := normalizeCapabilityBackend(cfg, sl.get(cfg), sl.field, sl.speech); err != nil {
+			return err
+		}
+	}
+	if err := normalizeBackends(cfg); err != nil {
 		return err
 	}
-	if err := normalizeCapabilityBackend(cfg, &cfg.Vision, "vision_backend", false); err != nil {
-		return err
+	for _, sl := range capabilitySlots {
+		if slot := sl.get(cfg); slot.Enabled {
+			if err := requireBackend(cfg, slot.Default, sl.cap, sl.field+".default"); err != nil {
+				return err
+			}
+		}
 	}
-	if err := normalizeCapabilityBackend(cfg, &cfg.Embed, "embed_backend", false); err != nil {
-		return err
-	}
-	if err := normalizeCapabilityBackend(cfg, &cfg.TTS, "tts_backend", true); err != nil {
-		return err
-	}
-	if cfg.STT.Enabled && cfg.STT.Default == "" && cfg.TTS.Enabled && cfg.TTS.Default != "" {
-		cfg.STT.Default = cfg.TTS.Default
-	}
-	if err := normalizeCapabilityBackend(cfg, &cfg.STT, "stt_backend", true); err != nil {
-		return err
-	}
-	if cfg.Proxy.Enabled && cfg.Proxy.Default == "" && cfg.TTS.Enabled && cfg.TTS.Default != "" {
-		cfg.Proxy.Default = cfg.TTS.Default
-	}
-	if err := normalizeCapabilityBackend(cfg, &cfg.Proxy, "proxy_backend", true); err != nil {
-		return err
-	}
-	if err := normalizeCapabilityBackend(cfg, &cfg.SystemOne, "systemone_backend", false); err != nil {
-		return err
-	}
-	fillDefaultBatchBackend(cfg)
-	if err := normalizeCapabilityBackend(cfg, &cfg.Batch, "batch_backend", false); err != nil {
-		return err
-	}
+	return validateRouters(cfg)
+}
+
+// normalizeBackends fills each backend's id and checks its base URL, credential,
+// capabilities and model gate.
+func normalizeBackends(cfg *RouterConfig) error {
 	for id, b := range cfg.Backends {
 		if b.ID == "" {
 			b.ID = id
@@ -567,47 +596,7 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 		}
 		cfg.Backends[id] = b
 	}
-	if cfg.Chat.Enabled {
-		if err := requireBackend(cfg, cfg.Chat.Default, CapChat, "chat_backend.default"); err != nil {
-			return err
-		}
-	}
-	if cfg.Vision.Enabled {
-		if err := requireBackend(cfg, cfg.Vision.Default, CapVision, "vision_backend.default"); err != nil {
-			return err
-		}
-	}
-	if cfg.Embed.Enabled {
-		if err := requireBackend(cfg, cfg.Embed.Default, CapEmbed, "embed_backend.default"); err != nil {
-			return err
-		}
-	}
-	if cfg.TTS.Enabled {
-		if err := requireBackend(cfg, cfg.TTS.Default, CapTTS, "tts_backend.default"); err != nil {
-			return err
-		}
-	}
-	if cfg.STT.Enabled {
-		if err := requireBackend(cfg, cfg.STT.Default, CapSTT, "stt_backend.default"); err != nil {
-			return err
-		}
-	}
-	if cfg.Proxy.Enabled {
-		if err := requireBackend(cfg, cfg.Proxy.Default, CapVoices, "proxy_backend.default"); err != nil {
-			return err
-		}
-	}
-	if cfg.SystemOne.Enabled {
-		if err := requireBackend(cfg, cfg.SystemOne.Default, CapSystemOne, "systemone_backend.default"); err != nil {
-			return err
-		}
-	}
-	if cfg.Batch.Enabled {
-		if err := requireBackend(cfg, cfg.Batch.Default, CapBatch, "batch_backend.default"); err != nil {
-			return err
-		}
-	}
-	return validateRouters(cfg)
+	return nil
 }
 
 func requireBackend(cfg *RouterConfig, id string, cap Capability, field string) error {
