@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,6 +38,9 @@ type CollectorOptions struct {
 	AllowHyperDXCH   bool
 	// SkipHyperDXVerify skips HyperDX routing checks (for example tailnet laptops without /api/v2 or Docker).
 	SkipHyperDXVerify bool
+	// Logger receives progress (endpoints, trace ids, probe counts). Nil discards it,
+	// so the smoke never writes to the host's stdout.
+	Logger *slog.Logger
 }
 
 // DefaultCollectorPollInterval is the delay between backend polls.
@@ -60,15 +64,13 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 	}
 	opts = opts.withCollectorDefaults()
 
-	fmt.Printf("collector smoke: otlp=%s phoenix=%s hyperdx=%s\n",
-		opts.OTLPEndpoint, opts.PhoenixBaseURL, opts.HyperDXBaseURL)
+	opts.Logger.Info("collector smoke", "otlp", opts.OTLPEndpoint, "phoenix", opts.PhoenixBaseURL, "hyperdx", opts.HyperDXBaseURL)
 
 	genAITrace, plainTrace, err := exportSmokeTraces(ctx, opts)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("collector smoke: gen_ai trace_id=%s plain trace_id=%s\n", genAITrace, plainTrace)
-	fmt.Println("collector smoke: otlp export ok")
+	opts.Logger.Info("collector smoke: otlp export ok", "gen_ai_trace_id", genAITrace, "plain_trace_id", plainTrace)
 
 	deadline, _ := ctx.Deadline()
 	var lastErr error
@@ -80,11 +82,7 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 			return fmt.Errorf("collector smoke: %w", err)
 		}
 		if lastErr = probeRouting(ctx, opts, genAITrace, plainTrace); lastErr == nil {
-			if opts.SkipHyperDXVerify {
-				fmt.Println("collector smoke: routing ok (gen_ai -> Phoenix; HyperDX verify skipped)")
-			} else {
-				fmt.Println("collector smoke: routing ok (gen_ai -> Phoenix+HyperDX, plain -> HyperDX only)")
-			}
+			opts.Logger.Info("collector smoke: routing ok", "hyperdx_verified", !opts.SkipHyperDXVerify)
 			return nil
 		}
 		if time.Now().Add(opts.PollInterval).After(deadline) {
@@ -133,8 +131,8 @@ func probeRouting(ctx context.Context, opts CollectorOptions, genAITrace, plainT
 		genHyper, errGenHyper = hyperdxTraceCount(ctx, opts, genAITrace)
 		plainHyper, errPlainHyper = hyperdxTraceCount(ctx, opts, plainTrace)
 	}
-	fmt.Printf("collector smoke: probe counts gen_ai phoenix=%d hyperdx=%d plain phoenix=%d hyperdx=%d\n",
-		genPhoenix, genHyper, plainPhoenix, plainHyper)
+	opts.Logger.Info("collector smoke: probe counts", "gen_ai_phoenix", genPhoenix, "gen_ai_hyperdx", genHyper,
+		"plain_phoenix", plainPhoenix, "plain_hyperdx", plainHyper)
 
 	okGenPhoenix := errGenPhoenix == nil && genPhoenix > 0
 	okPlainAbsentPhoenix := errPlainPhoenix == nil && plainPhoenix == 0
@@ -173,6 +171,9 @@ func (o CollectorOptions) withCollectorDefaults() CollectorOptions {
 	}
 	if out.PollInterval <= 0 {
 		out.PollInterval = DefaultCollectorPollInterval
+	}
+	if out.Logger == nil {
+		out.Logger = slog.New(slog.DiscardHandler)
 	}
 	out.AllowHyperDXCH = true
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK"))) {

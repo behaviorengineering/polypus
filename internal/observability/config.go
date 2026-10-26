@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"log/slog"
 	"os"
 	"path"
 	"strconv"
@@ -25,6 +26,9 @@ type Config struct {
 	DumpMaxAgeH  int
 	// SkipPaths are HTTP paths that must not create SERVER spans (probes).
 	SkipPaths []string
+	// Logger receives the dump writer's diagnostics. Init requires it; the process
+	// entrypoint sets it.
+	Logger *slog.Logger
 }
 
 // LoadConfig reads POLYPUS_OTEL_* and POLYPUS_PHOENIX from the environment.

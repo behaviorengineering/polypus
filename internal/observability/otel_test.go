@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/behaviorengineering/olly/pkg/dump"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -246,5 +248,11 @@ func TestFailureDumpSkipsSuccessfulRequest(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("unexpected dump files=%d", len(entries))
+	}
+}
+
+func TestInitRequiresALogger(t *testing.T) {
+	if _, err := Init(Config{}); derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("Init without a logger must fail closed: %v", err)
 	}
 }

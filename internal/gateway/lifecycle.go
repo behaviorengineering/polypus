@@ -26,8 +26,8 @@ func (g *Gateway) Close() {
 }
 
 // ListenAndServe writes Switchyard routes if needed, then serves on opts.ListenAddr().
-func ListenAndServe(opts config.ServeOptions) error {
-	handler, err := NewHandler(opts)
+func ListenAndServe(opts config.ServeOptions, options ...HandlerOption) error {
+	handler, err := NewHandler(opts, options...)
 	if err != nil {
 		return err
 	}

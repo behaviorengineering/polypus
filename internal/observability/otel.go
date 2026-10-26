@@ -3,8 +3,8 @@ package observability
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -32,6 +32,9 @@ func init() {
 
 // Init installs the global tracer provider, W3C propagator, and optional dump processor via olly.
 func Init(cfg Config) (func(context.Context) error, error) {
+	if cfg.Logger == nil {
+		return nil, derrors.New(derrors.CodeInvalid, "observability.Init", "logger is required")
+	}
 	skip := cfg.SkipPaths
 	if skip == nil {
 		skip = defaultSkipPaths
@@ -56,7 +59,7 @@ func Init(cfg Config) (func(context.Context) error, error) {
 			MaxFiles:         cfg.DumpMaxFiles,
 			RedactAttribute:  dumpRedactAttribute,
 			RedactStatusText: redactURLsInText,
-			Diagnostics:      stderrDiag{},
+			Diagnostics:      logDiag{log: cfg.Logger},
 		},
 	}
 	dumpDir := cfg.DumpDir
@@ -78,10 +81,11 @@ func Init(cfg Config) (func(context.Context) error, error) {
 	return shutdown, nil
 }
 
-type stderrDiag struct{}
+// logDiag sends olly's dump diagnostics (write and prune failures) to the logger.
+type logDiag struct{ log *slog.Logger }
 
-func (stderrDiag) Printf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+func (d logDiag) Printf(format string, args ...any) {
+	d.log.Warn("polypus: failure dump", "detail", fmt.Sprintf(format, args...))
 }
 
 func dumpRedactAttribute(key string, value any) any {

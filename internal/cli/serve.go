@@ -3,10 +3,12 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/gateway"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/pkg/polypus"
 )
@@ -27,55 +29,61 @@ func runServeWithOpts(host string, port int, backend string) int {
 		opts.BackendURL = backend
 	}
 
-	fmt.Fprintf(os.Stderr, "polypus gateway: http://%s/\n", opts.ListenAddr())
+	// The service logs its startup and runtime through one structured logger.
+	logger := slog.Default()
+	logger.Info("polypus gateway", "url", "http://"+opts.ListenAddr()+"/")
 	rcfg, err := config.LoadRouterConfig(opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: router config: %v\n", err)
 		return 1
 	}
-	printCap := func(name string, cap config.CapabilityBackend) {
-		if !cap.Enabled {
-			fmt.Fprintf(os.Stderr, "polypus serve: %s disabled\n", name)
-			return
-		}
-		fmt.Fprintf(os.Stderr, "polypus serve: %s default=%s\n", name, cap.Default)
-	}
-	printCap("chat_backend", rcfg.Chat)
-	printCap("vision_backend", rcfg.Vision)
-	printCap("embed_backend", rcfg.Embed)
-	printCap("tts_backend", rcfg.TTS)
-	printCap("stt_backend", rcfg.STT)
-	printCap("proxy_backend", rcfg.Proxy)
-	printCap("systemone_backend", rcfg.SystemOne)
-	for _, id := range rcfg.BackendIDs() {
-		b := rcfg.Backends[id]
-		fmt.Fprintf(os.Stderr, "  backend %s: %s (%v)\n", id, b.BaseURL, b.Capabilities)
-	}
-	if len(rcfg.Routers) > 0 {
-		fmt.Fprintf(os.Stderr, "  routers: %d configured (Switchyard routes written in ListenAndServe)\n", len(rcfg.Routers))
-	}
+	logStartup(logger, rcfg)
 	otelCfg := observability.LoadConfig()
+	otelCfg.Logger = logger
 	shutdownOTEL, err := observability.Init(otelCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: otel: %v\n", err)
 		return 1
 	}
 	if otelCfg.Enabled {
-		fmt.Fprintf(os.Stderr, "  otel: service=%s otlp=%s dump=%s skip=%v\n",
-			otelCfg.ServiceName, otelCfg.OTLPEndpoint, otelCfg.DumpDir, otelCfg.SkipPaths)
+		logger.Info("otel", "service", otelCfg.ServiceName, "otlp", otelCfg.OTLPEndpoint,
+			"dump", otelCfg.DumpDir, "skip", otelCfg.SkipPaths)
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if shutdownOTEL != nil {
-			if err := shutdownOTEL(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "polypus serve: otel shutdown: %v\n", err)
-			}
+		if err := shutdownOTEL(ctx); err != nil {
+			logger.Warn("otel shutdown", "err", err)
 		}
 	}()
-	if err := polypus.Serve(opts); err != nil {
+	if err := polypus.Serve(opts, gateway.WithLogger(logger)); err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// logStartup logs each capability's default backend, the backends and the routers.
+func logStartup(logger *slog.Logger, rcfg config.RouterConfig) {
+	for _, c := range []struct {
+		name string
+		cap  config.CapabilityBackend
+	}{
+		{"chat_backend", rcfg.Chat},
+		{"vision_backend", rcfg.Vision},
+		{"embed_backend", rcfg.Embed},
+		{"tts_backend", rcfg.TTS},
+		{"stt_backend", rcfg.STT},
+		{"proxy_backend", rcfg.Proxy},
+		{"systemone_backend", rcfg.SystemOne},
+	} {
+		logger.Info("capability", "capability", c.name, "enabled", c.cap.Enabled, "default", c.cap.Default)
+	}
+	for _, id := range rcfg.BackendIDs() {
+		b := rcfg.Backends[id]
+		logger.Info("backend", "id", id, "base_url", b.BaseURL, "capabilities", b.Capabilities)
+	}
+	if len(rcfg.Routers) > 0 {
+		logger.Info("routers", "count", len(rcfg.Routers))
+	}
 }

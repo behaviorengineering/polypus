@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -91,7 +92,9 @@ func newSmokeRunCmd() *cobra.Command {
 			defer cancel()
 			// Trace the probes so a failure shows the client side, not only the
 			// gateway's server spans. Export failures never fail the smoke.
-			shutdown, err := observability.Init(observability.LoadConfig())
+			otelCfg := observability.LoadConfig()
+			otelCfg.Logger = slog.Default()
+			shutdown, err := observability.Init(otelCfg)
 			if err != nil {
 				return &exitError{code: 1, msg: "polypus-smoke: tracing: " + err.Error(), err: err}
 			}

@@ -38,13 +38,13 @@ func LoadServeOptions() (ServeOptions, error) {
 }
 
 // Serve starts the Polypus gateway (blocks until the server exits).
-func Serve(opts ServeOptions) error {
-	return gateway.ListenAndServe(opts)
+func Serve(opts ServeOptions, options ...gateway.HandlerOption) error {
+	return gateway.ListenAndServe(opts, options...)
 }
 
 // ListenAndServe is an alias for Serve.
-func ListenAndServe(opts ServeOptions) error {
-	return Serve(opts)
+func ListenAndServe(opts ServeOptions, options ...gateway.HandlerOption) error {
+	return Serve(opts, options...)
 }
 
 // NewHandler builds the public HTTP handler without listening.
