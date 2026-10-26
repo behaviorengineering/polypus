@@ -622,8 +622,8 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 // Request body caps. Past them MaxBytesReader fails the read and writeHandlerError
 // answers 413.
 const (
-	speechMaxBody        = 1 << 20  // TTS JSON; OpenAI caps input at 4096 characters
-	transcriptionMaxBody = 26 << 20 // OpenAI's 25 MB audio cap plus multipart overhead
+	speechMaxBody        = 1 << 20  // TTS JSON; OpenAI caps input at 4096 characters.
+	transcriptionMaxBody = 26 << 20 // OpenAI's 25 MB audio cap plus multipart overhead.
 )
 
 func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
