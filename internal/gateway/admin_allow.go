@@ -98,9 +98,9 @@ func (h adminHandler) serveModelsAllow(w http.ResponseWriter, r *http.Request) {
 		writeAdminAllowOK(w, backendID, down, publicID, true, b.Models.Allow)
 		return
 	}
-	budgeted, cancel := withModelsBudget(r, h.router.Registry().Config())
+	budgeted, cancel := withModelsBudget(r.Context(), h.router.Registry().Config())
 	defer cancel()
-	inventory := modelsHandler(h).inventoryForBackend(budgeted, b)
+	inventory := modelsHandler(h).inventoryForBackend(budgeted, r.Header.Get("Authorization"), b)
 	h.invCache.flush()
 	if !modelInInventory(backendID, down, model, inventory) {
 		if len(inventory) == 0 {

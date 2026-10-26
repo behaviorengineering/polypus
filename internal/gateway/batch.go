@@ -125,7 +125,7 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.batch.create", publicModel, backendID, backend.BaseURL, downstream)
 	var createErr error
 	defer func() { observability.EndDialSpan(span, createErr, backendID) }()
-	ctx, cancel := h.batchHopContext(ctx, r, backendID)
+	ctx, cancel := h.batchHopContext(ctx, r.Header.Get(config.TimeoutHeader), backendID)
 	defer cancel()
 	meta, createErr := h.batches.Create(ctx, service.CreateRequest{
 		Backend:          backend,
@@ -142,8 +142,10 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 }
 
 // batchHopContext bounds one batch call to the provider by the chat hop budget.
-func (h batchesHandler) batchHopContext(ctx context.Context, r *http.Request, backendID string) (context.Context, context.CancelFunc) {
-	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, false)
+// batchHopContext bounds one batch provider call; timeoutHeader is the caller's
+// requested timeout, if any.
+func (h batchesHandler) batchHopContext(ctx context.Context, timeoutHeader, backendID string) (context.Context, context.CancelFunc) {
+	hop := h.timeouts.ResolveChat(timeoutHeader, backendID, false, false)
 	return context.WithTimeout(ctx, hopBudget(hop, config.DefaultTimeouts().Chat))
 }
 
@@ -159,7 +161,7 @@ func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Reques
 			With("backend", meta.BackendID))
 		return
 	}
-	ctx, cancel := h.batchHopContext(r.Context(), r, meta.BackendID)
+	ctx, cancel := h.batchHopContext(r.Context(), r.Header.Get(config.TimeoutHeader), meta.BackendID)
 	defer cancel()
 	updated, err := h.batches.Refresh(ctx, backend, meta)
 	if err != nil {
@@ -194,7 +196,7 @@ func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	backend, _ := h.router.Registry().Backend(meta.BackendID)
-	ctx, cancel := h.batchHopContext(r.Context(), r, meta.BackendID)
+	ctx, cancel := h.batchHopContext(r.Context(), r.Header.Get(config.TimeoutHeader), meta.BackendID)
 	defer cancel()
 	updated, err := h.batches.Cancel(ctx, backend, meta)
 	if err != nil {

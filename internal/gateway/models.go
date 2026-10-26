@@ -187,7 +187,7 @@ func (h modelsHandler) serveModelsListForSurface(surface ModelSurface, w http.Re
 		h.writeAPINotConfigured(w)
 		return
 	}
-	all := h.collectModels(r, inventoryView(r))
+	all := h.collectModels(r.Context(), r.Header.Get("Authorization"), inventoryView(r))
 	models := modelsForSurface(cfg, all, surface)
 	if surface == surfaceOpenAI {
 		setOpenAIModelsCanonicalLink(w)
@@ -237,7 +237,7 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface ModelSurface, pathPr
 	}
 	id = strings.TrimSpace(id)
 	asInventory := inventoryView(r)
-	all := h.collectModelsForRetrieve(r, asInventory, id)
+	all := h.collectModelsForRetrieve(r.Context(), r.Header.Get("Authorization"), asInventory, id)
 	if m, ok := lookupModelForSurface(cfg, all, surface, id); ok {
 		if surface == surfaceOpenAI {
 			setOpenAIModelsCanonicalLink(w)
@@ -255,9 +255,9 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface ModelSurface, pathPr
 }
 
 // collectModelsForRetrieve loads catalog data for a single model id when not in inventory view.
-func (h modelsHandler) collectModelsForRetrieve(r *http.Request, asInventory bool, targetID string) []openaiModel {
+func (h modelsHandler) collectModelsForRetrieve(ctx context.Context, inboundAuth string, asInventory bool, targetID string) []openaiModel {
 	if asInventory || h.router == nil {
-		return h.collectModels(r, asInventory)
+		return h.collectModels(ctx, inboundAuth, asInventory)
 	}
 	targetID = strings.TrimSpace(targetID)
 	reg := h.router.Registry()
@@ -270,15 +270,15 @@ func (h modelsHandler) collectModelsForRetrieve(r *http.Request, asInventory boo
 	}
 	backendID, _ := backendAndDownstreamForPublicID(cfg, targetID)
 	if backendID == "" {
-		return h.collectModels(r, false)
+		return h.collectModels(ctx, inboundAuth, false)
 	}
 	b, ok := cfg.Backends[backendID]
 	if !ok {
-		return h.collectModels(r, false)
+		return h.collectModels(ctx, inboundAuth, false)
 	}
-	r, cancel := withModelsBudget(r, cfg)
+	ctx, cancel := withModelsBudget(ctx, cfg)
 	defer cancel()
-	results := []backendInventory{{backend: backendID, models: h.inventoryForBackend(r, b)}}
+	results := []backendInventory{{backend: backendID, models: h.inventoryForBackend(ctx, inboundAuth, b)}}
 	h.invCache.flush()
 	byID := mergeBackendInventories(cfg, false, results)
 	mergeSeedModels(cfg, false, []string{backendID}, byID, seedModelsFromEnv(cfg))
@@ -291,17 +291,18 @@ var tracedProbeClient = &http.Client{Transport: observability.WrapTransport(http
 
 // withModelsBudget bounds one models pass: the gateway sets the budget here, once,
 // so the catalog hops below never invent one. A sooner caller deadline still wins.
-func withModelsBudget(r *http.Request, cfg config.RouterConfig) (*http.Request, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(r.Context(), modelsWarmupTimeout(cfg))
-	return r.WithContext(ctx), cancel
+func withModelsBudget(ctx context.Context, cfg config.RouterConfig) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, modelsWarmupTimeout(cfg))
 }
 
-func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openaiModel {
+// collectModels lists every backend's models in parallel. inboundAuth is the caller's
+// Authorization header, which only local backends without their own credential get.
+func (h modelsHandler) collectModels(ctx context.Context, inboundAuth string, asInventory bool) []openaiModel {
 	// Callers fall back here when there is no router, so this is the one guard.
 	if h.shared == nil || h.router == nil {
 		return nil
 	}
-	r, cancel := withModelsBudget(r, h.router.Registry().Config())
+	ctx, cancel := withModelsBudget(ctx, h.router.Registry().Config())
 	defer cancel()
 	reg := h.router.Registry()
 	cfg := reg.Config()
@@ -322,7 +323,7 @@ func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openai
 		wg.Add(1)
 		go func(i int, backendID string, b config.BackendDef) {
 			defer wg.Done()
-			results[i] = backendInventory{backend: backendID, models: h.inventoryForBackend(r, b)}
+			results[i] = backendInventory{backend: backendID, models: h.inventoryForBackend(ctx, inboundAuth, b)}
 		}(i, backendID, b)
 	}
 	wg.Wait()
@@ -334,23 +335,23 @@ func (h modelsHandler) collectModels(r *http.Request, asInventory bool) []openai
 	return finalizeModelList(catalog, byID)
 }
 
-func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef) []openaiModel {
+func (h modelsHandler) inventoryForBackend(ctx context.Context, inboundAuth string, b config.BackendDef) []openaiModel {
 	syncOff := b.Models != nil && !b.Models.ShouldSync()
 	if list := h.liveCatalogLister(b); list != nil {
 		if syncOff {
 			return mergeEnabledSyntheticMissing(b, nil)
 		}
-		return h.liveOrCached(b, h.catalogInventory(r, b, list), nil)
+		return h.liveOrCached(b, h.catalogInventory(ctx, b, list), nil)
 	}
 	if b.IsCloudflareExtension() && !syncOff {
-		return h.liveOrCached(b, h.cloudflareInventory(r, b), nil)
+		return h.liveOrCached(b, h.cloudflareInventory(ctx, b), nil)
 	}
 	if syncOff {
 		return mergeEnabledSyntheticMissing(b, nil)
 	}
-	live := h.fetchBackendModelsProtected(r, b)
+	live := h.fetchBackendModelsProtected(ctx, inboundAuth, b)
 	if isOpenRouterHost(b.BaseURL) {
-		live = h.mergeOpenRouterDecisionModels(r, b, live)
+		live = h.mergeOpenRouterDecisionModels(ctx, inboundAuth, b, live)
 	}
 	// No catalog and no cache: the configured seeds.
 	return h.liveOrCached(b, live, seedModelsForBackend(h.router.Registry().Config(), b.ID))
@@ -390,14 +391,14 @@ func syntheticModels(backendID string, allow []string) []openaiModel {
 
 // cloudflareInventory returns CF models for /v1/models. Client and list errors
 // soft-fail to an empty slice (Warn only) so one backend outage does not fail the catalog.
-func (h modelsHandler) cloudflareInventory(r *http.Request, b config.BackendDef) []openaiModel {
+func (h modelsHandler) cloudflareInventory(ctx context.Context, b config.BackendDef) []openaiModel {
 	var out []openaiModel
 	if execErr := h.upstreams.Execute(b.ID, func() error {
 		client, err := h.cloudflareClient(b)
 		if err != nil {
 			return err
 		}
-		list, listErr := client.ListModelsStrict(r.Context())
+		list, listErr := client.ListModelsStrict(ctx)
 		if listErr != nil {
 			return listErr
 		}
@@ -417,10 +418,10 @@ func (h modelsHandler) cloudflareInventory(r *http.Request, b config.BackendDef)
 	return out
 }
 
-func (h modelsHandler) fetchBackendModelsProtected(r *http.Request, b config.BackendDef) []openaiModel {
+func (h modelsHandler) fetchBackendModelsProtected(ctx context.Context, inboundAuth string, b config.BackendDef) []openaiModel {
 	var out []openaiModel
 	if execErr := h.upstreams.Execute(b.ID, func() error {
-		models, err := h.fetchBackendModelsErr(r, b)
+		models, err := h.fetchBackendModelsErr(ctx, inboundAuth, b)
 		if err != nil {
 			return err
 		}
@@ -432,8 +433,8 @@ func (h modelsHandler) fetchBackendModelsProtected(r *http.Request, b config.Bac
 	return out
 }
 
-func (s *shared) mergeOpenRouterDecisionModels(r *http.Request, b config.BackendDef, live []openaiModel) []openaiModel {
-	decisions, err := s.fetchBackendModelsAtURL(r, b, openRouterModelsListURL(b.BaseURL, "decisions"))
+func (s *shared) mergeOpenRouterDecisionModels(ctx context.Context, inboundAuth string, b config.BackendDef, live []openaiModel) []openaiModel {
+	decisions, err := s.fetchBackendModelsAtURL(ctx, inboundAuth, b, openRouterModelsListURL(b.BaseURL, "decisions"))
 	if err != nil || len(decisions) == 0 {
 		return live
 	}
@@ -464,7 +465,7 @@ func openRouterModelsListURL(base string, modality string) string {
 	return u.String()
 }
 
-func (s *shared) fetchBackendModelsAtURL(r *http.Request, b config.BackendDef, target string) ([]openaiModel, error) {
+func (s *shared) fetchBackendModelsAtURL(ctx context.Context, inboundAuth string, b config.BackendDef, target string) ([]openaiModel, error) {
 	const op = "gateway.fetchBackendModels"
 	// A remote backend gets its own credential or nothing: the caller's
 	// Authorization header never leaves for a third-party provider.
@@ -473,19 +474,19 @@ func (s *shared) fetchBackendModelsAtURL(r *http.Request, b config.BackendDef, t
 		return nil, derrors.Wrap(err, derrors.CodeNotReady, op, "backend auth").With("backend", b.ID)
 	}
 	if auth == "" && !b.Remote {
-		auth = r.Header.Get("Authorization")
+		auth = inboundAuth
 	}
-	// r carries the models pass budget (withModelsBudget); the client fails closed
+	// ctx carries the models pass budget (withModelsBudget); the client fails closed
 	// without a deadline.
-	models, err := s.compat.ListModels(r.Context(), target, auth)
+	models, err := s.compat.ListModels(ctx, target, auth)
 	if err != nil {
 		return nil, gatewayErr(err, op, "list").With("backend", b.ID)
 	}
 	return publicModels(models, b.ID), nil
 }
 
-func (s *shared) fetchBackendModelsErr(r *http.Request, b config.BackendDef) ([]openaiModel, error) {
-	return s.fetchBackendModelsAtURL(r, b, openAIModelsListURL(b.BaseURL))
+func (s *shared) fetchBackendModelsErr(ctx context.Context, inboundAuth string, b config.BackendDef) ([]openaiModel, error) {
+	return s.fetchBackendModelsAtURL(ctx, inboundAuth, b, openAIModelsListURL(b.BaseURL))
 }
 
 // publicModels turns a backend's model list into public ids under the backend.

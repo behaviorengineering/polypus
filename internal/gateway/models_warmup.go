@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -92,12 +91,8 @@ func (h modelsHandler) warmModelsInventory(ctx context.Context) {
 	if h.shared == nil || h.router == nil {
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/", nil)
-	if err != nil {
-		h.log.Warn("polypus: models warmup", "err", err)
-		return
-	}
-	models := h.collectModels(req, false)
+	// Warmup has no caller, so no inbound credential reaches local backends.
+	models := h.collectModels(ctx, "", false)
 	h.log.Info("polypus: models inventory warmup complete", "enabled_count", len(models))
 }
 
@@ -105,12 +100,7 @@ func (h modelsHandler) warmModelsInventoryInventoryView(ctx context.Context) {
 	if h.shared == nil || h.router == nil {
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/", nil)
-	if err != nil {
-		h.log.Warn("polypus: models inventory refresh", "err", err)
-		return
-	}
-	models := h.collectModels(req, true)
+	models := h.collectModels(ctx, "", true)
 	h.log.Info("polypus: models inventory refresh complete", "inventory_count", len(models))
 }
 
