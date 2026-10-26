@@ -77,7 +77,7 @@ func newClaudeBatchGateway(t *testing.T) (http.Handler, *claudeBatchRouter) {
 		t.Fatal(err)
 	}
 	fr := &claudeBatchRouter{fakeRouter: &fakeRouter{reg: reg}}
-	return newTestGateway(t, config.ServeOptions{}, fr, WithClaudeBatches(fr)), fr
+	return newTestGateway(t, config.ServeOptions{}, fr, withClaudeBatches(fr)), fr
 }
 
 const claudeBatchLine = `{"custom_id":"job-1","method":"POST","url":"/v1/chat/completions","body":{"model":"claude_team/claude-sonnet-5-5","messages":[{"role":"user","content":"hi"}]}}`

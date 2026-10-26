@@ -17,11 +17,11 @@ func TestGatewayFromHandlerUnwrapsAccessProtector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHandler(config.ServeOptions{}, WithRouter(&fakeRouter{reg: reg}), WithAdminStateDir(t.TempDir()))
+	handler, err := NewHandler(config.ServeOptions{}, withRouter(&fakeRouter{reg: reg}), WithAdminStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := handler.(*Gateway); ok {
+	if _, ok := handler.(*gatewayHandler); ok {
 		t.Fatal("expected wrapped handler from NewHandler")
 	}
 	gw, ok := gatewayFromHandler(handler)
@@ -38,7 +38,7 @@ func TestGatewayFromHandlerNil(t *testing.T) {
 }
 
 func TestGatewayFromHandlerBareGateway(t *testing.T) {
-	gw := &Gateway{}
+	gw := &gatewayHandler{}
 	got, ok := gatewayFromHandler(http.Handler(gw))
 	if !ok || got != gw {
 		t.Fatalf("got %p want %p ok=%v", got, gw, ok)

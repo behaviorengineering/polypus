@@ -107,7 +107,7 @@ backends:
 	}
 	defer client.Close()
 
-	h, err := NewHandler(config.ServeOptions{}, WithRouter(client))
+	h, err := NewHandler(config.ServeOptions{}, withRouter(client))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func createTestBatch(t *testing.T, h http.Handler) batch.PublicBatch {
 	return batchObj
 }
 
-func newBatchGatewayHandler(t *testing.T, cfHandler http.HandlerFunc) *Gateway {
+func newBatchGatewayHandler(t *testing.T, cfHandler http.HandlerFunc) *gatewayHandler {
 	if cfHandler == nil {
 		cfHandler = func(w http.ResponseWriter, r *http.Request) {
 			raw, _ := io.ReadAll(r.Body)
@@ -509,7 +509,7 @@ backends:
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
-	handler, err := NewHandler(config.ServeOptions{}, WithRouter(client))
+	handler, err := NewHandler(config.ServeOptions{}, withRouter(client))
 	if err != nil {
 		t.Fatal(err)
 	}

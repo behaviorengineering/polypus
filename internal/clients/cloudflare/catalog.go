@@ -50,6 +50,7 @@ type Client struct {
 
 	backendID string             // scopes the outbound breaker to this backend.
 	policies  *outbound.Policies // nil: the process default.
+	log       *slog.Logger       // nil: no warnings.
 }
 
 // NewClient builds an uncached Cloudflare extension client from a remote backend
@@ -114,34 +115,7 @@ func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
 		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, "cloudflare", "not configured")
 	}
-	return catalog.ListStrict(ctx, "cloudflare", c.cache, c.fetchAll)
-}
-
-// ListModels returns OpenAI-shaped models (ids are bare @cf/... for Polypus to prefix).
-// Fetch failures with no cache yield an empty list; prefer ListModelsStrict when
-// the caller must distinguish errors from an empty catalog.
-func (c *Client) ListModels(ctx context.Context) ModelList {
-	list, err := c.ListModelsStrict(ctx)
-	if err != nil {
-		slog.Warn("cloudflare: models catalog fetch failed; empty list", "err", err)
-		return ModelList{Object: "list", Data: nil}
-	}
-	return list
-}
-
-// GetModel returns one model by id or false when missing.
-func (c *Client) GetModel(ctx context.Context, id string) (Model, bool) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return Model{}, false
-	}
-	list := c.ListModels(ctx)
-	for _, m := range list.Data {
-		if m.ID == id {
-			return m, true
-		}
-	}
-	return Model{}, false
+	return catalog.ListStrict(ctx, catalog.Source{Provider: "cloudflare", Backend: c.backendID, Cache: c.cache, Fetch: c.fetchAll, Log: c.log})
 }
 
 func (c *Client) fetchAll(ctx context.Context) ([]Model, error) {

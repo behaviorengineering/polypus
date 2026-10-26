@@ -11,10 +11,10 @@ import (
 // accessProtector gates the gateway when the key store has at least one key.
 type accessProtector struct {
 	keys *keys.Store
-	gw   *Gateway
+	gw   *gatewayHandler
 }
 
-func wrapGatewayAccess(store *keys.Store, gw *Gateway) http.Handler {
+func wrapGatewayAccess(store *keys.Store, gw *gatewayHandler) http.Handler {
 	if gw == nil {
 		panic("gateway: wrapGatewayAccess(nil gateway)")
 	}
@@ -22,11 +22,11 @@ func wrapGatewayAccess(store *keys.Store, gw *Gateway) http.Handler {
 }
 
 // gatewayFromHandler returns the inner Gateway when handler is wrapped for access control.
-func gatewayFromHandler(handler http.Handler) (*Gateway, bool) {
+func gatewayFromHandler(handler http.Handler) (*gatewayHandler, bool) {
 	if handler == nil {
 		return nil, false
 	}
-	if gw, ok := handler.(*Gateway); ok {
+	if gw, ok := handler.(*gatewayHandler); ok {
 		return gw, true
 	}
 	if ap, ok := handler.(*accessProtector); ok && ap.gw != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,7 +53,7 @@ func TestRunSpeechPluginShortCircuitsTTS(t *testing.T) {
 			return b, true
 		}
 		return config.BackendDef{}, false
-	}, NewClient)
+	}, NewClient, slog.New(slog.DiscardHandler))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -99,7 +100,7 @@ func TestRunSpeechPluginRejectsMissingDeadline(t *testing.T) {
 			return b, true
 		}
 		return config.BackendDef{}, false
-	}, NewClient)
+	}, NewClient, slog.New(slog.DiscardHandler))
 	bctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
 	req := &schemas.BifrostRequest{
 		RequestType: schemas.SpeechRequest,
@@ -131,7 +132,7 @@ func TestRunSpeechPluginRejectsMissingDeadline(t *testing.T) {
 func TestRunSpeechPluginRejectsNilSpeechPayload(t *testing.T) {
 	plugin := NewRunSpeechPlugin(func(string) (config.BackendDef, bool) {
 		return config.BackendDef{}, false
-	}, NewClient)
+	}, NewClient, slog.New(slog.DiscardHandler))
 	bctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
 	req := &schemas.BifrostRequest{RequestType: schemas.SpeechRequest}
 	_, sc, err := plugin.PreLLMHook(bctx, req)
@@ -161,7 +162,7 @@ func TestRunSpeechPluginRejectsStream(t *testing.T) {
 			return b, true
 		}
 		return config.BackendDef{}, false
-	}, NewClient)
+	}, NewClient, slog.New(slog.DiscardHandler))
 	bctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
 	req := &schemas.BifrostRequest{
 		RequestType: schemas.SpeechStreamRequest,

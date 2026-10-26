@@ -56,7 +56,10 @@ func TestCatalogPaginated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list := client.ListModels(hopCtx(t))
+	list, err := client.ListModelsStrict(hopCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if list.Object != "list" {
 		t.Fatalf("object: %q", list.Object)
 	}
@@ -111,10 +114,6 @@ func TestCatalogFailureEmpty(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	list := client.ListModels(hopCtx(t))
-	if list.Object != "list" || len(list.Data) != 0 {
-		t.Fatalf("want empty list, got %+v", list)
 	}
 	_, strictErr := client.ListModelsStrict(hopCtx(t))
 	if strictErr == nil {

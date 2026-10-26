@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 )
 
@@ -27,14 +28,14 @@ func isJSONNull(raw []byte) bool {
 func (s *shared) writeJSON(w http.ResponseWriter, status int, v any) {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		s.log.Warn("polypus: json response encode failed", "err", err)
+		s.log.Warn("polypus: json response encode failed", "type", fmt.Sprintf("%T", v), "status", status, "err", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if _, err := w.Write(append(raw, '\n')); err != nil {
-		s.log.Warn("polypus: json response write failed", "err", err)
+		s.log.Warn("polypus: json response write failed", "type", fmt.Sprintf("%T", v), "status", status, "err", err)
 	}
 }
 

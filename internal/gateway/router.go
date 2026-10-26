@@ -18,38 +18,38 @@ import (
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
 
-// RegistryProvider exposes the routing table.
-type RegistryProvider interface {
+// registryProvider exposes the routing table.
+type registryProvider interface {
 	Registry() *router.Registry
 }
 
-// ChatRouter is the Bifrost/OpenAI chat and embed dial surface (≤4 methods).
-type ChatRouter interface {
+// chatRouter is the Bifrost/OpenAI chat and embed dial surface (≤4 methods).
+type chatRouter interface {
 	UsesBifrost(backendID string) bool
 	ChatCompletionRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) ([]byte, error)
 	ChatCompletionStreamRaw(ctx context.Context, backendID, model string, body []byte) (<-chan router.ChatStreamChunk, <-chan error, error)
 	EmbeddingRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) ([]byte, error)
 }
 
-// SpeechRouter is the TTS/STT dial surface (≤2 methods).
-type SpeechRouter interface {
+// speechRouter is the TTS/STT dial surface (≤2 methods).
+type speechRouter interface {
 	Synthesize(ctx context.Context, req router.SpeechRequest) ([]byte, error)
 	Transcribe(ctx context.Context, req router.TranscriptionRequest) ([]byte, string, error)
 }
 
-// SystemOneRouter is the Bifrost Decision dial surface for native OpenRouter SystemOne.
-type SystemOneRouter interface {
+// systemOneRouter is the Bifrost Decision dial surface for native OpenRouter SystemOne.
+type systemOneRouter interface {
 	SystemOneDecisionRaw(ctx context.Context, backendID, downstream string, body []byte, timeout time.Duration) ([]byte, error)
 }
 
-// Router is the composed gateway dial dependency (Registry + Chat + Speech + SystemOne).
+// gatewayRouter is the composed gateway dial dependency (Registry + Chat + Speech + SystemOne).
 // Prefer depending on the smaller interfaces at call sites; *router.Client implements all.
 // Batches run through the batch service, not the router.
-type Router interface {
-	RegistryProvider
-	ChatRouter
-	SpeechRouter
-	SystemOneRouter
+type gatewayRouter interface {
+	registryProvider
+	chatRouter
+	speechRouter
+	systemOneRouter
 }
 
 // routerCloser is optional; owned Bifrost clients implement Close.
@@ -57,23 +57,23 @@ type routerCloser interface {
 	Close()
 }
 
-// CloudflareClientGet constructs extension clients (defaults to cloudflare.GetClient).
-type CloudflareClientGet func(config.BackendDef) (*cloudflare.Client, error)
+// cloudflareClientGet constructs extension clients (defaults to cloudflare.GetClient).
+type cloudflareClientGet func(config.BackendDef) (*cloudflare.Client, error)
 
-// GeminiClientGet constructs Gemini catalog clients (defaults to gemini.GetClient).
-type GeminiClientGet func(config.BackendDef) (*gemini.Client, error)
+// geminiClientGet constructs Gemini catalog clients (defaults to gemini.GetClient).
+type geminiClientGet func(config.BackendDef) (*gemini.Client, error)
 
-// AnthropicClientGet constructs Anthropic catalog clients (defaults to anthropic.GetClient).
-type AnthropicClientGet func(config.BackendDef) (*anthropic.Client, error)
+// anthropicClientGet constructs Anthropic catalog clients (defaults to anthropic.GetClient).
+type anthropicClientGet func(config.BackendDef) (*anthropic.Client, error)
 
 // HandlerOption configures NewHandler.
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
-	router        Router
-	cfGet         CloudflareClientGet
-	geminiGet     GeminiClientGet
-	anthropicGet  AnthropicClientGet
+	router        gatewayRouter
+	cfGet         cloudflareClientGet
+	geminiGet     geminiClientGet
+	anthropicGet  anthropicClientGet
 	overlayPath   string
 	adminKeysPath string
 	clock         func() time.Time
@@ -83,9 +83,9 @@ type handlerOptions struct {
 	logger        *slog.Logger
 }
 
-// WithRouter injects a Router so tests can avoid bifrost.Init.
+// withRouter injects a gatewayRouter so tests can avoid bifrost.Init.
 // Panics if r is nil.
-func WithRouter(r Router) HandlerOption {
+func withRouter(r gatewayRouter) HandlerOption {
 	if r == nil {
 		panic("gateway: WithRouter(nil)")
 	}
@@ -94,22 +94,15 @@ func WithRouter(r Router) HandlerOption {
 	}
 }
 
-// WithCloudflareClientGet injects CF client construction for health/inventory.
-func WithCloudflareClientGet(fn CloudflareClientGet) HandlerOption {
-	return func(o *handlerOptions) {
-		o.cfGet = fn
-	}
-}
-
-// WithGeminiClientGet injects Gemini catalog client construction for inventory.
-func WithGeminiClientGet(fn GeminiClientGet) HandlerOption {
+// withGeminiClientGet injects Gemini catalog client construction for inventory.
+func withGeminiClientGet(fn geminiClientGet) HandlerOption {
 	return func(o *handlerOptions) {
 		o.geminiGet = fn
 	}
 }
 
-// WithAnthropicClientGet injects Anthropic catalog client construction for inventory.
-func WithAnthropicClientGet(fn AnthropicClientGet) HandlerOption {
+// withAnthropicClientGet injects Anthropic catalog client construction for inventory.
+func withAnthropicClientGet(fn anthropicClientGet) HandlerOption {
 	return func(o *handlerOptions) {
 		o.anthropicGet = fn
 	}
@@ -126,25 +119,14 @@ func WithAdminStateDir(dir string) HandlerOption {
 	}
 }
 
-// WithClaudeBatches sets the Anthropic Message Batches surface the batch service
+// withClaudeBatches sets the Anthropic Message Batches surface the batch service
 // uses (tests). By default it comes from the router client. Panics if b is nil.
-func WithClaudeBatches(b service.ClaudeBatches) HandlerOption {
+func withClaudeBatches(b service.ClaudeBatches) HandlerOption {
 	if b == nil {
 		panic("gateway: WithClaudeBatches(nil)")
 	}
 	return func(o *handlerOptions) {
 		o.claudeBatches = b
-	}
-}
-
-// WithClock sets the job clock that stamps admin keys and batch records (tests).
-// Panics if now is nil.
-func WithClock(now func() time.Time) HandlerOption {
-	if now == nil {
-		panic("gateway: WithClock(nil)")
-	}
-	return func(o *handlerOptions) {
-		o.clock = now
 	}
 }
 
@@ -188,13 +170,13 @@ func (o *handlerOptions) fillDefaults() error {
 		o.policies = outbound.NewPolicies()
 	}
 	if o.cfGet == nil {
-		o.cfGet = (&cloudflare.Clients{Policies: o.policies}).Get
+		o.cfGet = (&cloudflare.Clients{Policies: o.policies, Logger: o.logger}).Get
 	}
 	if o.geminiGet == nil {
-		o.geminiGet = (&gemini.Clients{Policies: o.policies}).Get
+		o.geminiGet = (&gemini.Clients{Policies: o.policies, Logger: o.logger}).Get
 	}
 	if o.anthropicGet == nil {
-		o.anthropicGet = (&anthropic.Clients{Policies: o.policies}).Get
+		o.anthropicGet = (&anthropic.Clients{Policies: o.policies, Logger: o.logger}).Get
 	}
 	if o.openRouterGet == nil {
 		o.openRouterGet = (&openrouter.Clients{Policies: o.policies}).Get
@@ -202,4 +184,4 @@ func (o *handlerOptions) fillDefaults() error {
 	return nil
 }
 
-var _ Router = (*router.Client)(nil)
+var _ gatewayRouter = (*router.Client)(nil)

@@ -1,8 +1,11 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,7 +44,7 @@ func TestListStrictFetchesThenServesCache(t *testing.T) {
 		return []Model{{ID: "a"}}, nil
 	}
 	for range 2 {
-		list, err := ListStrict(context.Background(), "test", c, fetch)
+		list, err := ListStrict(context.Background(), Source{Provider: "test", Cache: c, Fetch: fetch})
 		if err != nil || list.Object != ObjectList || len(list.Data) != 1 {
 			t.Fatalf("list=%#v err=%v", list, err)
 		}
@@ -53,9 +56,9 @@ func TestListStrictFetchesThenServesCache(t *testing.T) {
 
 func TestListStrictReturnsErrorWithoutCache(t *testing.T) {
 	boom := errors.New("boom")
-	_, err := ListStrict(context.Background(), "test", NewCache(time.Minute), func(context.Context) ([]Model, error) {
+	_, err := ListStrict(context.Background(), Source{Provider: "test", Cache: NewCache(time.Minute), Fetch: func(context.Context) ([]Model, error) {
 		return nil, boom
-	})
+	}})
 	if !errors.Is(err, boom) {
 		t.Fatalf("err: %v", err)
 	}
@@ -92,11 +95,29 @@ func TestListStrictServesStaleCacheAfterTTLWhenFetchFails(t *testing.T) {
 	c.Put([]Model{{ID: "a"}})
 	now = now.Add(time.Hour) // well past the TTL.
 	fetches := 0
-	list, err := ListStrict(context.Background(), "test", c, func(context.Context) ([]Model, error) {
+	list, err := ListStrict(context.Background(), Source{Provider: "test", Cache: c, Fetch: func(context.Context) ([]Model, error) {
 		fetches++
 		return nil, errors.New("upstream down")
-	})
+	}})
 	if err != nil || fetches != 1 || len(list.Data) != 1 || list.Data[0].ID != "a" {
 		t.Fatalf("want the stale list after a failed fetch: list=%+v err=%v fetches=%d", list, err, fetches)
+	}
+}
+
+func TestListStrictWarnsStaleThroughTheSourceLogger(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	c := NewCacheClock(time.Minute, func() time.Time { return now })
+	c.Put([]Model{{ID: "a"}})
+	now = now.Add(time.Hour)
+	var buf bytes.Buffer
+	_, err := ListStrict(context.Background(), Source{
+		Provider: "gemini", Backend: "g1", Cache: c, Log: slog.New(slog.NewTextHandler(&buf, nil)),
+		Fetch: func(context.Context) ([]Model, error) { return nil, errors.New("down") },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "provider=gemini") || !strings.Contains(buf.String(), "backend=g1") {
+		t.Fatalf("the warning names provider and backend as fields: %q", buf.String())
 	}
 }

@@ -90,7 +90,7 @@ func (h modelsHandler) warmModelsInventory(ctx context.Context) {
 	h.log.Info("polypus: models inventory warmup complete", "enabled_count", len(models))
 }
 
-func (h modelsHandler) warmModelsInventoryInventoryView(ctx context.Context) {
+func (h modelsHandler) refreshInventoryView(ctx context.Context) {
 	if h.shared == nil || h.router == nil {
 		return
 	}
@@ -107,7 +107,7 @@ func (h modelsHandler) startModelsRefreshLoop(refreshCtx context.Context, cfg co
 		timeout := modelsWarmupTimeout(cfg)
 		runCtx, cancel := context.WithTimeout(iterCtx, timeout)
 		defer cancel()
-		h.warmModelsInventoryInventoryView(runCtx)
+		h.refreshInventoryView(runCtx)
 	}
 	go runModelsRefreshLoop(refreshCtx, interval, nil, warm)
 }

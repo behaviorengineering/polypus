@@ -150,7 +150,7 @@ func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *ht
 	if err != nil {
 		return gatewayErr(err, "gateway.proxySystemOnePassthrough", "rewrite model")
 	}
-	auth, authErr := mustBackendAuth(c.backend)
+	auth, authErr := backendAuth(c.backend)
 	if authErr != nil {
 		return gatewayErr(authErr, "gateway.proxySystemOnePassthrough", "backend auth").With("backend", c.backend.ID)
 	}

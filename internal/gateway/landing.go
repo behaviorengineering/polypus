@@ -276,7 +276,7 @@ func safeHostname(host string) bool {
 	return true
 }
 
-func (g *Gateway) serveLanding(w http.ResponseWriter, r *http.Request) {
+func (g *gatewayHandler) serveLanding(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -297,7 +297,7 @@ func (g *Gateway) serveLanding(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (g *Gateway) serveBannerWebP(w http.ResponseWriter, r *http.Request) {
+func (g *gatewayHandler) serveBannerWebP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

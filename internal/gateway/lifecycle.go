@@ -14,7 +14,7 @@ import (
 )
 
 // Close releases owned router resources (no-op when WithRouter injected the Router).
-func (g *Gateway) Close() {
+func (g *gatewayHandler) Close() {
 	if g == nil || g.shared == nil || !g.ownedRouter {
 		return
 	}
@@ -53,7 +53,7 @@ func ListenAndServe(ctx context.Context, opts config.ServeOptions, options ...Ha
 }
 
 // newServingHandler builds the public handler and the gateway behind it.
-func newServingHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handler, *Gateway, error) {
+func newServingHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handler, *gatewayHandler, error) {
 	handler, err := NewHandler(opts, options...)
 	if err != nil {
 		return nil, nil, err
@@ -69,7 +69,7 @@ func newServingHandler(opts config.ServeOptions, options ...HandlerOption) (http
 // prepare does the startup work before the server accepts traffic: it writes the
 // Switchyard routes, probes remote credentials, warms the models inventory and starts
 // its refresh loop on refreshCtx.
-func prepare(ctx, refreshCtx context.Context, g *Gateway, opts config.ServeOptions) error {
+func prepare(ctx, refreshCtx context.Context, g *gatewayHandler, opts config.ServeOptions) error {
 	if err := writeSwitchyardConfig(g, opts); err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func serve(ctx context.Context, server *http.Server) error {
 }
 
 // writeSwitchyardConfig renders Switchyard TOML from the live router config (process startup).
-func writeSwitchyardConfig(g *Gateway, opts config.ServeOptions) error {
+func writeSwitchyardConfig(g *gatewayHandler, opts config.ServeOptions) error {
 	if g == nil || g.router == nil {
 		return fmt.Errorf("gateway: router not configured")
 	}

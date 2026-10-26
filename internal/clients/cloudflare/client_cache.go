@@ -1,6 +1,8 @@
 package cloudflare
 
 import (
+	"log/slog"
+
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
@@ -13,7 +15,9 @@ import (
 // router's speech plugin; its clients share the gateway's outbound policies.
 type Clients struct {
 	Policies *outbound.Policies
-	reg      catalog.Registry[Client]
+	// Logger receives the clients' warnings; nil discards them.
+	Logger *slog.Logger
+	reg    catalog.Registry[Client]
 }
 
 // Get returns the cached client for b, building it on first use.
@@ -36,6 +40,7 @@ func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
 		}
 		c.backendID = b.ID
 		c.policies = cs.Policies
+		c.log = cs.Logger
 		return c, nil
 	})
 }

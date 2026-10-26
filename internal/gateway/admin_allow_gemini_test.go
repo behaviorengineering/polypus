@@ -31,7 +31,7 @@ func geminiAllowBackendConfig() config.RouterConfig {
 	}
 }
 
-func geminiTestClientGet(srvURL string) GeminiClientGet {
+func geminiTestClientGet(srvURL string) geminiClientGet {
 	return func(b config.BackendDef) (*gemini.Client, error) {
 		return gemini.NewClientWithListURL(srvURL, "secret")
 	}
@@ -53,7 +53,7 @@ func TestAdminAllowGeminiFromLiveInventory(t *testing.T) {
 	dir := t.TempDir()
 	h := newTestGateway(t, config.ServeOptions{}, fr,
 		WithAdminStateDir(dir),
-		WithGeminiClientGet(geminiTestClientGet(modelsSrv.URL)),
+		withGeminiClientGet(geminiTestClientGet(modelsSrv.URL)),
 	)
 	body := []byte(`{"backend":"gemini_studio","model":"gemma-4-26b-a4b-it"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/models/allow", bytes.NewReader(body))
@@ -84,7 +84,7 @@ func TestAdminAllowGeminiInventoryMiss(t *testing.T) {
 	dir := t.TempDir()
 	h := newTestGateway(t, config.ServeOptions{}, fr,
 		WithAdminStateDir(dir),
-		WithGeminiClientGet(geminiTestClientGet(modelsSrv.URL)),
+		withGeminiClientGet(geminiTestClientGet(modelsSrv.URL)),
 	)
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/models/allow", bytes.NewReader([]byte(`{"backend":"gemini_studio","model":"not-in-google-catalog"}`)))
 	rec := httptest.NewRecorder()
@@ -124,7 +124,7 @@ func TestGeminiInventorySyncFalseSynthetic(t *testing.T) {
 	}
 	fr := &fakeRouter{reg: reg}
 	h := newTestGateway(t, config.ServeOptions{}, fr,
-		WithGeminiClientGet(geminiTestClientGet(modelsSrv.URL)),
+		withGeminiClientGet(geminiTestClientGet(modelsSrv.URL)),
 	)
 	req := httptest.NewRequest(http.MethodGet, "/v1/apis/openai/models?view=inventory", nil)
 	rec := httptest.NewRecorder()
@@ -152,7 +152,7 @@ func TestGeminiInventorySyncFalseSynthetic(t *testing.T) {
 	dir := t.TempDir()
 	h2 := newTestGateway(t, config.ServeOptions{}, fr,
 		WithAdminStateDir(dir),
-		WithGeminiClientGet(geminiTestClientGet(modelsSrv.URL)),
+		withGeminiClientGet(geminiTestClientGet(modelsSrv.URL)),
 	)
 	allowReq := httptest.NewRequest(http.MethodPost, "/v1/admin/models/allow", bytes.NewReader([]byte(`{"backend":"gemini_studio","model":"gemma-4-26b-a4b-it"}`)))
 	allowRec := httptest.NewRecorder()

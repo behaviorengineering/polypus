@@ -178,7 +178,7 @@ func (h modelsHandler) serveModelsList(w http.ResponseWriter, r *http.Request) {
 	h.serveModelsListForSurface(surfaceOpenAI, w, r)
 }
 
-func (h modelsHandler) serveModelsListForSurface(surface ModelSurface, w http.ResponseWriter, r *http.Request) {
+func (h modelsHandler) serveModelsListForSurface(surface modelSurface, w http.ResponseWriter, r *http.Request) {
 	cfg := config.RouterConfig{}
 	if h.router != nil {
 		cfg = h.router.Registry().Config()
@@ -215,7 +215,7 @@ func (h modelsHandler) serveModelRetrieve(w http.ResponseWriter, r *http.Request
 	h.serveModelRetrieveForSurface(surfaceOpenAI, "/v1/models/", w, r)
 }
 
-func (h modelsHandler) serveModelRetrieveForSurface(surface ModelSurface, pathPrefix string, w http.ResponseWriter, r *http.Request) {
+func (h modelsHandler) serveModelRetrieveForSurface(surface modelSurface, pathPrefix string, w http.ResponseWriter, r *http.Request) {
 	cfg := config.RouterConfig{}
 	if h.router != nil {
 		cfg = h.router.Registry().Config()
@@ -420,7 +420,7 @@ func (h modelsHandler) cloudflareInventory(ctx context.Context, b config.Backend
 func (h modelsHandler) fetchBackendModelsProtected(ctx context.Context, inboundAuth string, b config.BackendDef) []openaiModel {
 	var out []openaiModel
 	if execErr := h.upstreams.Execute(b.ID, func() error {
-		models, err := h.fetchBackendModelsErr(ctx, inboundAuth, b)
+		models, err := h.fetchBackendModels(ctx, inboundAuth, b)
 		if err != nil {
 			return err
 		}
@@ -484,7 +484,7 @@ func (s *shared) fetchBackendModelsAtURL(ctx context.Context, inboundAuth string
 	return publicModels(models, b.ID), nil
 }
 
-func (s *shared) fetchBackendModelsErr(ctx context.Context, inboundAuth string, b config.BackendDef) ([]openaiModel, error) {
+func (s *shared) fetchBackendModels(ctx context.Context, inboundAuth string, b config.BackendDef) ([]openaiModel, error) {
 	return s.fetchBackendModelsAtURL(ctx, inboundAuth, b, openAIModelsListURL(b.BaseURL))
 }
 

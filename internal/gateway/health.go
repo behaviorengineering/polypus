@@ -101,7 +101,7 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 }
 
 // probeRemoteCredentials validates each remote backend before serve accepts traffic.
-func probeRemoteCredentials(ctx context.Context, cfg config.RouterConfig, getCF CloudflareClientGet) error {
+func probeRemoteCredentials(ctx context.Context, cfg config.RouterConfig, getCF cloudflareClientGet) error {
 	for _, id := range cfg.BackendIDs() {
 		b := cfg.Backends[id]
 		if !b.Remote {
@@ -128,7 +128,7 @@ func (s *shared) probeBackend(ctx context.Context, b config.BackendDef) error {
 
 // probeRemoteBackend checks a remote backend's credential; a Cloudflare backend is
 // also pinged.
-func probeRemoteBackend(ctx context.Context, b config.BackendDef, getCF CloudflareClientGet) error {
+func probeRemoteBackend(ctx context.Context, b config.BackendDef, getCF cloudflareClientGet) error {
 	if b.IsCloudflareExtension() {
 		if getCF == nil {
 			getCF = new(cloudflare.Clients).Get

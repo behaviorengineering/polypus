@@ -36,7 +36,7 @@ func (s *shared) resolveTarget(op, backendID, downstream string) (backendTarget,
 	if err != nil {
 		return backendTarget{}, err
 	}
-	auth, err := mustBackendAuth(b)
+	auth, err := backendAuth(b)
 	if err != nil {
 		return backendTarget{}, err
 	}

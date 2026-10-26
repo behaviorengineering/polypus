@@ -131,9 +131,9 @@ func newFakeRouter(t *testing.T, opts config.ServeOptions) *fakeRouter {
 }
 
 // newTestGateway builds a handler with an injected Router (skips bifrost.Init).
-func newTestGateway(t *testing.T, opts config.ServeOptions, r Router, extra ...HandlerOption) http.Handler {
+func newTestGateway(t *testing.T, opts config.ServeOptions, r gatewayRouter, extra ...HandlerOption) http.Handler {
 	t.Helper()
-	options := append([]HandlerOption{WithRouter(r)}, extra...)
+	options := append([]HandlerOption{withRouter(r)}, extra...)
 	handler, err := NewHandler(opts, options...)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func newTestGateway(t *testing.T, opts config.ServeOptions, r Router, extra ...H
 	switch h := handler.(type) {
 	case *accessProtector:
 		t.Cleanup(h.Close)
-	case *Gateway:
+	case *gatewayHandler:
 		t.Cleanup(h.Close)
 	}
 	return handler
@@ -215,7 +215,7 @@ func TestWithRouterNilPanics(t *testing.T) {
 			t.Fatal("expected panic")
 		}
 	}()
-	_ = WithRouter(nil)
+	_ = withRouter(nil)
 }
 
 func TestSwitchyardNameAligned(t *testing.T) {

@@ -16,10 +16,10 @@ func bearerAuthHeader(b config.BackendDef) (string, error) {
 	return "Bearer " + token, nil
 }
 
-func mustBackendAuth(b config.BackendDef) (string, error) {
+func backendAuth(b config.BackendDef) (string, error) {
 	auth, err := bearerAuthHeader(b)
 	if err != nil {
-		return "", derrors.Wrap(err, derrors.CodeNotReady, "gateway.mustBackendAuth", "backend auth")
+		return "", derrors.Wrap(err, derrors.CodeNotReady, "gateway.backendAuth", "backend auth")
 	}
 	return auth, nil
 }

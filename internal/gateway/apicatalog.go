@@ -8,11 +8,11 @@ import (
 	"github.com/behaviorengineering/polypus/internal/config"
 )
 
-// ModelSurface is a gateway API flavor for model catalog partitioning.
-type ModelSurface int
+// modelSurface is a gateway API flavor for model catalog partitioning.
+type modelSurface int
 
 const (
-	surfaceOpenAI ModelSurface = iota
+	surfaceOpenAI modelSurface = iota
 	surfaceSystemOne
 )
 
@@ -165,7 +165,7 @@ func backendAndDownstreamForPublicID(cfg config.RouterConfig, publicID string) (
 	return "", publicID
 }
 
-func partitionModels(cfg config.RouterConfig, all []openaiModel, surface ModelSurface) []openaiModel {
+func partitionModels(cfg config.RouterConfig, all []openaiModel, surface modelSurface) []openaiModel {
 	out := make([]openaiModel, 0, len(all))
 	for _, m := range all {
 		sys := isSystemOneListedModel(cfg, m.ID)
@@ -183,13 +183,13 @@ func partitionModels(cfg config.RouterConfig, all []openaiModel, surface ModelSu
 	return out
 }
 
-func modelsForSurface(cfg config.RouterConfig, all []openaiModel, surface ModelSurface) []openaiModel {
+func modelsForSurface(cfg config.RouterConfig, all []openaiModel, surface modelSurface) []openaiModel {
 	part := partitionModels(cfg, all, surface)
 	return dedupeModelsByBackendDownstream(cfg, part)
 }
 
 // lookupModelForSurface finds a model by public id or an equivalent default-backend alias.
-func lookupModelForSurface(cfg config.RouterConfig, all []openaiModel, surface ModelSurface, id string) (openaiModel, bool) {
+func lookupModelForSurface(cfg config.RouterConfig, all []openaiModel, surface modelSurface, id string) (openaiModel, bool) {
 	models := modelsForSurface(cfg, all, surface)
 	wantKey := catalogModelKey(cfg, id)
 	for _, m := range models {

@@ -53,12 +53,12 @@ func nextStreamChunkIndex(ctx context.Context) int {
 	return c.index
 }
 
-func recordBifrostStreamChunk(ctx context.Context, chunk router.ChatStreamChunk, action StreamSSEAction, emit bool) {
+func recordBifrostStreamChunk(ctx context.Context, chunk router.ChatStreamChunk, action streamSSEAction, emit bool) {
 	idx := nextStreamChunkIndex(ctx)
 	observability.RecordChatStreamChunk(ctx, observability.StreamChunk{
 		Index: idx, OpenAIJSON: chunk.OpenAIJSON, RawProviderJSON: chunk.RawProviderJSON, SSEAction: string(action), Emitted: emit,
 	})
-	if action == StreamSSEDrop {
+	if action == streamSSEDrop {
 		dumpIllegalStreamChunk(ctx, idx, chunk.OpenAIJSON, chunk.RawProviderJSON)
 	}
 }

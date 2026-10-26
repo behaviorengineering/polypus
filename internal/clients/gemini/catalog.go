@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ type Client struct {
 	cache      *catalog.Cache
 	backendID  string             // scopes the outbound breaker to this backend.
 	policies   *outbound.Policies // nil: the process default.
+	log        *slog.Logger       // nil: no warnings.
 }
 
 // NewClient builds a Gemini catalog client from a backend definition.
@@ -100,7 +102,7 @@ func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if ctx == nil {
 		return ModelList{}, derrors.New(derrors.CodeInvalid, "gemini.ListModelsStrict", "context required")
 	}
-	return catalog.ListStrict(ctx, "gemini", c.cache, c.fetch)
+	return catalog.ListStrict(ctx, catalog.Source{Provider: "gemini", Backend: c.backendID, Cache: c.cache, Fetch: c.fetch, Log: c.log})
 }
 
 func (c *Client) fetch(ctx context.Context) ([]Model, error) {

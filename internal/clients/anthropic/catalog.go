@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -51,6 +52,7 @@ type Client struct {
 	cache      *catalog.Cache
 	backendID  string             // scopes the outbound breaker to this backend.
 	policies   *outbound.Policies // nil: the process default.
+	log        *slog.Logger       // nil: no warnings.
 }
 
 // NewClient builds an Anthropic catalog client from a backend definition.
@@ -109,7 +111,7 @@ func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if ctx == nil {
 		return ModelList{}, derrors.New(derrors.CodeInvalid, "anthropic.ListModelsStrict", "context required")
 	}
-	return catalog.ListStrict(ctx, "anthropic", c.cache, c.fetchAll)
+	return catalog.ListStrict(ctx, catalog.Source{Provider: "anthropic", Backend: c.backendID, Cache: c.cache, Fetch: c.fetchAll, Log: c.log})
 }
 
 // fetchAll follows after_id pagination until has_more is false.

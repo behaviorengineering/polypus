@@ -10,13 +10,13 @@ import (
 	"strings"
 )
 
-// StreamSSEAction describes how the gateway treated one OpenAI chat stream chunk.
-type StreamSSEAction string
+// streamSSEAction describes how the gateway treated one OpenAI chat stream chunk.
+type streamSSEAction string
 
 const (
-	StreamSSEForward      StreamSSEAction = "forward"
-	StreamSSEDrop         StreamSSEAction = "drop"
-	StreamSSERewriteUsage StreamSSEAction = "rewrite_usage"
+	streamSSEForward      streamSSEAction = "forward"
+	streamSSEDrop         streamSSEAction = "drop"
+	streamSSERewriteUsage streamSSEAction = "rewrite_usage"
 )
 
 // openAIStreamSanitizer tracks per-choice-index terminal finish_reason for one stream.
@@ -43,17 +43,17 @@ func (st *openAIStreamSanitizer) hasAnyFinished() bool {
 // sanitizeOpenAIStreamChunk enforces the public OpenAI stream contract on one JSON chunk.
 // stripExtraFields removes Bifrost-only extra_fields before emitting to clients.
 // On malformed JSON, fail open: emit the original bytes unchanged.
-func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtraFields bool) (out []byte, action StreamSSEAction, emit bool) {
+func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtraFields bool) ([]byte, streamSSEAction, bool) {
 	if st == nil {
 		st = newOpenAIStreamSanitizer()
 	}
-	action = StreamSSEForward
+	action := streamSSEForward
 	changed := false
 
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(body, &root); err != nil {
 		if st.hasAnyFinished() {
-			return nil, StreamSSEDrop, false
+			return nil, streamSSEDrop, false
 		}
 		return body, action, true
 	}
@@ -78,7 +78,7 @@ func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtr
 	var choices []map[string]json.RawMessage
 	if err := json.Unmarshal(rawChoices, &choices); err != nil {
 		if st.hasAnyFinished() {
-			return nil, StreamSSEDrop, false
+			return nil, streamSSEDrop, false
 		}
 		return body, action, true
 	}
@@ -92,11 +92,11 @@ func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtr
 		}
 		if hasUsage {
 			root["choices"] = json.RawMessage("[]")
-			action = StreamSSERewriteUsage
+			action = streamSSERewriteUsage
 			changed = true
 			break
 		}
-		return nil, StreamSSEDrop, false
+		return nil, streamSSEDrop, false
 	}
 
 	for _, ch := range choices {
@@ -194,8 +194,8 @@ func ensureStreamChoiceFinishReasonFromRoot(root map[string]json.RawMessage) (ma
 	return root, true
 }
 
-func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action StreamSSEAction) {
-	if action != StreamSSEDrop {
+func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action streamSSEAction) {
+	if action != streamSSEDrop {
 		return
 	}
 	idx := nextStreamChunkIndex(ctx)
@@ -280,11 +280,11 @@ func (c *sseCopier) rewriteLine(line string, out *strings.Builder) {
 	}
 	original := []byte(data)
 	sanitized, action, emit := sanitizeOpenAIStreamChunk(original, c.san, c.strip)
-	if !emit || action == StreamSSEDrop {
+	if !emit || action == streamSSEDrop {
 		recordProxyStreamChunk(c.ctx, original, action)
 		return
 	}
-	if !c.strip && action == StreamSSEForward && openAIStreamJSONEqual(original, sanitized) {
+	if !c.strip && action == streamSSEForward && openAIStreamJSONEqual(original, sanitized) {
 		sanitized = original
 	}
 	out.WriteString("data: ")

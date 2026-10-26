@@ -92,22 +92,33 @@ func (c *Cache) Put(models []Model) {
 	c.at = c.now()
 }
 
+// Source is one backend's model catalog: where it is cached and how it is fetched.
+type Source struct {
+	Provider string
+	Backend  string
+	Cache    *Cache
+	Fetch    func(context.Context) ([]Model, error)
+	// Log receives the stale-cache warning; nil discards it.
+	Log *slog.Logger
+}
+
 // ListStrict serves a fresh cache hit, else fetches and caches. When the fetch fails it
-// falls back to a cached copy, and returns the error only when none exists.
-func ListStrict(ctx context.Context, provider string, cache *Cache, fetch func(context.Context) ([]Model, error)) (ModelList, error) {
-	if cache == nil || fetch == nil {
+// falls back to a cached copy (and warns), and returns the error only when none exists.
+func ListStrict(ctx context.Context, src Source) (ModelList, error) {
+	if src.Cache == nil || src.Fetch == nil {
 		return ModelList{Object: ObjectList}, derrors.New(derrors.CodeInternal, "catalog.ListStrict", "cache and fetch required")
 	}
+	cache := src.Cache
 	if cached, ok := cache.Get(); ok {
 		return ModelList{Object: ObjectList, Data: cached}, nil
 	}
-	models, err := fetch(ctx)
+	models, err := src.Fetch(ctx)
 	if err != nil {
 		if cached, ok := cache.GetStale(); ok {
-			slog.Warn(provider+": models catalog fetch failed; using stale cache",
-				"err", err,
-				"cached_models", len(cached),
-			)
+			if src.Log != nil {
+				src.Log.Warn("polypus: models catalog fetch failed; using stale cache",
+					"provider", src.Provider, "backend", src.Backend, "cached_models", len(cached), "err", err)
+			}
 			return ModelList{Object: ObjectList, Data: cached}, nil
 		}
 		return ModelList{Object: ObjectList}, err

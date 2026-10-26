@@ -73,7 +73,7 @@ func (s *shared) newUIReverseProxy(prefix string, target *url.URL, stripPrefix b
 	}
 }
 
-func (g *Gateway) matchUIProxy(r *http.Request) *uiProxyMount {
+func (g *gatewayHandler) matchUIProxy(r *http.Request) *uiProxyMount {
 	if g == nil || g.shared == nil || len(g.uiMounts) == 0 || r == nil {
 		return nil
 	}
@@ -91,7 +91,7 @@ func (g *Gateway) matchUIProxy(r *http.Request) *uiProxyMount {
 	return best
 }
 
-func (g *Gateway) serveUIProxy(w http.ResponseWriter, r *http.Request) bool {
+func (g *gatewayHandler) serveUIProxy(w http.ResponseWriter, r *http.Request) bool {
 	m := g.matchUIProxy(r)
 	if m == nil {
 		return false

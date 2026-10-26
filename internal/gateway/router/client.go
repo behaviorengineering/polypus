@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -44,10 +44,13 @@ func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
 			opt(&co)
 		}
 	}
+	if co.logger == nil {
+		co.logger = slog.Default()
+	}
 	cfGet := co.cfGet
 	if cfGet == nil {
 		// The gateway passes its own cache; a standalone client builds one.
-		cfGet = new(cloudflare.Clients).Get
+		cfGet = (&cloudflare.Clients{Logger: co.logger}).Get
 	}
 	account := NewAccount(cfg)
 	var plugins []schemas.LLMPlugin
@@ -55,7 +58,7 @@ func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
 		lookup := func(provider string) (config.BackendDef, bool) {
 			return reg.Backend(provider)
 		}
-		plugins = append(plugins, cloudflare.NewRunSpeechPlugin(lookup, cloudflare.ClientGet(cfGet)))
+		plugins = append(plugins, cloudflare.NewRunSpeechPlugin(lookup, cloudflare.ClientGet(cfGet), co.logger))
 	}
 	bfTracer := observability.NewBifrostOTelTracer()
 	bf, err := bifrost.Init(context.Background(), schemas.BifrostConfig{
@@ -79,7 +82,8 @@ func hasCloudflareBackend(cfg config.RouterConfig) bool {
 }
 
 type clientOptions struct {
-	cfGet CloudflareClientGet
+	cfGet  CloudflareClientGet
+	logger *slog.Logger
 }
 
 // ClientOption configures NewClient.
@@ -89,6 +93,17 @@ type ClientOption func(*clientOptions)
 func WithCloudflareClientGet(fn CloudflareClientGet) ClientOption {
 	return func(o *clientOptions) {
 		o.cfGet = fn
+	}
+}
+
+// WithLogger sets the logger Polypus's Bifrost plugins write to (slog.Default
+// otherwise). Panics if l is nil.
+func WithLogger(l *slog.Logger) ClientOption {
+	if l == nil {
+		panic("router: WithLogger(nil)")
+	}
+	return func(o *clientOptions) {
+		o.logger = l
 	}
 }
 
@@ -685,13 +700,13 @@ func bifrostErr(berr *schemas.BifrostError, header http.Header, cloudflare bool)
 		// rate limit or invalid input; otherwise the provider failed.
 		out := derrors.Wrap(berr.Error.Error, derrors.CodeOr(berr.Error.Error, derrors.CodeUnavailable), "router.bifrost", "provider call")
 		if status > 0 {
-			out = out.With("status", fmt.Sprintf("%d", status))
+			out = out.With("status", strconv.Itoa(status))
 		}
 		return out
 	}
 	out := derrors.New(derrors.CodeUnavailable, "router.bifrost", msg)
 	if status > 0 {
-		out = out.With("status", fmt.Sprintf("%d", status))
+		out = out.With("status", strconv.Itoa(status))
 	}
 	return out
 }
