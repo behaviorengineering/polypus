@@ -125,3 +125,9 @@ func sanitizeAttrValue(key, value string) string {
 		return redactURLsInText(value)
 	}
 }
+
+// RedactDumpText applies the failure-dump redaction (URL credentials and keys) to a
+// dump body written outside olly, such as a dropped stream chunk.
+func RedactDumpText(s string) string {
+	return redactURLsInText(s)
+}

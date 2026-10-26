@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 func TestModelsCacheFlushesOncePerPass(t *testing.T) {
@@ -49,5 +52,23 @@ func TestModelsCacheConcurrentPutAndFlush(t *testing.T) {
 	c.flush()
 	if c.dirty {
 		t.Fatal("a final flush must leave the cache clean")
+	}
+}
+
+func TestStreamChunkDumpsAreCappedPerStream(t *testing.T) {
+	dir := t.TempDir()
+	prev := observability.FailureDumpDir()
+	observability.SetFailureDumpDir(dir)
+	t.Cleanup(func() { observability.SetFailureDumpDir(prev) })
+	ctx := withStreamChunkCounter(context.Background())
+	for i := range maxChunkDumpsPerStream + 5 {
+		dumpIllegalStreamChunk(ctx, i, []byte(`{"x":1}`), nil)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != maxChunkDumpsPerStream {
+		t.Fatalf("want %d dumps for one stream, got %d", maxChunkDumpsPerStream, len(entries))
 	}
 }

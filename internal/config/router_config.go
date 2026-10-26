@@ -106,21 +106,26 @@ type CapabilityBackend struct {
 
 // RouterConfig holds multi-backend routing for the Polypus gateway.
 type RouterConfig struct {
-	Chat           CapabilityBackend     `yaml:"-"`
-	Vision         CapabilityBackend     `yaml:"-"`
-	Embed          CapabilityBackend     `yaml:"-"`
-	TTS            CapabilityBackend     `yaml:"-"`
-	STT            CapabilityBackend     `yaml:"-"`
-	Proxy          CapabilityBackend     `yaml:"-"`
-	SystemOne      CapabilityBackend     `yaml:"-"`
-	Batch          CapabilityBackend     `yaml:"-"`
-	Timeouts       Timeouts              `yaml:"-"`
-	Policy         RouterPolicy          `yaml:"policy"`
-	Backends       map[string]BackendDef `yaml:"backends"`
-	Routers        map[string]NamedRouter
-	Switchyard     SwitchyardConfig
-	UIProxies      []UIProxy
-	batchSpecified bool
+	Chat       CapabilityBackend     `yaml:"-"`
+	Vision     CapabilityBackend     `yaml:"-"`
+	Embed      CapabilityBackend     `yaml:"-"`
+	TTS        CapabilityBackend     `yaml:"-"`
+	STT        CapabilityBackend     `yaml:"-"`
+	Proxy      CapabilityBackend     `yaml:"-"`
+	SystemOne  CapabilityBackend     `yaml:"-"`
+	Batch      CapabilityBackend     `yaml:"-"`
+	Timeouts   Timeouts              `yaml:"-"`
+	Policy     RouterPolicy          `yaml:"policy"`
+	Backends   map[string]BackendDef `yaml:"backends"`
+	Routers    map[string]NamedRouter
+	Switchyard SwitchyardConfig
+	UIProxies  []UIProxy
+	// DefaultTTSModel and DefaultSTTModel are the downstream models speech uses when
+	// the request names none (POLYPUS_DEFAULT_MODEL, POLYPUS_DEFAULT_STT_MODEL),
+	// read once at load instead of on every request.
+	DefaultTTSModel string
+	DefaultSTTModel string
+	batchSpecified  bool
 }
 
 // EffectiveChatBackend returns the chat default when chat is enabled; otherwise empty.
@@ -378,6 +383,8 @@ func defaultRouterFromEnv(opts ServeOptions) RouterConfig {
 }
 
 func applyRouterEnvOverrides(cfg *RouterConfig, opts ServeOptions) {
+	cfg.DefaultTTSModel = strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_MODEL"))
+	cfg.DefaultSTTModel = strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_STT_MODEL"))
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_EMBED_BACKEND")); v != "" {
 		cfg.Embed.Default = v
 		cfg.Embed.Enabled = true

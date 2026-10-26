@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -429,7 +428,7 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 	provider := backendID
 	model := downstream
 	if model == "" {
-		model = strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_MODEL"))
+		model = c.reg.Config().DefaultTTSModel
 	}
 	if model == "" {
 		model = strings.TrimSpace(req.Model)
@@ -479,7 +478,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	provider := backendID
 	model := downstream
 	if model == "" {
-		model = strings.TrimSpace(os.Getenv("POLYPUS_DEFAULT_STT_MODEL"))
+		model = c.reg.Config().DefaultSTTModel
 	}
 	if model == "" {
 		model = strings.TrimSpace(req.Model)

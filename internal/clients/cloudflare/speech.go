@@ -57,9 +57,9 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, str
 	}
 	model := NormalizeModel(strings.TrimSpace(req.Model))
 	if model == "" {
-		model = defaultTTSModel()
+		model = c.ttsModel
 	}
-	speaker := firstNonEmpty(strings.TrimSpace(req.Voice), defaultVoice(), "luna")
+	speaker := firstNonEmpty(strings.TrimSpace(req.Voice), c.voice, "luna")
 	encoding := firstNonEmpty(strings.TrimSpace(req.ResponseFormat), "mp3")
 
 	body := map[string]string{
@@ -109,7 +109,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 	}
 	model := NormalizeModel(strings.TrimSpace(req.Model))
 	if model == "" {
-		model = defaultSTTModel()
+		model = c.sttModel
 	}
 
 	mime := mimeFromFilename(req.Filename)

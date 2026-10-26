@@ -662,8 +662,8 @@ func seedModelsFromEnv(cfg config.RouterConfig) []openaiModel {
 			}
 		}
 	}
-	add(cfg.EffectiveTTSBackend(), os.Getenv("POLYPUS_DEFAULT_MODEL"))
-	add(cfg.EffectiveSTTBackend(), os.Getenv("POLYPUS_DEFAULT_STT_MODEL"))
+	add(cfg.EffectiveTTSBackend(), cfg.DefaultTTSModel)
+	add(cfg.EffectiveSTTBackend(), cfg.DefaultSTTModel)
 	return out
 }
 

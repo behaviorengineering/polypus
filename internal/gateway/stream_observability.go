@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,9 +17,15 @@ import (
 type streamChunkCounterKey struct{}
 
 type streamChunkCounter struct {
-	mu    sync.Mutex
-	index int
+	mu     sync.Mutex
+	index  int
+	dumped int  // dropped-chunk dumps written for this stream.
+	warned bool // a dump write failure was already logged for this stream.
 }
+
+// maxChunkDumpsPerStream caps dropped-chunk dumps for one stream: an upstream that
+// keeps streaming after finish_reason would otherwise write a file per chunk.
+const maxChunkDumpsPerStream = 5
 
 func withStreamChunkCounter(ctx context.Context) context.Context {
 	if ctx == nil {
@@ -52,9 +59,50 @@ func recordBifrostStreamChunk(ctx context.Context, openaiJSON, rawProviderJSON, 
 	}
 }
 
+// streamCounter returns the stream's counter, or nil outside a counted stream.
+func streamCounter(ctx context.Context) *streamChunkCounter {
+	if ctx == nil {
+		return nil
+	}
+	c, _ := ctx.Value(streamChunkCounterKey{}).(*streamChunkCounter)
+	return c
+}
+
+// claimChunkDump reports whether this stream may write another dump.
+func claimChunkDump(c *streamChunkCounter) bool {
+	if c == nil {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.dumped >= maxChunkDumpsPerStream {
+		return false
+	}
+	c.dumped++
+	return true
+}
+
+// warnChunkDumpOnce logs a failed dump write, once per stream.
+func warnChunkDumpOnce(c *streamChunkCounter, path, traceID string, err error) {
+	if c != nil {
+		c.mu.Lock()
+		already := c.warned
+		c.warned = true
+		c.mu.Unlock()
+		if already {
+			return
+		}
+	}
+	slog.Warn("polypus: stream chunk dump not written", "path", path, "trace_id", traceID, "err", err)
+}
+
 func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProviderJSON []byte) {
 	dir := observability.FailureDumpDir()
 	if dir == "" {
+		return
+	}
+	counter := streamCounter(ctx)
+	if !claimChunkDump(counter) {
 		return
 	}
 	traceID := "unknown"
@@ -71,8 +119,10 @@ func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProvide
 		payload["raw_provider"] = rawProviderJSON
 	}
 	body, err := json.Marshal(payload)
-	if err != nil {
-		return
+	if err == nil {
+		err = os.WriteFile(path, []byte(observability.RedactDumpText(string(body))), 0o600)
 	}
-	_ = os.WriteFile(path, body, 0o600)
+	if err != nil {
+		warnChunkDumpOnce(counter, path, traceID, err)
+	}
 }

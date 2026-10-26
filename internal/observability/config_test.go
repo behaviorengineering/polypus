@@ -82,3 +82,15 @@ func TestLoadConfigSkipPathsOverride(t *testing.T) {
 		t.Fatalf("skip=%v", cfg.SkipPaths)
 	}
 }
+
+func TestLoadConfigHonoursStandardOTLPEndpoint(t *testing.T) {
+	t.Setenv("POLYPUS_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.example:4317")
+	if got := LoadConfig().OTLPEndpoint; got != "http://collector.example:4317" {
+		t.Fatalf("OTEL_EXPORTER_OTLP_ENDPOINT must win over the local default, got %q", got)
+	}
+	t.Setenv("POLYPUS_OTLP_ENDPOINT", "http://polypus.example:4317")
+	if got := LoadConfig().OTLPEndpoint; got != "http://polypus.example:4317" {
+		t.Fatalf("POLYPUS_OTLP_ENDPOINT must win, got %q", got)
+	}
+}

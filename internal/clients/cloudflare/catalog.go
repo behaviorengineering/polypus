@@ -44,6 +44,11 @@ type Client struct {
 	speechClient *http.Client // Workers AI /run (shared transport; timeout via ctx).
 
 	cache *catalog.Cache
+
+	// Speech defaults, read from the environment once when the client is built.
+	ttsModel string
+	sttModel string
+	voice    string
 }
 
 // NewClient builds an uncached Cloudflare extension client from a remote backend
@@ -81,7 +86,10 @@ func newClient(apiBase, token string) (*Client, error) {
 			Timeout:   0,
 			Transport: transport,
 		},
-		cache: catalog.NewCache(modelsCacheTTL),
+		cache:    catalog.NewCache(modelsCacheTTL),
+		ttsModel: defaultTTSModel(),
+		sttModel: defaultSTTModel(),
+		voice:    defaultVoice(),
 	}, nil
 }
 

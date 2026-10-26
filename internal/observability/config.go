@@ -39,6 +39,11 @@ func LoadConfig() Config {
 		DumpMaxAgeH:  envInt("POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS", 48),
 		SkipPaths:    parseSkipPaths(os.Getenv("POLYPUS_OTEL_SKIP_PATHS")),
 	}
+	// POLYPUS_OTLP_ENDPOINT, then the standard OTEL_EXPORTER_OTLP_ENDPOINT, then the
+	// local Phoenix default.
+	if cfg.OTLPEndpoint == "" {
+		cfg.OTLPEndpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	}
 	if cfg.OTLPEndpoint == "" && envTruthy("POLYPUS_PHOENIX", true) {
 		cfg.OTLPEndpoint = defaultOTLPEndpoint
 	}
