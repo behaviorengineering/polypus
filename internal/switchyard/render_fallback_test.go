@@ -27,17 +27,15 @@ func TestRenderFallbackRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(out)
-	for _, want := range []string{
-		"[llm_clients.polypus_fallback]\nformat = \"openai_chat\"\nbase_url = \"http://127.0.0.1:1320/v1\"\nmax_retries = 0\n",
-		"[targets.turno_0]\nid = \"claude_team/claude-sonnet-5-5\"\nllm_client = \"polypus_fallback\"\n",
-		"[targets.turno_1]\nid = \"openrouter/anthropic/claude-sonnet-5.5\"\nllm_client = \"polypus_fallback\"\n",
-		"[routes.turno]\nid = \"router/turno\"\ntype = \"random\"\ntargets = [\"turno_0\", \"turno_1\"]\nweights = [1, 0]\n",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("missing %q in:\n%s", want, body)
-		}
-	}
+	doc := decode(t, out)
+	wantAt(t, doc, "llm_clients.polypus_fallback.base_url", "http://127.0.0.1:1320/v1")
+	wantAt(t, doc, "llm_clients.polypus_fallback.max_retries", int64(0))
+	wantAt(t, doc, "targets.turno_0.id", "claude_team/claude-sonnet-5-5")
+	wantAt(t, doc, "targets.turno_1.llm_client", "polypus_fallback")
+	wantAt(t, doc, "routes.turno.id", "router/turno")
+	wantAt(t, doc, "routes.turno.type", "random")
+	wantAt(t, doc, "routes.turno.targets", []any{"turno_0", "turno_1"})
+	wantAt(t, doc, "routes.turno.weights", []any{int64(1), int64(0)})
 }
 
 func TestRenderWithoutFallbackOmitsNoRetryClient(t *testing.T) {

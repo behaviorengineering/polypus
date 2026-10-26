@@ -116,10 +116,34 @@ const (
 	smokeHeaderSwitchyardSelected = "x-switchyard-selected-model"
 )
 
+// pingRequest is the one-word chat request the chat and batch probes send.
+type pingRequest struct {
+	Model       string        `json:"model"`
+	Messages    []pingMessage `json:"messages"`
+	MaxTokens   int           `json:"max_tokens"`
+	Temperature float64       `json:"temperature"`
+}
+
+type pingMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+func newPingRequest(model string, opts Options) pingRequest {
+	return pingRequest{
+		Model:       model,
+		Messages:    []pingMessage{{Role: "user", Content: "Reply with the single word: ok"}},
+		MaxTokens:   opts.MaxTokens,
+		Temperature: opts.Temperature,
+	}
+}
+
 func chatPing(ctx context.Context, opts Options, model string) (content, reasoning, selectedModel string, err error) {
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":%d,"temperature":%g}`,
-		model, opts.MaxTokens, opts.Temperature)
-	req, err := httpNewPost(ctx, opts.BaseURL+"/v1/chat/completions", body)
+	body, err := json.Marshal(newPingRequest(model, opts))
+	if err != nil {
+		return "", "", "", err
+	}
+	req, err := httpNewPost(ctx, opts.BaseURL+"/v1/chat/completions", string(body))
 	if err != nil {
 		return "", "", "", err
 	}

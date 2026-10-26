@@ -9,6 +9,7 @@ require (
 	github.com/failsafe-go/failsafe-go v0.9.7
 	github.com/google/uuid v1.6.0
 	github.com/maximhq/bifrost/core v1.13.1
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/sony/gobreaker v1.0.0
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
@@ -281,7 +282,6 @@ require (
 	github.com/nunnatsa/ginkgolinter v0.24.0 // indirect
 	github.com/openai/openai-go/v3 v3.52.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
-	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect

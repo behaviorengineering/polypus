@@ -48,11 +48,16 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 		return "", fmt.Errorf("batch model required")
 	}
 
-	line := fmt.Sprintf(
-		`{"custom_id":%q,"method":"POST","url":%q,"body":{"model":%q,"messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":%d,"temperature":%g}}`,
-		batchSmokeCustomID, batchEndpointChat, model, opts.MaxTokens, opts.Temperature,
-	)
-	fileID, err := uploadBatchJSONL(ctx, opts.BaseURL, line+"\n")
+	line, err := json.Marshal(struct {
+		CustomID string      `json:"custom_id"`
+		Method   string      `json:"method"`
+		URL      string      `json:"url"`
+		Body     pingRequest `json:"body"`
+	}{batchSmokeCustomID, http.MethodPost, batchEndpointChat, newPingRequest(model, opts)})
+	if err != nil {
+		return "", err
+	}
+	fileID, err := uploadBatchJSONL(ctx, opts.BaseURL, string(line)+"\n")
 	if err != nil {
 		return "", err
 	}
@@ -139,11 +144,15 @@ func uploadBatchJSONL(ctx context.Context, baseURL, content string) (string, err
 }
 
 func createBatch(ctx context.Context, baseURL, inputFileID string) (string, error) {
-	body := fmt.Sprintf(
-		`{"input_file_id":%q,"endpoint":%q,"completion_window":%q}`,
-		inputFileID, batchEndpointChat, batchCompletionWindow,
-	)
-	req, err := httpNewPost(ctx, baseURL+"/v1/batches", body)
+	body, err := json.Marshal(map[string]string{
+		"input_file_id":     inputFileID,
+		"endpoint":          batchEndpointChat,
+		"completion_window": batchCompletionWindow,
+	})
+	if err != nil {
+		return "", err
+	}
+	req, err := httpNewPost(ctx, baseURL+"/v1/batches", string(body))
 	if err != nil {
 		return "", err
 	}
