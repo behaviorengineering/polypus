@@ -11,7 +11,11 @@ import (
 
 // Run dispatches polypus subcommands. Returns a process exit code.
 func Run(args []string) int {
-	root := newRoot()
+	return execute(newRoot(), args)
+}
+
+// execute runs a Cobra root and maps its error to a process exit code.
+func execute(root *cobra.Command, args []string) int {
 	root.SetArgs(args)
 	root.SetOut(os.Stdout)
 	root.SetErr(os.Stderr)

@@ -11,13 +11,18 @@ import (
 )
 
 func captureRun(args []string) (int, string, string) {
+	return captureWith(Run, args)
+}
+
+// captureWith runs a CLI entry point with stdout and stderr captured.
+func captureWith(run func([]string) int, args []string) (int, string, string) {
 	oldOut := os.Stdout
 	oldErr := os.Stderr
 	rOut, wOut, _ := os.Pipe()
 	rErr, wErr, _ := os.Pipe()
 	os.Stdout = wOut
 	os.Stderr = wErr
-	code := Run(args)
+	code := run(args)
 	_ = wOut.Close()
 	_ = wErr.Close()
 	os.Stdout = oldOut

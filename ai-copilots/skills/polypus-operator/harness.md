@@ -5,7 +5,7 @@ Polypus ships **L1 transport smoke** in this repo. Deeper L2/L3 XML and job-fixt
 ## Prerequisites
 
 - Default L1 smokes: **no** running gateway (`go tool task smoke-*` builds and starts one with mock backends).
-- Live stack checks against your config: `go tool task serve` plus optional `go tool task build-smoke` and `bin/polypus-smoke -base-url http://127.0.0.1:1320`.
+- Live stack checks against your config: `go tool task serve` plus optional `go tool task build-smoke` and `bin/polypus-smoke run --base-url http://127.0.0.1:1320` (bare `polypus-smoke` only prints its guide; probes are paid calls).
 
 ## L1 smoke (this repo)
 

@@ -57,11 +57,6 @@ func Smoke(ctx context.Context, opts SmokeOptions) ([]SmokeResult, error) {
 	return smoke.Run(ctx, opts)
 }
 
-// SmokeCLI runs the polypus-smoke command surface (flags + JSONL stdout).
-func SmokeCLI(args []string) int {
-	return smoke.RunCLI(args)
-}
-
 // AllSmokeChannels returns the default CI channel set.
 func AllSmokeChannels() []string {
 	return smoke.AllChannels()
