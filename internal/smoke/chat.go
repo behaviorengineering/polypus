@@ -15,15 +15,19 @@ func runChat(ctx context.Context, opts Options) ([]Result, error) {
 		}
 		return "health ok", nil
 	})
+	// One paid completion serves both the content and the selected-model probes.
+	var selected string
+	var chatErr error
 	content := timed(ChannelChat, "content_nonempty", opts.ChatModel, func() (string, error) {
-		text, _, _, err := chatPing(ctx, opts, opts.ChatModel)
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(text) == "" {
-			return "", fmt.Errorf("empty content")
+		var text string
+		text, _, selected, chatErr = chatPing(ctx, opts, opts.ChatModel)
+		if chatErr != nil {
+			return "", chatErr
 		}
 		d := strings.TrimSpace(text)
+		if d == "" {
+			return "", fmt.Errorf("empty content")
+		}
 		if len(d) > 60 {
 			d = d[:57] + "..."
 		}
@@ -31,35 +35,40 @@ func runChat(ctx context.Context, opts Options) ([]Result, error) {
 	})
 	out := []Result{ping, content}
 	if opts.RequireSelectedModel || len(opts.AllowedSelectedModels) > 0 {
-		selected := timedSelected(ChannelChat, "selected_model", opts.ChatModel, func() (string, string, error) {
-			_, _, selected, err := chatPing(ctx, opts, opts.ChatModel)
-			if err != nil {
+		out = append(out, timedSelected(ChannelChat, "selected_model", opts.ChatModel, func() (string, string, error) {
+			if chatErr != nil {
+				return "", "", chatErr
+			}
+			sel := strings.TrimSpace(selected)
+			if err := checkSelectedModel(opts, sel); err != nil {
 				return "", "", err
 			}
-			selected = strings.TrimSpace(selected)
-			if opts.RequireSelectedModel && selected == "" {
-				return "", "", fmt.Errorf("missing selected model (routing header or body model)")
-			}
-			if len(opts.AllowedSelectedModels) > 0 && selected != "" {
-				if !selectedModelAllowed(selected, opts.AllowedSelectedModels) {
-					return "", "", fmt.Errorf("selected model %q not in allow-list", selected)
-				}
-			}
-			if len(opts.AllowedSelectedModels) > 0 && selected == "" {
-				return "", "", fmt.Errorf("missing selected model for allow-list check")
-			}
-			return selected, selected, nil
-		})
-		out = append(out, selected)
+			return sel, sel, nil
+		}))
 	}
-	var err error
 	for _, r := range out {
 		if r.Status == "fail" {
-			err = fmt.Errorf("chat smoke failed")
-			break
+			return out, fmt.Errorf("chat smoke failed")
 		}
 	}
-	return out, err
+	return out, nil
+}
+
+// checkSelectedModel applies RequireSelectedModel and AllowedSelectedModels.
+func checkSelectedModel(opts Options, selected string) error {
+	if selected == "" {
+		if opts.RequireSelectedModel {
+			return fmt.Errorf("missing selected model (routing header or body model)")
+		}
+		if len(opts.AllowedSelectedModels) > 0 {
+			return fmt.Errorf("missing selected model for allow-list check")
+		}
+		return nil
+	}
+	if len(opts.AllowedSelectedModels) > 0 && !selectedModelAllowed(selected, opts.AllowedSelectedModels) {
+		return fmt.Errorf("selected model %q not in allow-list", selected)
+	}
+	return nil
 }
 
 func selectedModelAllowed(selected string, allowed []string) bool {

@@ -63,26 +63,9 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 	fmt.Printf("collector smoke: otlp=%s phoenix=%s hyperdx=%s\n",
 		opts.OTLPEndpoint, opts.PhoenixBaseURL, opts.HyperDXBaseURL)
 
-	genAITrace, err := exportCollectorSpan(ctx, opts.OTLPEndpoint, "polypus-local-collector-smoke-genai",
-		attribute.String("gen_ai.system", "polypus-local-smoke"),
-		attribute.String("smoke.probe", "gen_ai"),
-	)
+	genAITrace, plainTrace, err := exportSmokeTraces(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("collector smoke: export gen_ai span: %w", err)
-	}
-	plainTrace, err := exportCollectorSpan(ctx, opts.OTLPEndpoint, "polypus-local-collector-smoke-plain",
-		attribute.String("smoke.probe", "plain"),
-	)
-	if err != nil {
-		return fmt.Errorf("collector smoke: export plain span: %w", err)
-	}
-	genAITrace, err = normalizeTraceIDHex(genAITrace)
-	if err != nil {
-		return fmt.Errorf("collector smoke: gen_ai trace id: %w", err)
-	}
-	plainTrace, err = normalizeTraceIDHex(plainTrace)
-	if err != nil {
-		return fmt.Errorf("collector smoke: plain trace id: %w", err)
+		return err
 	}
 	fmt.Printf("collector smoke: gen_ai trace_id=%s plain trace_id=%s\n", genAITrace, plainTrace)
 	fmt.Println("collector smoke: otlp export ok")
@@ -96,25 +79,7 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 			}
 			return fmt.Errorf("collector smoke: %w", err)
 		}
-
-		genPhoenix, errGenPhoenix := phoenixSpanCount(ctx, opts, genAITrace)
-		plainPhoenix, errPlainPhoenix := phoenixSpanCount(ctx, opts, plainTrace)
-		var genHyper, plainHyper int
-		var errGenHyper, errPlainHyper error
-		if !opts.SkipHyperDXVerify {
-			genHyper, errGenHyper = hyperdxTraceCount(ctx, opts, genAITrace)
-			plainHyper, errPlainHyper = hyperdxTraceCount(ctx, opts, plainTrace)
-		}
-
-		fmt.Printf("collector smoke: probe counts gen_ai phoenix=%d hyperdx=%d plain phoenix=%d hyperdx=%d\n",
-			genPhoenix, genHyper, plainPhoenix, plainHyper)
-
-		okGenPhoenix := errGenPhoenix == nil && genPhoenix > 0
-		okPlainAbsentPhoenix := errPlainPhoenix == nil && plainPhoenix == 0
-		okGenHyper := opts.SkipHyperDXVerify || (errGenHyper == nil && genHyper > 0)
-		okPlainHyper := opts.SkipHyperDXVerify || (errPlainHyper == nil && plainHyper > 0)
-
-		if okGenPhoenix && okPlainAbsentPhoenix && okGenHyper && okPlainHyper {
+		if lastErr = probeRouting(ctx, opts, genAITrace, plainTrace); lastErr == nil {
 			if opts.SkipHyperDXVerify {
 				fmt.Println("collector smoke: routing ok (gen_ai -> Phoenix; HyperDX verify skipped)")
 			} else {
@@ -122,11 +87,6 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 			}
 			return nil
 		}
-
-		lastErr = joinProbeErrors(genPhoenix, plainPhoenix, genHyper, plainHyper,
-			errGenPhoenix, errPlainPhoenix, errGenHyper, errPlainHyper,
-			okGenPhoenix, okPlainAbsentPhoenix, okGenHyper, okPlainHyper)
-
 		if time.Now().Add(opts.PollInterval).After(deadline) {
 			return fmt.Errorf("collector smoke: timed out: %w", lastErr)
 		}
@@ -134,6 +94,58 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 			return err
 		}
 	}
+}
+
+// exportSmokeTraces sends one gen_ai span and one plain span through the collector
+// and returns their normalised trace ids.
+func exportSmokeTraces(ctx context.Context, opts CollectorOptions) (genAI, plain string, err error) {
+	genAI, err = exportCollectorSpan(ctx, opts.OTLPEndpoint, "polypus-local-collector-smoke-genai",
+		attribute.String("gen_ai.system", "polypus-local-smoke"),
+		attribute.String("smoke.probe", "gen_ai"),
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("collector smoke: export gen_ai span: %w", err)
+	}
+	plain, err = exportCollectorSpan(ctx, opts.OTLPEndpoint, "polypus-local-collector-smoke-plain",
+		attribute.String("smoke.probe", "plain"),
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("collector smoke: export plain span: %w", err)
+	}
+	if genAI, err = normalizeTraceIDHex(genAI); err != nil {
+		return "", "", fmt.Errorf("collector smoke: gen_ai trace id: %w", err)
+	}
+	if plain, err = normalizeTraceIDHex(plain); err != nil {
+		return "", "", fmt.Errorf("collector smoke: plain trace id: %w", err)
+	}
+	return genAI, plain, nil
+}
+
+// probeRouting checks the collector's routing once: the gen_ai trace reaches Phoenix
+// and the plain one does not, and (unless skipped) both reach HyperDX. It returns nil
+// when routing is right, else what is still missing.
+func probeRouting(ctx context.Context, opts CollectorOptions, genAITrace, plainTrace string) error {
+	genPhoenix, errGenPhoenix := phoenixSpanCount(ctx, opts, genAITrace)
+	plainPhoenix, errPlainPhoenix := phoenixSpanCount(ctx, opts, plainTrace)
+	var genHyper, plainHyper int
+	var errGenHyper, errPlainHyper error
+	if !opts.SkipHyperDXVerify {
+		genHyper, errGenHyper = hyperdxTraceCount(ctx, opts, genAITrace)
+		plainHyper, errPlainHyper = hyperdxTraceCount(ctx, opts, plainTrace)
+	}
+	fmt.Printf("collector smoke: probe counts gen_ai phoenix=%d hyperdx=%d plain phoenix=%d hyperdx=%d\n",
+		genPhoenix, genHyper, plainPhoenix, plainHyper)
+
+	okGenPhoenix := errGenPhoenix == nil && genPhoenix > 0
+	okPlainAbsentPhoenix := errPlainPhoenix == nil && plainPhoenix == 0
+	okGenHyper := opts.SkipHyperDXVerify || (errGenHyper == nil && genHyper > 0)
+	okPlainHyper := opts.SkipHyperDXVerify || (errPlainHyper == nil && plainHyper > 0)
+	if okGenPhoenix && okPlainAbsentPhoenix && okGenHyper && okPlainHyper {
+		return nil
+	}
+	return joinProbeErrors(genPhoenix, plainPhoenix, genHyper, plainHyper,
+		errGenPhoenix, errPlainPhoenix, errGenHyper, errPlainHyper,
+		okGenPhoenix, okPlainAbsentPhoenix, okGenHyper, okPlainHyper)
 }
 
 func (o CollectorOptions) withCollectorDefaults() CollectorOptions {

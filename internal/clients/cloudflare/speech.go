@@ -173,42 +173,50 @@ func readAudioBody(resp *http.Response) ([]byte, string, error) {
 			With("status", strconv.Itoa(resp.StatusCode)).
 			With("body", truncate(string(body), 256))
 	}
-	if strings.HasPrefix(strings.ToLower(contentType), "application/json") || looksLikeJSON(body) {
-		var envelope struct {
-			Success bool `json:"success"`
-			Errors  []struct {
-				Message string `json:"message"`
-			} `json:"errors"`
-			Result json.RawMessage `json:"result"`
-		}
-		if err := json.Unmarshal(body, &envelope); err != nil {
-			return nil, contentType, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "parse json")
-		}
-		if !envelope.Success {
-			if rl := ClassifyRateLimit("cloudflare.speech", resp.StatusCode, resp.Header, body); rl != nil {
-				return nil, contentType, rl
-			}
-			msg := "cloudflare workers ai error"
-			if len(envelope.Errors) > 0 && envelope.Errors[0].Message != "" {
-				msg = envelope.Errors[0].Message
-			}
-			return nil, contentType, derrors.New(derrors.CodeUnavailable, "cloudflare.speech", msg)
-		}
-		if len(envelope.Result) > 0 {
-			if envelope.Result[0] == '"' {
-				var audioStr string
-				if err := json.Unmarshal(envelope.Result, &audioStr); err != nil {
-					return nil, contentType, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "parse result string")
-				}
-				if dec, err := base64.StdEncoding.DecodeString(audioStr); err == nil && len(dec) > 0 {
-					return dec, contentType, nil
-				}
-				return []byte(audioStr), contentType, nil
-			}
-			return envelope.Result, contentType, nil
-		}
+	if !strings.HasPrefix(strings.ToLower(contentType), "application/json") && !looksLikeJSON(body) {
+		return body, contentType, nil // raw audio bytes.
 	}
-	return body, contentType, nil
+	audio, err := audioFromEnvelope(resp, body)
+	return audio, contentType, err
+}
+
+// audioFromEnvelope unwraps a Workers AI JSON reply: an error envelope becomes an
+// error, a base64 string result is decoded, any other result is returned as is.
+func audioFromEnvelope(resp *http.Response, body []byte) ([]byte, error) {
+	var envelope struct {
+		Success bool `json:"success"`
+		Errors  []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "parse json")
+	}
+	if !envelope.Success {
+		if rl := ClassifyRateLimit("cloudflare.speech", resp.StatusCode, resp.Header, body); rl != nil {
+			return nil, rl
+		}
+		msg := "cloudflare workers ai error"
+		if len(envelope.Errors) > 0 && envelope.Errors[0].Message != "" {
+			msg = envelope.Errors[0].Message
+		}
+		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.speech", msg)
+	}
+	switch {
+	case len(envelope.Result) == 0:
+		return body, nil
+	case envelope.Result[0] != '"':
+		return envelope.Result, nil
+	}
+	var audioStr string
+	if err := json.Unmarshal(envelope.Result, &audioStr); err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "parse result string")
+	}
+	if dec, err := base64.StdEncoding.DecodeString(audioStr); err == nil && len(dec) > 0 {
+		return dec, nil
+	}
+	return []byte(audioStr), nil
 }
 
 func looksLikeJSON(b []byte) bool {
