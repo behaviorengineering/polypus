@@ -118,6 +118,11 @@ jobs:
   docker:
     needs: decide
     if: needs.decide.outputs.skip != 'true'
+    # A called workflow gets no more than its caller grants, and Docker release
+    # pushes to GHCR; without this the run fails at startup.
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/docker-release.yml
     with:
       version: ${{ needs.decide.outputs.app_tag }}

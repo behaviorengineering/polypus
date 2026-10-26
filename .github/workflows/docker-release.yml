@@ -22,9 +22,8 @@ on:
         required: false
         type: boolean
         default: true
-  push:
-    tags:
-      - "v*"
+  # No tag-push trigger: Auto patch release and Packaging rebuild call this after
+  # the release assets (both Switchyard archives included) exist.
   workflow_dispatch:
     inputs:
       tag:

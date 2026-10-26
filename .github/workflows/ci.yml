@@ -18,6 +18,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # Full history so lint can compare against the base branch.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -44,14 +46,20 @@ jobs:
           diff -u go.sum.bak go.sum
           rm -f go.mod.bak go.sum.bak
 
-      - name: gofmt
+      - name: gofumpt
         run: |
-          unformatted=$(gofmt -l .)
+          unformatted=$(go tool gofumpt -l ./cmd ./internal ./pkg)
           if [ -n "$unformatted" ]; then
-            echo "gofmt needed:"
+            echo "gofumpt needed (go tool task format):"
             echo "$unformatted"
             exit 1
           fi
+
+      # Lints only the lines a pull request changes. Drop --new-from-rev once the
+      # older baseline is cleared, so the whole module is gated.
+      - name: golangci-lint (new code)
+        if: github.event_name == 'pull_request'
+        run: go tool golangci-lint run --timeout 5m --new-from-rev "origin/${{ github.base_ref }}" ./cmd/... ./internal/... ./pkg/...
 
       - name: go vet
         run: go vet ./...
