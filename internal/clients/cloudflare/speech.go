@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -145,9 +144,9 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readCapped(resp.Body, runMaxBody, "cloudflare.Transcribe")
 	if err != nil {
-		return "", derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.Transcribe", "read body")
+		return "", err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if rl := ClassifyRateLimit("cloudflare.Transcribe", resp.StatusCode, resp.Header, body); rl != nil {
@@ -162,9 +161,9 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 
 func readAudioBody(resp *http.Response) ([]byte, string, error) {
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
-	body, err := io.ReadAll(resp.Body)
+	body, err := readCapped(resp.Body, runMaxBody, "cloudflare.speech")
 	if err != nil {
-		return nil, contentType, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "read body")
+		return nil, contentType, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if rl := ClassifyRateLimit("cloudflare.speech", resp.StatusCode, resp.Header, body); rl != nil {

@@ -231,3 +231,36 @@ func TestLoadServeOptionsRejectsBadPorts(t *testing.T) {
 		t.Fatalf("opts=%+v err=%v", opts, err)
 	}
 }
+
+func TestLoadRouterReadsExtraHeaders(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "secret-key-at-least-twenty-ch")
+	t.Setenv("POLYPUS_TEST_SITE", "https://example.com")
+	path := t.TempDir() + "/config.yaml"
+	content := `
+chat_backend:
+  enabled: true
+  default: openrouter
+backends:
+  openrouter:
+    remote: true
+    base_url: https://openrouter.ai/api/v1
+    auth:
+      bearer_env: OPENROUTER_API_KEY
+    extra_headers:
+      HTTP-Referer: ${POLYPUS_TEST_SITE}
+      X-Title: Polypus
+    capabilities: [chat]
+`
+	if err := writeTestFile(path, content); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+	cfg, err := LoadRouterConfig(ServeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := cfg.Backends["openrouter"].ExtraHeaders
+	if h["HTTP-Referer"] != "https://example.com" || h["X-Title"] != "Polypus" {
+		t.Fatalf("extra_headers: %v", h)
+	}
+}

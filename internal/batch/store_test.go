@@ -146,3 +146,10 @@ func TestDeleteFileMissingIsNotFound(t *testing.T) {
 		t.Fatalf("want CodeNotFound, got %v", err)
 	}
 }
+
+func TestParseBatchJSONLRejectsDuplicateCustomID(t *testing.T) {
+	line := `{"custom_id":"a","method":"POST","url":"/v1/chat/completions","body":{"model":"m","messages":[{"role":"user","content":"hi"}]}}`
+	if _, err := ParseBatchJSONL([]byte(line+"\n"+line), EndpointChatCompletions); err == nil {
+		t.Fatal("duplicate custom_id must be rejected")
+	}
+}

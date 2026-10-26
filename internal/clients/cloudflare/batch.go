@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -140,9 +139,9 @@ func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte)
 			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
+	raw, err := readCapped(resp.Body, runMaxBody, "cloudflare.postBatchRun")
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.postBatchRun", "read body")
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if rl := ClassifyRateLimit("cloudflare.postBatchRun", resp.StatusCode, resp.Header, raw); rl != nil {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -54,9 +53,9 @@ func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]by
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
+	raw, err := readCapped(resp.Body, runMaxBody, "cloudflare.SystemOne")
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.SystemOne", "read body")
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if rl := ClassifyRateLimit("cloudflare.SystemOne", resp.StatusCode, resp.Header, raw); rl != nil {

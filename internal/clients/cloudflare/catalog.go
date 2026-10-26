@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -211,9 +210,9 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 		return nil, 0, fmt.Errorf("cloudflare models: fetch: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
+	raw, err := readCapped(resp.Body, modelsMaxBody, "cloudflare.fetchPage")
 	if err != nil {
-		return nil, 0, fmt.Errorf("cloudflare models: read: %w", err)
+		return nil, 0, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {

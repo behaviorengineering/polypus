@@ -222,13 +222,14 @@ type routerFile struct {
 }
 
 type backendFileEntry struct {
-	Remote       bool           `yaml:"remote"`
-	Extension    string         `yaml:"extension"`
-	BaseURL      string         `yaml:"base_url"`
-	Auth         BackendAuth    `yaml:"auth"`
-	Capabilities []string       `yaml:"capabilities"`
-	Models       *BackendModels `yaml:"models"`
-	PromptCache  *bool          `yaml:"prompt_cache"`
+	Remote       bool              `yaml:"remote"`
+	Extension    string            `yaml:"extension"`
+	BaseURL      string            `yaml:"base_url"`
+	Auth         BackendAuth       `yaml:"auth"`
+	Capabilities []string          `yaml:"capabilities"`
+	Models       *BackendModels    `yaml:"models"`
+	PromptCache  *bool             `yaml:"prompt_cache"`
+	ExtraHeaders map[string]string `yaml:"extra_headers"`
 }
 
 func parseCapabilityBackend(file capabilityBackendFile) CapabilityBackend {
@@ -339,6 +340,10 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 				return RouterConfig{}, false, fmt.Errorf("router config %s: backends.%s.base_url %q needs a scheme and host", path, id, baseURL)
 			}
 		}
+		headers, err := expandHeaders(entry.ExtraHeaders)
+		if err != nil {
+			return RouterConfig{}, false, fmt.Errorf("router config %s: backends.%s.extra_headers: %w", path, id, err)
+		}
 		cfg.Backends[id] = BackendDef{
 			ID:           id,
 			Remote:       entry.Remote,
@@ -348,6 +353,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 			Capabilities: caps,
 			Models:       entry.Models,
 			PromptCache:  entry.PromptCache,
+			ExtraHeaders: headers,
 		}
 	}
 	return cfg, true, nil
@@ -622,15 +628,37 @@ func (c RouterConfig) ProxyBackendURL() string {
 			return b.BaseURL
 		}
 	}
-	for _, b := range c.Backends {
-		if b.HasCapability(CapVoices) {
+	// Sorted ids, so the choice is the same on every call.
+	ids := c.BackendIDs()
+	for _, id := range ids {
+		if b := c.Backends[id]; b.HasCapability(CapVoices) {
 			return b.BaseURL
 		}
 	}
-	for _, b := range c.Backends {
-		return b.BaseURL
+	if len(ids) > 0 {
+		return c.Backends[ids[0]].BaseURL
 	}
 	return ""
+}
+
+// expandHeaders trims header names and expands ${VAR} in values. Nil stays nil.
+func expandHeaders(in map[string]string) (map[string]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		name := strings.TrimSpace(k)
+		if name == "" {
+			return nil, fmt.Errorf("empty header name")
+		}
+		val, err := ExpandEnv(strings.TrimSpace(v))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		out[name] = val
+	}
+	return out, nil
 }
 
 // BackendIDs returns sorted backend ids for stable health output.

@@ -519,8 +519,13 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	if schemas.IsPlainTextTranscriptionFormat(resp.ResponseFormat) {
 		return []byte(resp.Text), "text/plain; charset=utf-8", nil
 	}
-	body := fmt.Sprintf(`{"text":%q}`, resp.Text)
-	return []byte(body), "application/json", nil
+	body, err := json.Marshal(struct {
+		Text string `json:"text"`
+	}{Text: resp.Text})
+	if err != nil {
+		return nil, "", derrors.Wrap(err, derrors.CodeInternal, "router.Transcribe", "encode json")
+	}
+	return body, "application/json", nil
 }
 
 func ensureSpeechDeadline(ctx context.Context, timeouts config.Timeouts) (context.Context, context.CancelFunc) {
