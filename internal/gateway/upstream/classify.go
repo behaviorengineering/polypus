@@ -10,6 +10,7 @@ import (
 	"github.com/sony/gobreaker"
 )
 
+// Layer values attribute a dial failure to the hop that failed.
 const (
 	LayerCloudflare     = "cloudflare"
 	LayerPolypusBreaker = "polypus_breaker"

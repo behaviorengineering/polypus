@@ -46,7 +46,7 @@ func verifyHash(encoded string, secret []byte) bool {
 	if len(parts) != 5 || parts[0] != "argon2id" || parts[1] != "v=19" {
 		return false
 	}
-	memory, time, threads, ok := parseArgonParams(parts[2])
+	memory, passes, threads, ok := parseArgonParams(parts[2])
 	if !ok {
 		return false
 	}
@@ -58,13 +58,13 @@ func verifyHash(encoded string, secret []byte) bool {
 	if err != nil || len(want) == 0 || len(want) > maxArgonKeyLen {
 		return false
 	}
-	got := argon2.IDKey(secret, salt, time, memory, threads, uint32(len(want))) //nolint:gosec // G115: len(want) is at most maxArgonKeyLen
+	got := argon2.IDKey(secret, salt, passes, memory, threads, uint32(len(want))) //nolint:gosec // G115: len(want) is at most maxArgonKeyLen
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
 // parseArgonParams reads "m=..,t=..,p=..". All three are required and each must
 // be within the bounds above; ok is false otherwise.
-func parseArgonParams(s string) (memory, time uint32, threads uint8, ok bool) {
+func parseArgonParams(s string) (memory, passes uint32, threads uint8, ok bool) {
 	seen := map[string]bool{}
 	for _, kv := range strings.Split(s, ",") {
 		key, val, found := strings.Cut(kv, "=")
@@ -84,7 +84,7 @@ func parseArgonParams(s string) (memory, time uint32, threads uint8, ok bool) {
 			if err != nil {
 				return 0, 0, 0, false
 			}
-			time = uint32(n)
+			passes = uint32(n)
 		case "p":
 			n, err := strconv.ParseUint(val, 10, 8)
 			if err != nil {
@@ -95,9 +95,9 @@ func parseArgonParams(s string) (memory, time uint32, threads uint8, ok bool) {
 			return 0, 0, 0, false
 		}
 	}
-	if len(seen) != 3 || time < 1 || time > maxArgonTime || threads < 1 ||
+	if len(seen) != 3 || passes < 1 || passes > maxArgonTime || threads < 1 ||
 		memory < 8*uint32(threads) || memory > maxArgonMemory {
 		return 0, 0, 0, false
 	}
-	return memory, time, threads, true
+	return memory, passes, threads, true
 }

@@ -23,12 +23,12 @@ const (
 	errBackendNotFound = "polypus: backend not found"
 )
 
-func newChatProxyClient(max time.Duration) *http.Client {
-	if max <= 0 {
-		max = config.DefaultTimeouts().Max
+func newChatProxyClient(limit time.Duration) *http.Client {
+	if limit <= 0 {
+		limit = config.DefaultTimeouts().Max
 	}
 	return &http.Client{
-		Timeout:   max,
+		Timeout:   limit,
 		Transport: observability.WrapTransport(http.DefaultTransport),
 	}
 }

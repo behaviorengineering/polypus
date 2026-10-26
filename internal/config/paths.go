@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,4 +141,26 @@ func xdgDir(envName, homeSubdir string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, homeSubdir, "polypus"), nil
+}
+
+// ResolveAdminKeysPath picks the admin API key store path.
+// Order: POLYPUS_ADMIN_KEYS, then $XDG_STATE_HOME/polypus/admin-api-keys.json.
+func ResolveAdminKeysPath() (string, error) {
+	out, err := resolveAdminKeysPath()
+	if err != nil {
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), "config.ResolveAdminKeysPath", "state dir")
+	}
+	return out, nil
+}
+
+// resolveAdminKeysPath is ResolveAdminKeysPath before its error is typed at the package boundary.
+func resolveAdminKeysPath() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("POLYPUS_ADMIN_KEYS")); path != "" {
+		return path, nil
+	}
+	dir, err := DefaultStateDir()
+	if err != nil {
+		return "", fmt.Errorf("admin keys path: %w", err)
+	}
+	return filepath.Join(dir, "admin-api-keys.json"), nil
 }

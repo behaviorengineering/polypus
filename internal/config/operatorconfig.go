@@ -11,9 +11,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// appName names Polypus to the keyring (its service) and to the XDG config lookup.
+const appName = "polypus"
+
 func operatorConfigOptions() operatorconfig.Options {
 	return operatorconfig.Options{
-		App:        "polypus",
+		App:        appName,
 		ConfigEnv:  "POLYPUS_CONFIG",
 		ExtraPaths: polypusConfigExtraPaths(),
 	}
@@ -59,7 +62,7 @@ func SetPolypusSecret(envName, value string, kr operatorconfig.Keyring) error {
 	if kr == nil {
 		kr = operatorconfig.DefaultKeyring()
 	}
-	return kr.Set("polypus", envName, operatorconfig.SanitizeSecret(value))
+	return kr.Set(appName, envName, operatorconfig.SanitizeSecret(value))
 }
 
 // RequireDeclaredSecret reports whether envName is listed under secrets: in the live config.
@@ -113,5 +116,5 @@ func declaredSecretEnvs() ([]string, error) {
 // UserConfigFilePath is where polypus init writes the user config
 // (~/.config/polypus/config.yaml, or under $XDG_CONFIG_HOME).
 func UserConfigFilePath() (string, error) {
-	return operatorconfig.UserConfigPath("polypus", "config.yaml")
+	return operatorconfig.UserConfigPath(appName, "config.yaml")
 }

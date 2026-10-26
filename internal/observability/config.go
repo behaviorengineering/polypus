@@ -35,9 +35,13 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// LoadConfig reads POLYPUS_OTEL_* and POLYPUS_PHOENIX from the environment.
-// Tracing is on by default so gateway spans join client traces in Phoenix. A value
-// that does not parse is an error naming the variable, not a silent default.
+// LoadConfig reads the tracing settings from the environment: POLYPUS_OTEL and
+// POLYPUS_OTEL_ENABLED (on/off), POLYPUS_SERVICE_NAME, POLYPUS_OTLP_ENDPOINT (then
+// OTEL_EXPORTER_OTLP_ENDPOINT, then the local Phoenix unless POLYPUS_PHOENIX is off),
+// POLYPUS_FAILURE_DUMP_DIR, POLYPUS_FAILURE_DUMP_MAX_FILES,
+// POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS and POLYPUS_OTEL_SKIP_PATHS. Tracing is on by
+// default so gateway spans join client traces in Phoenix. A value that does not
+// parse is an error naming the variable, not a silent default.
 func LoadConfig() (Config, error) {
 	var errs []error
 	boolEnv := func(key string, fallback bool) bool {

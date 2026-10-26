@@ -13,6 +13,9 @@ import (
 // RouterIDPrefix starts every public router model id.
 const RouterIDPrefix = "router/"
 
+// reservedBackendID cannot name a backend: router/<name> model ids would be ambiguous.
+const reservedBackendID = "router"
+
 // RouteType is how a named router picks its leaf.
 type RouteType string
 
@@ -506,8 +509,8 @@ func validateClassifierResponseSchema(name, schema string) error {
 }
 
 func validateRouters(cfg *RouterConfig) error {
-	if _, ok := cfg.Backends["router"]; ok {
-		return fmt.Errorf("router: backend id %q is reserved", "router")
+	if _, ok := cfg.Backends[reservedBackendID]; ok {
+		return fmt.Errorf("router: backend id %q is reserved", reservedBackendID)
 	}
 	// Switchyard target names a router emits must be unique across routers.
 	targetOwners := make(map[string]string)
@@ -532,13 +535,21 @@ func validateRouters(cfg *RouterConfig) error {
 			targetOwners[l.target] = name
 		}
 	}
-	if cfg.Switchyard.BaseURL == "" && cfg.HasComposedRouters() {
+	return nil
+}
+
+// fillSwitchyardDefaults gives composed routers the default Switchyard URL and
+// routes.toml path when the config names none.
+func fillSwitchyardDefaults(cfg *RouterConfig) {
+	if !cfg.HasComposedRouters() {
+		return
+	}
+	if cfg.Switchyard.BaseURL == "" {
 		cfg.Switchyard.BaseURL = defaultSwitchyardConfig().BaseURL
 	}
-	if cfg.Switchyard.ConfigPath == "" && cfg.HasComposedRouters() {
+	if cfg.Switchyard.ConfigPath == "" {
 		cfg.Switchyard.ConfigPath = defaultSwitchyardConfig().ConfigPath
 	}
-	return nil
 }
 
 // routeLeaf is one chat leaf a route dials.
@@ -582,7 +593,7 @@ func validateChatLeaf(cfg *RouterConfig, leaf, field string) error {
 	if err != nil {
 		return fmt.Errorf("router: %s: %w", field, err)
 	}
-	if backendID == "router" {
+	if backendID == reservedBackendID {
 		return fmt.Errorf("router: %s: backend id router forbidden", field)
 	}
 	b, ok := cfg.Backends[backendID]
@@ -658,7 +669,7 @@ func rejectStageRouteExtras(name string, file routerRouteFile) error {
 	if strings.TrimSpace(file.Target) != "" {
 		return fmt.Errorf("router: routers.%s.route.target not allowed for stage_router", name)
 	}
-	return rejectClassifierOnlyFields(name, "stage_router", file)
+	return rejectClassifierOnlyFields(name, RouteStageRouter, file)
 }
 
 func rejectClassifierRouteExtras(name string, file routerRouteFile) error {

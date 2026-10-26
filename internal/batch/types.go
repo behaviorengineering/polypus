@@ -5,6 +5,7 @@ import "strings"
 // FilePurpose is the OpenAI Files API purpose string.
 type FilePurpose string
 
+// FilePurposeBatch marks a file uploaded as batch input.
 const (
 	FilePurposeBatch FilePurpose = "batch"
 )
@@ -30,6 +31,7 @@ type RequestCounts struct {
 // Status is the OpenAI batch status string.
 type Status string
 
+// Batch states, as the OpenAI batches API names them.
 const (
 	StatusValidating Status = "validating"
 	StatusInProgress Status = "in_progress"

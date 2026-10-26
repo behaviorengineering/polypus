@@ -55,7 +55,6 @@ type Options struct {
 	MaxTokens             int
 }
 
-// Result is one probe outcome (JSONL-friendly).
 // Status is a probe outcome.
 type Status string
 
@@ -66,6 +65,7 @@ const (
 	StatusSkip Status = "skip"
 )
 
+// Result is one probe outcome (JSONL-friendly).
 type Result struct {
 	Channel       string `json:"channel"`
 	Model         string `json:"model,omitempty"`

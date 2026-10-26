@@ -45,6 +45,7 @@ func shouldRegisterSwitchyard(cfg config.RouterConfig) bool {
 	return config.SwitchyardEnabled()
 }
 
+// GetConfiguredProviders implements schemas.Account: one provider per registered backend.
 func (a *Account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
 	out := make([]schemas.ModelProvider, 0, len(a.backends))
 	for id := range a.backends {
@@ -53,6 +54,7 @@ func (a *Account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
 	return out, nil
 }
 
+// GetKeysForProvider implements schemas.Account: the backend's resolved credential.
 func (a *Account) GetKeysForProvider(_ context.Context, provider schemas.ModelProvider) ([]schemas.Key, error) {
 	b, ok := a.backends[provider]
 	if !ok {
@@ -73,6 +75,7 @@ func (a *Account) GetKeysForProvider(_ context.Context, provider schemas.ModelPr
 	}}, nil
 }
 
+// GetConfigForProvider implements schemas.Account: the backend's base URL, headers and limits.
 func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas.ProviderConfig, error) {
 	b, ok := a.backends[provider]
 	if !ok {

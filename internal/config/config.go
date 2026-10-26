@@ -12,6 +12,7 @@ import (
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
+// Defaults for where the gateway listens and its speech backend.
 const (
 	DefaultHost       = "127.0.0.1"
 	DefaultPort       = 1320

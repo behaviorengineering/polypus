@@ -9,6 +9,7 @@ import (
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
+// Batch endpoints a batch input line can target.
 const (
 	EndpointChatCompletions = "/v1/chat/completions"
 	EndpointEmbeddings      = "/v1/embeddings"

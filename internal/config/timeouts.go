@@ -172,19 +172,19 @@ func ParseTimeoutValue(raw string) (time.Duration, error) {
 
 // Clamp bounds d to Min..Max.
 func (t Timeouts) Clamp(d time.Duration) time.Duration {
-	min := t.Min
-	max := t.Max
-	if min <= 0 {
-		min = defaultTimeoutMin
+	lo := t.Min
+	hi := t.Max
+	if lo <= 0 {
+		lo = defaultTimeoutMin
 	}
-	if max < min {
-		max = defaultTimeoutMax
+	if hi < lo {
+		hi = defaultTimeoutMax
 	}
-	if d < min {
-		return min
+	if d < lo {
+		return lo
 	}
-	if d > max {
-		return max
+	if d > hi {
+		return hi
 	}
 	return d
 }

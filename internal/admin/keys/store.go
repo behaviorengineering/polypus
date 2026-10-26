@@ -51,6 +51,11 @@ type filePayload struct {
 }
 
 // CreateStore opens the key store at cfg.Path.
+
+// tokenPrefix starts every gateway access key: ppk.<id>.<secret>. parseToken must
+// match it exactly.
+const tokenPrefix = "ppk."
+
 func (cfg Config) CreateStore() (*Store, error) {
 	if strings.TrimSpace(cfg.Path) == "" {
 		return nil, derrors.New(derrors.CodeInvalid, "keys.CreateStore", "path required")
@@ -102,7 +107,7 @@ func (s *Store) Generate(name string) (GenerateResult, error) {
 		rec := Record{
 			ID:        id,
 			Name:      name,
-			Prefix:    "ppk." + id,
+			Prefix:    tokenPrefix + id,
 			Hash:      hash,
 			CreatedAt: s.clock().UTC().Format(time.RFC3339),
 		}
@@ -139,7 +144,7 @@ func (s *Store) Rotate(name string) (GenerateResult, error) {
 		if err != nil {
 			return err
 		}
-		token := "ppk." + file.Keys[idx].ID + "." + secret
+		token := tokenPrefix + file.Keys[idx].ID + "." + secret
 		hash, err := hashSecret([]byte(secret))
 		if err != nil {
 			return derrors.Wrap(err, derrors.CodeInternal, "keys.Rotate", "hash")
@@ -266,16 +271,16 @@ func (s *Store) secretForID(id string) (secret string, token string, err error) 
 		return "", "", derrors.Wrap(err, derrors.CodeInternal, "keys.secretForID", "secret rand")
 	}
 	secret = base64.RawURLEncoding.EncodeToString(secretBytes)
-	token = "ppk." + id + "." + secret
+	token = tokenPrefix + id + "." + secret
 	return secret, token, nil
 }
 
 func parseToken(token string) (id, secret string, ok bool) {
 	token = strings.TrimSpace(token)
-	if !strings.HasPrefix(token, "ppk.") {
+	if !strings.HasPrefix(token, tokenPrefix) {
 		return "", "", false
 	}
-	rest := strings.TrimPrefix(token, "ppk.")
+	rest := strings.TrimPrefix(token, tokenPrefix)
 	parts := strings.SplitN(rest, ".", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", false

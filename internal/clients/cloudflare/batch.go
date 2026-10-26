@@ -20,6 +20,7 @@ const (
 // BatchPollState is the Workers AI async batch poll outcome.
 type BatchPollState int
 
+// Workers AI async batch states a poll reports.
 const (
 	BatchPollQueued    BatchPollState = 1
 	BatchPollRunning   BatchPollState = 2

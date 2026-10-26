@@ -19,6 +19,7 @@ import (
 // Capability is a speech backend feature set.
 type Capability string
 
+// Capabilities a backend can declare in backends.<id>.capabilities.
 const (
 	CapChat      Capability = "chat"
 	CapVision    Capability = "vision"
@@ -42,6 +43,14 @@ func (c Capability) Valid() bool {
 		return false
 	}
 }
+
+// Backend extension names accepted in backends.<id>.extension; each selects a
+// provider-specific client.
+const (
+	ExtensionCloudflare = "cloudflare"
+	ExtensionGemini     = "gemini"
+	ExtensionAnthropic  = "anthropic"
+)
 
 // BackendDef is one OpenAI-compatible inference worker.
 type BackendDef struct {
@@ -200,9 +209,9 @@ func (c RouterConfig) EffectiveBatchBackend() string {
 }
 
 // HasCapability reports whether the backend supports a capability.
-func (b BackendDef) HasCapability(cap Capability) bool {
+func (b BackendDef) HasCapability(want Capability) bool {
 	for _, c := range b.Capabilities {
-		if c == cap {
+		if c == want {
 			return true
 		}
 	}
@@ -500,24 +509,24 @@ func firstCloudflareBackendID(cfg *RouterConfig) string {
 	return ids[0]
 }
 
-func ensureCapability(cfg *RouterConfig, id string, cap Capability) {
+func ensureCapability(cfg *RouterConfig, id string, want Capability) {
 	b, ok := cfg.Backends[id]
-	if !ok || b.HasCapability(cap) {
+	if !ok || b.HasCapability(want) {
 		return
 	}
-	b.Capabilities = append(b.Capabilities, cap)
+	b.Capabilities = append(b.Capabilities, want)
 	cfg.Backends[id] = b
 }
 
-func normalizeCapabilityBackend(cfg *RouterConfig, cap *CapabilityBackend, field string, allowMLXFill bool) error {
-	if !cap.Enabled {
-		cap.Default = ""
+func normalizeCapabilityBackend(cfg *RouterConfig, slot *CapabilityBackend, field string, allowMLXFill bool) error {
+	if !slot.Enabled {
+		slot.Default = ""
 		return nil
 	}
-	if cap.Default == "" {
+	if slot.Default == "" {
 		if allowMLXFill {
 			if _, ok := cfg.Backends[mlxLocalID]; ok {
-				cap.Default = mlxLocalID
+				slot.Default = mlxLocalID
 				return nil
 			}
 		}
@@ -529,9 +538,9 @@ func normalizeCapabilityBackend(cfg *RouterConfig, cap *CapabilityBackend, field
 // capabilitySlot is one *_backend block: its YAML key, the capability its default
 // backend must have, and how it is normalised.
 type capabilitySlot struct {
-	field string
-	cap   Capability
-	get   func(*RouterConfig) *CapabilityBackend
+	field      string
+	capability Capability
+	get        func(*RouterConfig) *CapabilityBackend
 	// speech slots may stay without a default (normalizeCapabilityBackend's flag).
 	speech bool
 	// before fills a default from an earlier slot; it runs once those are normalised.
@@ -541,18 +550,18 @@ type capabilitySlot struct {
 // capabilitySlots lists the slots in normalisation order: stt and proxy borrow the
 // tts default, and batch fills its own default, so they come after tts.
 var capabilitySlots = []capabilitySlot{
-	{field: "chat_backend", cap: CapChat, get: func(c *RouterConfig) *CapabilityBackend { return &c.Chat }},
-	{field: "vision_backend", cap: CapVision, get: func(c *RouterConfig) *CapabilityBackend { return &c.Vision }},
-	{field: "embed_backend", cap: CapEmbed, get: func(c *RouterConfig) *CapabilityBackend { return &c.Embed }},
-	{field: "tts_backend", cap: CapTTS, speech: true, get: func(c *RouterConfig) *CapabilityBackend { return &c.TTS }},
-	{field: "stt_backend", cap: CapSTT, speech: true, get: func(c *RouterConfig) *CapabilityBackend { return &c.STT }, before: func(c *RouterConfig) {
+	{field: "chat_backend", capability: CapChat, get: func(c *RouterConfig) *CapabilityBackend { return &c.Chat }},
+	{field: "vision_backend", capability: CapVision, get: func(c *RouterConfig) *CapabilityBackend { return &c.Vision }},
+	{field: "embed_backend", capability: CapEmbed, get: func(c *RouterConfig) *CapabilityBackend { return &c.Embed }},
+	{field: "tts_backend", capability: CapTTS, speech: true, get: func(c *RouterConfig) *CapabilityBackend { return &c.TTS }},
+	{field: "stt_backend", capability: CapSTT, speech: true, get: func(c *RouterConfig) *CapabilityBackend { return &c.STT }, before: func(c *RouterConfig) {
 		inheritTTSDefault(c, &c.STT)
 	}},
-	{field: "proxy_backend", cap: CapVoices, speech: true, get: func(c *RouterConfig) *CapabilityBackend { return &c.Proxy }, before: func(c *RouterConfig) {
+	{field: "proxy_backend", capability: CapVoices, speech: true, get: func(c *RouterConfig) *CapabilityBackend { return &c.Proxy }, before: func(c *RouterConfig) {
 		inheritTTSDefault(c, &c.Proxy)
 	}},
-	{field: "systemone_backend", cap: CapSystemOne, get: func(c *RouterConfig) *CapabilityBackend { return &c.SystemOne }},
-	{field: "batch_backend", cap: CapBatch, get: func(c *RouterConfig) *CapabilityBackend { return &c.Batch }, before: fillDefaultBatchBackend},
+	{field: "systemone_backend", capability: CapSystemOne, get: func(c *RouterConfig) *CapabilityBackend { return &c.SystemOne }},
+	{field: "batch_backend", capability: CapBatch, get: func(c *RouterConfig) *CapabilityBackend { return &c.Batch }, before: fillDefaultBatchBackend},
 }
 
 // inheritTTSDefault gives an enabled slot without a default the tts default.
@@ -579,12 +588,16 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 	}
 	for _, sl := range capabilitySlots {
 		if slot := sl.get(cfg); slot.Enabled {
-			if err := requireBackend(cfg, slot.Default, sl.cap, sl.field+".default"); err != nil {
+			if err := requireBackend(cfg, slot.Default, sl.capability, sl.field+".default"); err != nil {
 				return err
 			}
 		}
 	}
-	return validateRouters(cfg)
+	if err := validateRouters(cfg); err != nil {
+		return err
+	}
+	fillSwitchyardDefaults(cfg)
+	return nil
 }
 
 // normalizeBackends fills each backend's id and checks its base URL, credential,

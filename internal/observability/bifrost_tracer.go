@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -113,6 +114,7 @@ func (t *BifrostOTelTracer) endSpan(handle schemas.SpanHandle, status schemas.Sp
 	}
 }
 
+// PopulateLLMRequestAttributes implements schemas.Tracer.
 func (t *BifrostOTelTracer) PopulateLLMRequestAttributes(handle schemas.SpanHandle, req *schemas.BifrostRequest) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil || req == nil {
@@ -129,6 +131,7 @@ func (t *BifrostOTelTracer) PopulateLLMRequestAttributes(handle schemas.SpanHand
 	flushBifrostSpanAttributes(bridge)
 }
 
+// PopulateLLMResponseAttributes implements schemas.Tracer.
 func (t *BifrostOTelTracer) PopulateLLMResponseAttributes(_ *schemas.BifrostContext, handle schemas.SpanHandle, resp *schemas.BifrostResponse, err *schemas.BifrostError) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil {
@@ -158,6 +161,7 @@ func flushBifrostSpanAttributes(bridge *otelSpanBridge) {
 	}
 }
 
+// SetAttribute implements schemas.Tracer.
 func (t *BifrostOTelTracer) SetAttribute(handle schemas.SpanHandle, key string, value any) {
 	span := t.SpanFromHandle(handle)
 	if span != nil {
@@ -165,6 +169,7 @@ func (t *BifrostOTelTracer) SetAttribute(handle schemas.SpanHandle, key string, 
 	}
 }
 
+// SpanFromHandle implements schemas.Tracer.
 func (t *BifrostOTelTracer) SpanFromHandle(handle schemas.SpanHandle) *schemas.Span {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.schema == nil {
@@ -173,10 +178,12 @@ func (t *BifrostOTelTracer) SpanFromHandle(handle schemas.SpanHandle) *schemas.S
 	return bridge.schema
 }
 
+// GetSpanHandleByID implements schemas.Tracer.
 func (t *BifrostOTelTracer) GetSpanHandleByID(_ string, _ *string) schemas.SpanHandle {
 	return nil
 }
 
+// AddEvent implements schemas.Tracer.
 func (t *BifrostOTelTracer) AddEvent(handle schemas.SpanHandle, name string, attrs map[string]any) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil {
@@ -189,8 +196,10 @@ func (t *BifrostOTelTracer) AddEvent(handle schemas.SpanHandle, name string, att
 	bridge.otel.AddEvent(name, trace.WithAttributes(otelAttrs...))
 }
 
+// EndTrace implements schemas.Tracer.
 func (t *BifrostOTelTracer) EndTrace(_ string) *schemas.Trace { return nil }
 
+// Stop implements schemas.Tracer.
 func (t *BifrostOTelTracer) Stop() {
 	if t == nil {
 		return
@@ -229,8 +238,10 @@ func bifrostAttrToOTel(key string, value any) attribute.KeyValue {
 	}
 }
 
+// geminiSyntheticURLFull is the url.full a Gemini span reports: the endpoint shape
+// with the key already redacted, since no real key reaches the tracer.
 func geminiSyntheticURLFull() string {
-	return redactURLString("https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent?key=super-secret")
+	return "https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent?key=" + url.QueryEscape(redactedSecret)
 }
 
 func openInferenceKind(kind schemas.SpanKind) string {

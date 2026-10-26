@@ -67,7 +67,8 @@ func markUsageErrors(root *cobra.Command) {
 	}
 }
 
-// polypusCommands walks Polypus-owned commands for tests and guide helpers.
+// polypusCommands lists root and every Polypus-owned command under it (Cobra's own
+// help command excluded).
 func polypusCommands(root *cobra.Command) []*cobra.Command {
 	var out []*cobra.Command
 	var walk func(*cobra.Command)
