@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -95,11 +94,11 @@ func (h modelsHandler) warmModelsInventory(ctx context.Context) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/", nil)
 	if err != nil {
-		slog.Warn("polypus: models warmup", "err", err)
+		h.log.Warn("polypus: models warmup", "err", err)
 		return
 	}
 	models := h.collectModels(req, false)
-	slog.Info("polypus: models inventory warmup complete", "enabled_count", len(models))
+	h.log.Info("polypus: models inventory warmup complete", "enabled_count", len(models))
 }
 
 func (h modelsHandler) warmModelsInventoryInventoryView(ctx context.Context) {
@@ -108,11 +107,11 @@ func (h modelsHandler) warmModelsInventoryInventoryView(ctx context.Context) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/", nil)
 	if err != nil {
-		slog.Warn("polypus: models inventory refresh", "err", err)
+		h.log.Warn("polypus: models inventory refresh", "err", err)
 		return
 	}
 	models := h.collectModels(req, true)
-	slog.Info("polypus: models inventory refresh complete", "inventory_count", len(models))
+	h.log.Info("polypus: models inventory refresh complete", "inventory_count", len(models))
 }
 
 func (h modelsHandler) startModelsRefreshLoop(refreshCtx context.Context, cfg config.RouterConfig) {

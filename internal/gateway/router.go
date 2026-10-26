@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -79,6 +80,7 @@ type handlerOptions struct {
 	claudeBatches service.ClaudeBatches
 	policies      *outbound.Policies
 	openRouterGet func(config.BackendDef) (*openrouter.Client, error)
+	logger        *slog.Logger
 }
 
 // WithRouter injects a Router so tests can avoid bifrost.Init.
@@ -146,6 +148,17 @@ func WithClock(now func() time.Time) HandlerOption {
 	}
 }
 
+// WithLogger sets the logger the gateway writes warnings and request failures to.
+// By default it is slog.Default(). Panics if l is nil.
+func WithLogger(l *slog.Logger) HandlerOption {
+	if l == nil {
+		panic("gateway: WithLogger(nil)")
+	}
+	return func(o *handlerOptions) {
+		o.logger = l
+	}
+}
+
 // fillDefaults resolves every option the caller left unset: state paths, the job
 // clock and the provider client getters.
 func (o *handlerOptions) fillDefaults() error {
@@ -165,6 +178,9 @@ func (o *handlerOptions) fillDefaults() error {
 	}
 	if o.clock == nil {
 		o.clock = func() time.Time { return time.Now().UTC() }
+	}
+	if o.logger == nil {
+		o.logger = slog.Default()
 	}
 	// Each gateway owns its client caches and breakers (no process-wide state),
 	// and the router's speech plugin shares the Cloudflare cache.

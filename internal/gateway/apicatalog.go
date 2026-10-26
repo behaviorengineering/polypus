@@ -112,7 +112,7 @@ func (h apiCatalogHandler) serveCatalog(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	encodeJSON(w, cat)
+	h.encodeJSON(w, cat)
 }
 
 func setOpenAIModelsCanonicalLink(w http.ResponseWriter) {

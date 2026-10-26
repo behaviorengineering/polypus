@@ -49,6 +49,7 @@ type modelsInventoryCache struct {
 	ttl   time.Duration
 	path  string
 	now   func() time.Time
+	log   *slog.Logger
 	// writeMu orders disk writes, so an older snapshot never lands after a newer one.
 	writeMu sync.Mutex
 }
@@ -58,7 +59,7 @@ type modelsCacheEntry struct {
 	Models []openaiModel `json:"models"`
 }
 
-func newModelsInventoryCache() *modelsInventoryCache {
+func newModelsInventoryCache(log *slog.Logger) *modelsInventoryCache {
 	ttl := modelsInventoryCacheTTL
 	if raw := strings.TrimSpace(os.Getenv("POLYPUS_MODELS_CACHE_TTL")); raw != "" {
 		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
@@ -68,10 +69,11 @@ func newModelsInventoryCache() *modelsInventoryCache {
 	path, err := config.ResolveModelsInventoryCachePath()
 	if err != nil {
 		// The disk cache is optional: run memory-only and say why.
-		slog.Warn("polypus: models inventory disk cache disabled", "err", err)
+		log.Warn("polypus: models inventory disk cache disabled", "err", err)
 		path = ""
 	}
 	c := &modelsInventoryCache{
+		log:   log,
 		byKey: make(map[string]modelsCacheEntry),
 		ttl:   ttl,
 		path:  path,
@@ -88,13 +90,13 @@ func (c *modelsInventoryCache) loadDisk() {
 	raw, err := os.ReadFile(c.path)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			slog.Warn("polypus: models inventory cache unreadable; starting empty", "path", c.path, "err", err)
+			c.log.Warn("polypus: models inventory cache unreadable; starting empty", "path", c.path, "err", err)
 		}
 		return
 	}
 	var disk map[string]modelsCacheEntry
 	if err := json.Unmarshal(raw, &disk); err != nil {
-		slog.Warn("polypus: models inventory cache corrupt; starting empty", "path", c.path, "err", err)
+		c.log.Warn("polypus: models inventory cache corrupt; starting empty", "path", c.path, "err", err)
 		return
 	}
 	c.mu.Lock()
@@ -126,7 +128,7 @@ func (c *modelsInventoryCache) flush() {
 		err = statefile.WriteAtomic(c.path, raw, 0o600)
 	}
 	if err != nil {
-		slog.Warn("polypus: models inventory cache not saved", "path", c.path, "err", err)
+		c.log.Warn("polypus: models inventory cache not saved", "path", c.path, "err", err)
 	}
 }
 
@@ -184,7 +186,7 @@ func (h modelsHandler) serveModelsListForSurface(surface ModelSurface, w http.Re
 		cfg = h.router.Registry().Config()
 	}
 	if surface == surfaceSystemOne && !systemOneAPIEnabled(cfg) {
-		writeAPINotConfigured(w)
+		h.writeAPINotConfigured(w)
 		return
 	}
 	all := h.collectModels(r, inventoryView(r))
@@ -197,14 +199,14 @@ func (h modelsHandler) serveModelsListForSurface(surface ModelSurface, w http.Re
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	encodeJSON(w, openaiModelList{
-		Object: "list",
+	h.encodeJSON(w, openaiModelList{
+		Object: objectList,
 		Data:   models,
 	})
 }
 
-func writeAPINotConfigured(w http.ResponseWriter) {
-	writeOpenAIJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
+func (s *shared) writeAPINotConfigured(w http.ResponseWriter) {
+	s.writeOpenAIJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
 		Message: "SystemOne API is not configured on this gateway",
 		Type:    errTypeInvalidRequest,
 		Code:    "api_not_configured",
@@ -221,7 +223,7 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface ModelSurface, pathPr
 		cfg = h.router.Registry().Config()
 	}
 	if surface == surfaceSystemOne && !systemOneAPIEnabled(cfg) {
-		writeAPINotConfigured(w)
+		h.writeAPINotConfigured(w)
 		return
 	}
 	rawID := strings.TrimPrefix(r.URL.Path, pathPrefix)
@@ -243,10 +245,10 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface ModelSurface, pathPr
 			setOpenAIModelsCanonicalLink(w)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		encodeJSON(w, m)
+		h.encodeJSON(w, m)
 		return
 	}
-	writeOpenAIJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
+	h.writeOpenAIJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
 		Message: fmt.Sprintf("The model `%s` does not exist", id),
 		Type:    errTypeInvalidRequest,
 		Param:   keyModel,
@@ -412,7 +414,7 @@ func (h modelsHandler) cloudflareInventory(r *http.Request, b config.BackendDef)
 		}
 		return nil
 	}); execErr != nil {
-		slog.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
+		h.log.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
 	}
 	return out
 }
@@ -427,7 +429,7 @@ func (h modelsHandler) fetchBackendModelsProtected(r *http.Request, b config.Bac
 		out = models
 		return nil
 	}); execErr != nil {
-		slog.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
+		h.log.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
 	}
 	return out
 }
@@ -508,7 +510,7 @@ func fetchBackendModelsErr(r *http.Request, b config.BackendDef) ([]openaiModel,
 
 func rewriteBackendModelList(raw []byte, backendID string) []openaiModel {
 	var list openaiModelList
-	if err := json.Unmarshal(raw, &list); err == nil && (list.Object == "list" || len(list.Data) > 0) {
+	if err := json.Unmarshal(raw, &list); err == nil && (list.Object == objectList || len(list.Data) > 0) {
 		out := make([]openaiModel, 0, len(list.Data))
 		for _, m := range list.Data {
 			id := strings.TrimSpace(m.ID)
@@ -712,8 +714,8 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-func writeModelNotAllowed(w http.ResponseWriter, model string) {
-	writeOpenAIJSON(w, http.StatusBadRequest, openaiErrorBody{Error: openaiError{
+func (s *shared) writeModelNotAllowed(w http.ResponseWriter, model string) {
+	s.writeOpenAIJSON(w, http.StatusBadRequest, openaiErrorBody{Error: openaiError{
 		Message: fmt.Sprintf("The model `%s` is not enabled on this gateway (models.allow)", model),
 		Type:    errTypeInvalidRequest,
 		Param:   keyModel,

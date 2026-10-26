@@ -3,7 +3,6 @@ package gateway
 import (
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -36,7 +35,7 @@ type adminAllowOverlayResponse struct {
 func (h adminHandler) serveModelsAllowOverlay(w http.ResponseWriter, r *http.Request) {
 	file, err := config.LoadAllowOverlay(h.overlayPath)
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllowOverlay", "load overlay"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllowOverlay", "load overlay"))
 		return
 	}
 	if file.Backends == nil {
@@ -112,15 +111,15 @@ func (h adminHandler) serveModelsAllow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := config.OverlayAdd(h.overlayPath, backendID, down); err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllow", "overlay"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllow", "overlay"))
 		return
 	}
 	if err := reg.AllowModel(backendID, down); err != nil {
 		if rbErr := config.OverlayRemove(h.overlayPath, backendID, down); rbErr != nil {
-			slog.Warn("allow overlay rollback failed after AllowModel error",
+			h.log.Warn("allow overlay rollback failed after AllowModel error",
 				"backend", backendID, keyModel, down, "rollback_err", rbErr, "allow_err", err)
 		}
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllow", "allow model"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInternal, "gateway.serveModelsAllow", "allow model"))
 		return
 	}
 	b2, ok := reg.Backend(backendID)

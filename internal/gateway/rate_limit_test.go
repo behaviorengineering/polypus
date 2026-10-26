@@ -21,7 +21,7 @@ func TestWriteRateLimitErrorJSON(t *testing.T) {
 		"provider rate limited",
 	)
 	rec := httptest.NewRecorder()
-	if !writeRateLimitError(rec, err) {
+	if !testShared.writeRateLimitError(rec, err) {
 		t.Fatal("expected write")
 	}
 	if rec.Code != http.StatusTooManyRequests {
@@ -58,7 +58,7 @@ func TestWriteRateLimitErrorXRateLimitHeaders(t *testing.T) {
 		"provider rate limited",
 	)
 	rec := httptest.NewRecorder()
-	if !writeRateLimitError(rec, err) {
+	if !testShared.writeRateLimitError(rec, err) {
 		t.Fatal("expected write")
 	}
 	if rec.Header().Get("X-RateLimit-Limit") != "100" {

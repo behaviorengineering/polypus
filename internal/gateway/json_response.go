@@ -9,7 +9,10 @@ import (
 // param, and the object type of a model entry.
 const keyModel = "model"
 
-func writeOpenAIJSON(w http.ResponseWriter, status int, body openaiErrorBody) {
+// objectList is the OpenAI "object" value of a list response.
+const objectList = "list"
+
+func (s *shared) writeOpenAIJSON(w http.ResponseWriter, status int, body openaiErrorBody) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

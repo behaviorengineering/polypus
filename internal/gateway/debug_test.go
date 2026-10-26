@@ -19,7 +19,7 @@ func TestServeFailureDump(t *testing.T) {
 	}
 	observability.SetFailureDumpDir(dir)
 
-	h := healthHandler{shared: &shared{}}
+	h := healthHandler{shared: testShared}
 	req := httptest.NewRequest(http.MethodGet, "/debug/failures/"+traceID, nil)
 	rec := httptest.NewRecorder()
 	h.serveFailureDump(rec, req)

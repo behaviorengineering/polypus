@@ -33,6 +33,7 @@ func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, 
 				streamIdle:    h.timeouts.ResolveStreamIdle(backendID),
 				backendAuth:   backendAuth,
 				thinkingModel: downstream,
+				log:           h.log,
 			})
 		}
 		return h.bifrostChatResponse(w, r, backendID, downstream, body, hop)
@@ -46,7 +47,7 @@ func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request,
 		if err != nil {
 			return gatewayErr(err, "gateway.bifrostChatResponse", "stream").With("backend", backendID)
 		}
-		ctx := withStreamChunkCounter(r.Context())
+		ctx := withStreamChunkCounter(r.Context(), h.log)
 		return writeBifrostChatSSE(ctx, w, chunks, errCh)
 	}
 	raw, err := h.router.ChatCompletionRaw(r.Context(), backendID, model, body, hop)

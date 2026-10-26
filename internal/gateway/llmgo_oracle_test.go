@@ -460,7 +460,7 @@ func TestProxyStreamDropWritesFailureDump(t *testing.T) {
 
 	upstream := gemmaStreamWithTrailingChoice("late")
 	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(withStreamChunkCounter(context.Background()), &buf, strings.NewReader(upstream), false)
+	_, err := copyOpenAIChatStream(withStreamChunkCounter(context.Background(), testShared.log), &buf, strings.NewReader(upstream), false)
 	if err != nil {
 		t.Fatal(err)
 	}

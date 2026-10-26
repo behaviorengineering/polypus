@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -32,7 +31,7 @@ type batchListResponse struct {
 
 func (h batchesHandler) serveBatches(w http.ResponseWriter, r *http.Request) {
 	if h.batchStore == nil {
-		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatches", "batch store not configured"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatches", "batch store not configured"))
 		return
 	}
 	switch r.Method {
@@ -47,7 +46,7 @@ func (h batchesHandler) serveBatches(w http.ResponseWriter, r *http.Request) {
 
 func (h batchesHandler) serveBatchByID(w http.ResponseWriter, r *http.Request) {
 	if h.batchStore == nil {
-		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatchByID", "batch store not configured"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatchByID", "batch store not configured"))
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/v1/batches/")
@@ -73,17 +72,17 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 	const op = "gateway.serveBatchCreate"
 	reg := h.router.Registry()
 	if reg.Config().EffectiveBatchBackend() == "" {
-		writeHandlerError(w, derrors.New(derrors.CodeNotReady, op, "no batch backend configured"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, op, "no batch backend configured"))
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, batchMaxInputBytes))
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "read body"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "read body"))
 		return
 	}
 	var req createBatchRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "parse json"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "parse json"))
 		return
 	}
 	if strings.TrimSpace(req.CompletionWindow) == "" {
@@ -91,22 +90,22 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 	}
 	inputID := strings.TrimSpace(req.InputFileID)
 	if inputID == "" {
-		writeHandlerError(w, derrors.New(derrors.CodeInvalid, op, "input_file_id required"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, op, "input_file_id required"))
 		return
 	}
 	raw, err := h.batchStore.ReadFileContent(inputID)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	parsed, err := batch.ParseBatchJSONL(raw, req.Endpoint)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	backendID, downstream, err := reg.ResolveBatch(parsed.Model)
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "resolve backend"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "resolve backend"))
 		return
 	}
 	publicModel := parsed.Model
@@ -114,12 +113,12 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		publicModel = prefixModelID(backendID, downstream)
 	}
 	if !h.ensureModelAllowed(backendID, publicModel) {
-		writeModelNotAllowed(w, publicModel)
+		h.writeModelNotAllowed(w, publicModel)
 		return
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, op, errBackendNotFound).With("backend", backendID))
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, op, errBackendNotFound).With("backend", backendID))
 		return
 	}
 
@@ -136,10 +135,10 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		Job:              service.Job{Downstream: downstream, Endpoint: req.Endpoint, Lines: parsed.Lines},
 	})
 	if createErr != nil {
-		writeUpstreamDialError(w, createErr, "", backendID, nil)
+		h.writeUpstreamDialError(w, createErr, "", backendID, nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, meta.Public())
+	h.writeJSON(w, http.StatusOK, meta.Public())
 }
 
 // batchHopContext bounds one batch call to the provider by the chat hop budget.
@@ -151,12 +150,12 @@ func (h batchesHandler) batchHopContext(ctx context.Context, r *http.Request, ba
 func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Request, id string) {
 	meta, err := h.batchStore.GetBatch(id)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	backend, ok := h.router.Registry().Backend(meta.BackendID)
 	if !ok && !batchTerminal(meta.Status) {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveBatchRetrieve", errBackendNotFound).
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveBatchRetrieve", errBackendNotFound).
 			With("backend", meta.BackendID))
 		return
 	}
@@ -165,33 +164,33 @@ func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Reques
 	updated, err := h.batches.Refresh(ctx, backend, meta)
 	if err != nil {
 		if isBatchRefreshMiss(err) {
-			slog.Warn("polypus: batch refresh failed; returning last-known", "batch_id", meta.ID, "err", err)
-			writeJSON(w, http.StatusOK, meta.Public())
+			h.log.Warn("polypus: batch refresh failed; returning last-known", "batch_id", meta.ID, "err", err)
+			h.writeJSON(w, http.StatusOK, meta.Public())
 			return
 		}
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, updated.Public())
+	h.writeJSON(w, http.StatusOK, updated.Public())
 }
 
 func (h batchesHandler) serveBatchList(w http.ResponseWriter, r *http.Request) {
 	items, err := h.batchStore.ListBatches()
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	pub := make([]batch.PublicBatch, 0, len(items))
 	for _, m := range items {
 		pub = append(pub, m.Public())
 	}
-	writeJSON(w, http.StatusOK, batchListResponse{Object: "list", Data: pub})
+	h.writeJSON(w, http.StatusOK, batchListResponse{Object: objectList, Data: pub})
 }
 
 func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request, id string) {
 	meta, err := h.batchStore.GetBatch(id)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	backend, _ := h.router.Registry().Backend(meta.BackendID)
@@ -199,10 +198,10 @@ func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request,
 	defer cancel()
 	updated, err := h.batches.Cancel(ctx, backend, meta)
 	if err != nil {
-		writeUpstreamDialError(w, err, "", meta.BackendID, nil)
+		h.writeUpstreamDialError(w, err, "", meta.BackendID, nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, updated.Public())
+	h.writeJSON(w, http.StatusOK, updated.Public())
 }
 
 // batchTerminal reports a batch that no refresh changes.

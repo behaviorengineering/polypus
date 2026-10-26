@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
@@ -57,7 +56,7 @@ func (h modelsHandler) catalogInventory(r *http.Request, b config.BackendDef, li
 		}
 		return nil
 	}); execErr != nil {
-		slog.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
+		h.log.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
 	}
 	return out
 }

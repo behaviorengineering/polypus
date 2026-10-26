@@ -8,7 +8,7 @@ import (
 
 func TestApplyAllowOverlayMissingFile(t *testing.T) {
 	rcfg := gatedRouterConfig()
-	if err := ApplyAllowOverlay(&rcfg, filepath.Join(t.TempDir(), "missing.yaml")); err != nil {
+	if _, err := ApplyAllowOverlay(&rcfg, filepath.Join(t.TempDir(), "missing.yaml")); err != nil {
 		t.Fatal(err)
 	}
 	if rcfg.Backends["cf"].Models.Allow[0] != "@cf/a" {
@@ -27,7 +27,7 @@ func TestApplyAllowOverlayUnion(t *testing.T) {
 		t.Fatal(err)
 	}
 	rcfg := gatedRouterConfig()
-	if err := ApplyAllowOverlay(&rcfg, path); err != nil {
+	if _, err := ApplyAllowOverlay(&rcfg, path); err != nil {
 		t.Fatal(err)
 	}
 	if !ModelInAllowList("cf", "@cf/b", rcfg.Backends["cf"].Models.Allow) {
@@ -50,7 +50,7 @@ func TestApplyAllowOverlaySkipsUngated(t *testing.T) {
 			"open": {ID: "open", Models: nil},
 		},
 	}
-	if err := ApplyAllowOverlay(&rcfg, path); err != nil {
+	if _, err := ApplyAllowOverlay(&rcfg, path); err != nil {
 		t.Fatal(err)
 	}
 	if rcfg.Backends["open"].Models != nil {

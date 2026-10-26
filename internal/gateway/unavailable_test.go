@@ -17,7 +17,7 @@ import (
 func TestWriteUnavailableErrorBreakerOpen(t *testing.T) {
 	err := fmt.Errorf("upstream cf_local unavailable: %w", gobreaker.ErrOpenState)
 	rec := httptest.NewRecorder()
-	writeUnavailableError(rec, err, err.Error(), "cf_local")
+	testShared.writeUnavailableError(rec, err, err.Error(), "cf_local")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d", rec.Code)
 	}
@@ -42,7 +42,7 @@ func TestWriteUnavailableErrorBreakerOpen(t *testing.T) {
 func TestWriteUnavailableErrorHalfOpen(t *testing.T) {
 	err := fmt.Errorf("upstream leaf unavailable: %w", gobreaker.ErrTooManyRequests)
 	rec := httptest.NewRecorder()
-	writeUnavailableError(rec, err, err.Error(), "leaf")
+	testShared.writeUnavailableError(rec, err, err.Error(), "leaf")
 	var body openaiErrorBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestWriteUnavailableErrorHalfOpen(t *testing.T) {
 func TestWriteUpstreamDialErrorSwitchyardUnreachableNoRetryAfter(t *testing.T) {
 	err := errors.New("dial tcp 127.0.0.1:4000: connect: connection refused")
 	rec := httptest.NewRecorder()
-	writeUpstreamDialError(rec, err, "polypus: switchyard unavailable: ", upstream.NameSwitchyard, isSwitchyardUnreachable)
+	testShared.writeUpstreamDialError(rec, err, "polypus: switchyard unavailable: ", upstream.NameSwitchyard, isSwitchyardUnreachable)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d", rec.Code)
 	}
@@ -83,7 +83,7 @@ func TestWriteUpstreamDialErrorRateLimitPrecedence(t *testing.T) {
 		"provider rate limited",
 	)
 	rec := httptest.NewRecorder()
-	writeUpstreamDialError(rec, err, "", "cf_local", nil)
+	testShared.writeUpstreamDialError(rec, err, "", "cf_local", nil)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -103,7 +103,7 @@ func TestWriteUpstreamDialErrorResponseWrittenNoOp(t *testing.T) {
 	err := fmt.Errorf("stream: %w", upstream.ErrResponseWritten)
 	rec := httptest.NewRecorder()
 	rec.WriteHeader(http.StatusOK)
-	writeUpstreamDialError(rec, err, "", "cf_local", nil)
+	testShared.writeUpstreamDialError(rec, err, "", "cf_local", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d", rec.Code)
 	}
@@ -115,7 +115,7 @@ func TestWriteUpstreamDialErrorResponseWrittenNoOp(t *testing.T) {
 func TestWriteHandlerErrorBreakerResolvesUpstream(t *testing.T) {
 	err := fmt.Errorf("upstream cf_local unavailable: %w", gobreaker.ErrOpenState)
 	rec := httptest.NewRecorder()
-	writeHandlerError(rec, err)
+	testShared.writeHandlerError(rec, err)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}

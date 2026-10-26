@@ -49,6 +49,7 @@ type shared struct {
 	overlayPath   string
 	adminKeys     *keys.Store
 	uiMounts      []uiProxyMount
+	log           *slog.Logger
 }
 
 // Gateway is the Polypus HTTP mux (controller) over capability handlers.
@@ -117,8 +118,12 @@ func openRouter(opts config.ServeOptions, ho handlerOptions) (rc Router, rcfg co
 	if err != nil {
 		return nil, config.RouterConfig{}, false, fmt.Errorf("gateway: %w", err)
 	}
-	if err := config.ApplyAllowOverlay(&loaded, ho.overlayPath); err != nil {
+	skipped, err := config.ApplyAllowOverlay(&loaded, ho.overlayPath)
+	if err != nil {
 		return nil, config.RouterConfig{}, false, fmt.Errorf("gateway: allow overlay: %w", err)
+	}
+	for _, s := range skipped {
+		ho.logger.Warn("polypus: allow overlay backend skipped", "backend", s.Backend, "reason", s.Reason)
 	}
 	var clientOpts []router.ClientOption
 	if ho.cfGet != nil {
@@ -134,10 +139,6 @@ func openRouter(opts config.ServeOptions, ho handlerOptions) (rc Router, rcfg co
 // newShared builds the per-gateway state: fallback proxy, timeouts, batch store
 // and UI mounts. The caller closes an owned router when it fails.
 func newShared(opts config.ServeOptions, ho handlerOptions, rc Router, rcfg config.RouterConfig, adminKeys *keys.Store) (*shared, error) {
-	proxy, err := newFallbackProxy(rc.Registry().ProxyBackendURL())
-	if err != nil {
-		return nil, err
-	}
 	timeouts := rcfg.Timeouts
 	if timeouts.Max == 0 {
 		timeouts = config.DefaultTimeouts()
@@ -150,15 +151,10 @@ func newShared(opts config.ServeOptions, ho handlerOptions, rc Router, rcfg conf
 	if err != nil {
 		return nil, fmt.Errorf("gateway: batch store: %w", err)
 	}
-	uiMounts, err := buildUIMounts(rcfg.UIProxies)
-	if err != nil {
-		return nil, err
-	}
 	sh := &shared{
 		opts:          opts,
 		router:        rc,
-		proxy:         proxy,
-		invCache:      newModelsInventoryCache(),
+		invCache:      newModelsInventoryCache(ho.logger),
 		timeouts:      timeouts,
 		client:        newChatProxyClient(timeouts.Max),
 		upstreams:     upstream.NewBoard(),
@@ -170,7 +166,13 @@ func newShared(opts config.ServeOptions, ho handlerOptions, rc Router, rcfg conf
 		batchNow:      ho.clock,
 		overlayPath:   ho.overlayPath,
 		adminKeys:     adminKeys,
-		uiMounts:      uiMounts,
+		log:           ho.logger,
+	}
+	if sh.proxy, err = sh.newFallbackProxy(rc.Registry().ProxyBackendURL()); err != nil {
+		return nil, err
+	}
+	if sh.uiMounts, err = sh.buildUIMounts(rcfg.UIProxies); err != nil {
+		return nil, err
 	}
 	sh.claudeBatches = ho.claudeBatches
 	if client, ok := rc.(*router.Client); ok && sh.claudeBatches == nil {
@@ -214,7 +216,7 @@ func (s *shared) batchNowTime() time.Time {
 	return time.Now().UTC()
 }
 
-func newFallbackProxy(backendURL string) (http.Handler, error) {
+func (s *shared) newFallbackProxy(backendURL string) (http.Handler, error) {
 	target, err := url.Parse(backendURL)
 	if err != nil {
 		return nil, fmt.Errorf("backend url: %w", err)
@@ -225,7 +227,7 @@ func newFallbackProxy(backendURL string) (http.Handler, error) {
 			pr.Out.Host = target.Host
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			writeErrorJSON(w, http.StatusBadGateway,
+			s.writeErrorJSON(w, http.StatusBadGateway,
 				derrors.Wrap(err, derrors.CodeUnavailable, "gateway.backendProxy", "polypus backend unavailable"), "")
 		},
 	}
@@ -344,7 +346,7 @@ func (g *Gateway) serveSystemOneSchemaRoute(w http.ResponseWriter, r *http.Reque
 		cfg = g.router.Registry().Config()
 	}
 	if !systemOneAPIEnabled(cfg) {
-		writeAPINotConfigured(w)
+		g.writeAPINotConfigured(w)
 		return
 	}
 	serveSystemOneSchema(w, r)
@@ -365,12 +367,12 @@ func (g *Gateway) serveModelsAllowRoute(w http.ResponseWriter, r *http.Request) 
 func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, chatMaxBody))
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "read body"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "read body"))
 		return
 	}
 	model, err := extractChatModel(body)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 
@@ -388,39 +390,39 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 		backendID, downstream, err = reg.ResolveVision(model)
 	} else {
 		if cfg.EffectiveChatBackend() == "" {
-			writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveChatCompletions", "no chat backend configured"))
+			h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveChatCompletions", "no chat backend configured"))
 			return
 		}
 		backendID, downstream, err = reg.ResolveChat(model)
 	}
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "resolve backend"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "resolve backend"))
 		return
 	}
 	if !h.ensureModelAllowed(backendID, model) {
-		writeModelNotAllowed(w, model)
+		h.writeModelNotAllowed(w, model)
 		return
 	}
 	backendURL, ok := reg.BackendURL(backendID)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveChatCompletions", errBackendNotFound).
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveChatCompletions", errBackendNotFound).
 			With("backend", backendID))
 		return
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveChatCompletions", errBackendNotFound).
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveChatCompletions", errBackendNotFound).
 			With("backend", backendID))
 		return
 	}
 	backendAuth, authErr := mustBackendAuth(backend)
 	if authErr != nil {
-		writeHandlerError(w, authErr)
+		h.writeHandlerError(w, authErr)
 		return
 	}
 	rewritten, err := rewriteChatModel(body, downstream)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
@@ -429,7 +431,7 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, vision, chatBodyWantsThinking(body))
 	if err = h.proxyOrBifrostChat(w, r, backendID, downstream, backendURL, rewritten, hop, backendAuth, true); err != nil {
-		writeUpstreamDialError(w, err, "", string(backendID), nil)
+		h.writeUpstreamDialError(w, err, "", string(backendID), nil)
 		return
 	}
 }
@@ -439,13 +441,13 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 	cfg := reg.Config()
 	nr, ok := lookupRouter(cfg, routerName)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unknown router").
+		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unknown router").
 			With(keyModel, model).
 			With("router", routerName))
 		return
 	}
 	if msg := validateNamedRouterForChat(nr, model, vision); msg != "" {
-		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", msg))
+		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", msg))
 		return
 	}
 
@@ -457,7 +459,7 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 	case dispatchUnknown:
 		fallthrough
 	default:
-		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unsupported route type").
+		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unsupported route type").
 			With(keyModel, model).
 			With("router", routerName))
 	}
@@ -467,33 +469,33 @@ func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.R
 	reg := h.router.Registry()
 	backendID, downstream, resolveErr := reg.ResolveChat(target)
 	if resolveErr != nil {
-		writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.servePassthroughRouterChat", "resolve target"))
+		h.writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.servePassthroughRouterChat", "resolve target"))
 		return
 	}
 	if !h.ensureModelAllowed(backendID, target) {
-		writeModelNotAllowed(w, target)
+		h.writeModelNotAllowed(w, target)
 		return
 	}
 	backendURL, ok := reg.BackendURL(backendID)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.servePassthroughRouterChat", errBackendNotFound).
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.servePassthroughRouterChat", errBackendNotFound).
 			With("backend", backendID))
 		return
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.servePassthroughRouterChat", errBackendNotFound).
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.servePassthroughRouterChat", errBackendNotFound).
 			With("backend", backendID))
 		return
 	}
 	backendAuth, authErr := mustBackendAuth(backend)
 	if authErr != nil {
-		writeHandlerError(w, authErr)
+		h.writeHandlerError(w, authErr)
 		return
 	}
 	rewritten, rewriteErr := rewriteChatModel(body, downstream)
 	if rewriteErr != nil {
-		writeHandlerError(w, rewriteErr)
+		h.writeHandlerError(w, rewriteErr)
 		return
 	}
 	var err error
@@ -503,7 +505,7 @@ func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.R
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, chatBodyWantsThinking(body))
 	if err = h.proxyOrBifrostChat(w, r, backendID, downstream, backendURL, rewritten, hop, backendAuth, true); err != nil {
-		writeUpstreamDialError(w, err, "", string(backendID), nil)
+		h.writeUpstreamDialError(w, err, "", string(backendID), nil)
 	}
 }
 
@@ -524,10 +526,11 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 			hop:                       hop,
 			streamIdle:                h.timeouts.ResolveStreamIdle(upstream.NameSwitchyard),
 			recordRouterSelectedModel: true,
+			log:                       h.log,
 		})
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "polypus: switchyard unavailable: ", upstream.NameSwitchyard, isSwitchyardUnreachable)
+		h.writeUpstreamDialError(w, err, "polypus: switchyard unavailable: ", upstream.NameSwitchyard, isSwitchyardUnreachable)
 	}
 }
 
@@ -563,15 +566,15 @@ func isSwitchyardUnreachable(err error) bool {
 }
 
 // writeHandlerError writes a domain error (or any error) using HTTPStatus.
-func writeHandlerError(w http.ResponseWriter, err error) {
+func (s *shared) writeHandlerError(w http.ResponseWriter, err error) {
 	if err == nil || upstream.ResponseWritten(err) {
 		return
 	}
-	if writeRateLimitError(w, err) {
+	if s.writeRateLimitError(w, err) {
 		return
 	}
 	if upstream.Unavailable(err) {
-		writeUnavailableError(w, err, err.Error(), upstream.ResolveUpstreamName(err, ""))
+		s.writeUnavailableError(w, err, err.Error(), upstream.ResolveUpstreamName(err, ""))
 		return
 	}
 	status := derrors.HTTPStatus(err)
@@ -579,16 +582,16 @@ func writeHandlerError(w http.ResponseWriter, err error) {
 	if errors.As(err, &tooLarge) {
 		status = http.StatusRequestEntityTooLarge
 	}
-	writeErrorJSON(w, status, err, "")
+	s.writeErrorJSON(w, status, err, "")
 }
 
 // writeErrorJSON answers with an OpenAI-shaped error body. The client sees the
 // public message; the full chain (ops, upstream URLs, causes) goes to the log.
-func writeErrorJSON(w http.ResponseWriter, status int, err error, prefix string) {
+func (s *shared) writeErrorJSON(w http.ResponseWriter, status int, err error, prefix string) {
 	if status >= http.StatusInternalServerError {
-		slog.Warn("polypus: request failed", "status", status, "err", err)
+		s.log.Warn("polypus: request failed", "status", status, "err", err)
 	}
-	writeOpenAIJSON(w, status, openaiErrorBody{Error: openaiError{
+	s.writeOpenAIJSON(w, status, openaiErrorBody{Error: openaiError{
 		Message: prefix + derrors.PublicMessage(err),
 		Type:    openaiErrorType(status),
 		Code:    string(derrors.CodeOf(err)),
@@ -612,16 +615,16 @@ func openaiErrorType(status int) string {
 // writeUpstreamDialError writes a dial failure unless the upstream body was already sent.
 // prefix is prepended for Switchyard-style messages; unreachable maps to 503 when set.
 // Typed domain errors use HTTPStatus; other errors stay 502 unless the breaker or unreachable hook says 503.
-func writeUpstreamDialError(w http.ResponseWriter, err error, prefix, upstreamName string, unreachable func(error) bool) {
+func (s *shared) writeUpstreamDialError(w http.ResponseWriter, err error, prefix, upstreamName string, unreachable func(error) bool) {
 	if err == nil || upstream.ResponseWritten(err) {
 		return
 	}
-	if writeRateLimitError(w, err) {
+	if s.writeRateLimitError(w, err) {
 		return
 	}
 	if upstream.Unavailable(err) || (unreachable != nil && unreachable(err)) {
-		slog.Warn("polypus: upstream unavailable", "upstream", upstreamName, "err", err)
-		writeUnavailableError(w, err, prefix+derrors.PublicMessage(err), upstreamName)
+		s.log.Warn("polypus: upstream unavailable", "upstream", upstreamName, "err", err)
+		s.writeUnavailableError(w, err, prefix+derrors.PublicMessage(err), upstreamName)
 		return
 	}
 	code := http.StatusBadGateway
@@ -629,56 +632,56 @@ func writeUpstreamDialError(w http.ResponseWriter, err error, prefix, upstreamNa
 	if errors.As(err, &de) {
 		code = derrors.HTTPStatus(err)
 	}
-	writeErrorJSON(w, code, err, prefix)
+	s.writeErrorJSON(w, code, err, prefix)
 }
 
 func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, embedMaxBody))
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "read body"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "read body"))
 		return
 	}
 	model, err := extractEmbedModel(body)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	if cfg.EffectiveEmbedBackend() == "" {
-		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveEmbeddings", "no embed backend configured"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveEmbeddings", "no embed backend configured"))
 		return
 	}
 	backendID, downstream, err := reg.ResolveEmbed(model)
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "resolve backend"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "resolve backend"))
 		return
 	}
 	if !h.ensureModelAllowed(backendID, model) {
-		writeModelNotAllowed(w, model)
+		h.writeModelNotAllowed(w, model)
 		return
 	}
 	backendURL, ok := reg.BackendURL(backendID)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveEmbeddings", errBackendNotFound).
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveEmbeddings", errBackendNotFound).
 			With("backend", backendID))
 		return
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveEmbeddings", errBackendNotFound).
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveEmbeddings", errBackendNotFound).
 			With("backend", backendID))
 		return
 	}
 	backendAuth, authErr := mustBackendAuth(backend)
 	if authErr != nil {
-		writeHandlerError(w, authErr)
+		h.writeHandlerError(w, authErr)
 		return
 	}
 	rewritten, err := rewriteEmbedModel(body, downstream)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", model, backendID, backendURL, downstream)
@@ -703,7 +706,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return proxyEmbeddings(w, r, backendURL, rewritten, h.client, hop, backendAuth)
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "", string(backendID), nil)
+		h.writeUpstreamDialError(w, err, "", string(backendID), nil)
 		return
 	}
 }
@@ -719,7 +722,7 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, speechMaxBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "read body"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "read body"))
 		return
 	}
 	var req struct {
@@ -730,17 +733,17 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 		Speed          *float64 `json:"speed"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "invalid json"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "invalid json"))
 		return
 	}
 	backendID, downstream, resolveErr := h.router.Registry().ResolveTTS(req.Model)
 	if resolveErr != nil {
-		writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.serveSpeech", "resolve backend").
+		h.writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.serveSpeech", "resolve backend").
 			With(keyModel, req.Model))
 		return
 	}
 	if strings.TrimSpace(req.Model) != "" && !h.ensureModelAllowed(string(backendID), req.Model) {
-		writeModelNotAllowed(w, req.Model)
+		h.writeModelNotAllowed(w, req.Model)
 		return
 	}
 	backendURL, _ := h.router.Registry().BackendURL(string(backendID))
@@ -764,7 +767,7 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 		return synthErr
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "", string(backendID), nil)
+		h.writeUpstreamDialError(w, err, "", string(backendID), nil)
 		return
 	}
 	w.Header().Set("Content-Type", speechContentType(req.ResponseFormat))
@@ -778,18 +781,18 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, transcriptionMaxBody)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "multipart"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "multipart"))
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "file required"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "file required"))
 		return
 	}
 	defer func() { _ = file.Close() }()
 	audio, err := io.ReadAll(file)
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "read file"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "read file"))
 		return
 	}
 	filename := "audio.wav"
@@ -803,12 +806,12 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 	sttModel := r.FormValue(keyModel)
 	backendID, downstream, resolveErr := h.router.Registry().ResolveSTT(sttModel)
 	if resolveErr != nil {
-		writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.serveTranscription", "resolve backend").
+		h.writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.serveTranscription", "resolve backend").
 			With(keyModel, sttModel))
 		return
 	}
 	if strings.TrimSpace(sttModel) != "" && !h.ensureModelAllowed(string(backendID), sttModel) {
-		writeModelNotAllowed(w, sttModel)
+		h.writeModelNotAllowed(w, sttModel)
 		return
 	}
 	backendURL, _ := h.router.Registry().BackendURL(string(backendID))
@@ -833,7 +836,7 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 		return trErr
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "", string(backendID), nil)
+		h.writeUpstreamDialError(w, err, "", string(backendID), nil)
 		return
 	}
 	w.Header().Set("Content-Type", ct)

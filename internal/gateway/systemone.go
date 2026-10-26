@@ -23,28 +23,28 @@ type systemOneHandler struct{ *shared }
 func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, chatMaxBody))
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSystemOne", "read body"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSystemOne", "read body"))
 		return
 	}
 	if err := validateSystemOneBody(body); err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	model, err := extractSystemOneModel(body)
 	if err != nil {
-		writeHandlerError(w, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	if cfg.EffectiveSystemOneBackend() == "" {
-		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveSystemOne", "no systemone backend configured"))
+		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveSystemOne", "no systemone backend configured"))
 		return
 	}
 	backendID, downstream, err := reg.ResolveSystemOne(model)
 	if err != nil {
-		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSystemOne", "resolve backend"))
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSystemOne", "resolve backend"))
 		return
 	}
 	publicModel := model
@@ -52,18 +52,18 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		publicModel = prefixModelID(backendID, downstream)
 	}
 	if !h.ensureSystemOneAllowed(backendID, publicModel, downstream) {
-		writeModelNotAllowed(w, publicModel)
+		h.writeModelNotAllowed(w, publicModel)
 		return
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveSystemOne", errBackendNotFound).
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveSystemOne", errBackendNotFound).
 			With("backend", backendID))
 		return
 	}
 	backendURL, ok := reg.BackendURL(backendID)
 	if !ok {
-		writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveSystemOne", errBackendNotFound).
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveSystemOne", errBackendNotFound).
 			With("backend", backendID))
 		return
 	}
@@ -87,7 +87,7 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		return h.proxySystemOnePassthrough(w, r, backend, backendURL, downstream, body)
 	})
 	if err != nil {
-		writeUpstreamDialError(w, err, "", backendID, nil)
+		h.writeUpstreamDialError(w, err, "", backendID, nil)
 	}
 }
 

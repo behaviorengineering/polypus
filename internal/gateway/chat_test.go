@@ -118,7 +118,8 @@ func TestProxyChatCompletionsStream(t *testing.T) {
 	t.Cleanup(up.Close)
 	rec := httptest.NewRecorder()
 	body := []byte(`{"model":"test","messages":[],"stream":true}`)
-	if err := proxyChatCompletions(rec, httptest.NewRequest(http.MethodPost, "/", nil), up.URL, body, up.Client(), 0, ""); err != nil {
+	if err := proxyChat(rec, httptest.NewRequest(http.MethodPost, "/", nil), body,
+		chatDial{backendURL: up.URL, client: up.Client(), log: testShared.log}); err != nil {
 		t.Fatal(err)
 	}
 }

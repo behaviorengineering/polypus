@@ -21,7 +21,7 @@ type polypusBreakerMeta struct {
 	State string `json:"state"`
 }
 
-func writeUnavailableError(w http.ResponseWriter, err error, message, upstreamName string) {
+func (s *shared) writeUnavailableError(w http.ResponseWriter, err error, message, upstreamName string) {
 	cls := upstream.ClassifyDialFailure(err, upstreamName)
 	if upstream.Unavailable(err) {
 		w.Header().Set("Retry-After", strconv.Itoa(int(upstream.OpenTimeout.Seconds())))
@@ -42,5 +42,5 @@ func writeUnavailableError(w http.ResponseWriter, err error, message, upstreamNa
 	if cls.BreakerState != "" {
 		body.Polypus.CircuitBreaker = &polypusBreakerMeta{State: cls.BreakerState}
 	}
-	writeOpenAIJSON(w, http.StatusServiceUnavailable, body)
+	s.writeOpenAIJSON(w, http.StatusServiceUnavailable, body)
 }

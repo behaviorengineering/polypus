@@ -30,7 +30,7 @@ type openaiError struct {
 	Code    string `json:"code"`
 }
 
-func writeRateLimitError(w http.ResponseWriter, err error) bool {
+func (s *shared) writeRateLimitError(w http.ResponseWriter, err error) bool {
 	if err == nil || derrors.CodeOf(err) != derrors.CodeRateLimited {
 		return false
 	}
@@ -44,7 +44,7 @@ func writeRateLimitError(w http.ResponseWriter, err error) bool {
 		w.Header().Set("Cf-Ray", ray)
 	}
 	setRateLimitExtraHeaders(w, err)
-	writeOpenAIJSON(w, http.StatusTooManyRequests, openaiErrorBody{Error: openaiRateLimitError(err)})
+	s.writeOpenAIJSON(w, http.StatusTooManyRequests, openaiErrorBody{Error: openaiRateLimitError(err)})
 	return true
 }
 

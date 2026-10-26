@@ -21,20 +21,21 @@ type streamChunkCounter struct {
 	index  int
 	dumped int  // dropped-chunk dumps written for this stream.
 	warned bool // a dump write failure was already logged for this stream.
+	log    *slog.Logger
 }
 
 // maxChunkDumpsPerStream caps dropped-chunk dumps for one stream: an upstream that
 // keeps streaming after finish_reason would otherwise write a file per chunk.
 const maxChunkDumpsPerStream = 5
 
-func withStreamChunkCounter(ctx context.Context) context.Context {
+func withStreamChunkCounter(ctx context.Context, log *slog.Logger) context.Context {
 	if ctx == nil {
 		return ctx
 	}
 	if _, ok := ctx.Value(streamChunkCounterKey{}).(*streamChunkCounter); ok {
 		return ctx
 	}
-	return context.WithValue(ctx, streamChunkCounterKey{}, &streamChunkCounter{})
+	return context.WithValue(ctx, streamChunkCounterKey{}, &streamChunkCounter{log: log})
 }
 
 func nextStreamChunkIndex(ctx context.Context) int {
@@ -68,10 +69,11 @@ func streamCounter(ctx context.Context) *streamChunkCounter {
 	return c
 }
 
-// claimChunkDump reports whether this stream may write another dump.
+// claimChunkDump reports whether this stream may write another dump. Only counted
+// streams dump, so every dump is capped and its failure has a logger.
 func claimChunkDump(c *streamChunkCounter) bool {
 	if c == nil {
-		return true
+		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -84,16 +86,14 @@ func claimChunkDump(c *streamChunkCounter) bool {
 
 // warnChunkDumpOnce logs a failed dump write, once per stream.
 func warnChunkDumpOnce(c *streamChunkCounter, path, traceID string, err error) {
-	if c != nil {
-		c.mu.Lock()
-		already := c.warned
-		c.warned = true
-		c.mu.Unlock()
-		if already {
-			return
-		}
+	c.mu.Lock()
+	already := c.warned
+	c.warned = true
+	c.mu.Unlock()
+	if already {
+		return
 	}
-	slog.Warn("polypus: stream chunk dump not written", "path", path, "trace_id", traceID, "err", err)
+	c.log.Warn("polypus: stream chunk dump not written", "path", path, "trace_id", traceID, "err", err)
 }
 
 func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProviderJSON []byte) {

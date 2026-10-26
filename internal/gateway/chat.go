@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -128,19 +129,6 @@ const (
 	headerSwitchyardSelectedModel = "x-switchyard-selected-model"
 )
 
-func proxyChatCompletions(w http.ResponseWriter, r *http.Request, backendURL string, body []byte, client *http.Client, hopTimeout time.Duration, backendAuth string) error {
-	model, _ := extractChatModel(body)
-	return proxyChat(w, r, body, chatDial{
-		backendURL:    backendURL,
-		client:        client,
-		hop:           hopTimeout,
-		streamIdle:    config.DefaultTimeouts().StreamIdle,
-		backendAuth:   backendAuth,
-		patchThinking: true,
-		thinkingModel: model,
-	})
-}
-
 // extractRouterSelectedModel reads Switchyard routing metadata from response headers or JSON body.
 func extractRouterSelectedModel(hdr http.Header, body []byte) string {
 	for _, key := range []string{headerRouterSelectedModel, headerSwitchyardSelectedModel} {
@@ -172,9 +160,13 @@ type chatDial struct {
 	thinkingModel     string
 	// recordRouterSelectedModel tags the span with the model a router picked.
 	recordRouterSelectedModel bool
+	log                       *slog.Logger
 }
 
 func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) error {
+	if d.log == nil {
+		return derrors.New(derrors.CodeInternal, "gateway.proxyChat", "chat dial needs a logger")
+	}
 	if d.patchThinking {
 		if patched, ok := applyChatThinking(body, d.thinkingExtension, d.thinkingModel); ok {
 			body = patched
@@ -237,7 +229,7 @@ func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) 
 
 	if streaming {
 		resp.Body = newIdleTimeoutBody(resp.Body, d.streamIdle, cancel)
-		return writeChatStreamResponse(w, r, resp, target, streaming)
+		return writeChatStreamResponse(w, r, resp, target, streaming, d.log)
 	}
 
 	raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
@@ -269,7 +261,7 @@ func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) 
 	return upstream.StatusFailure(status)
 }
 
-func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string, streaming bool) error {
+func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string, streaming bool, log *slog.Logger) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
 		if err != nil {
@@ -293,7 +285,7 @@ func writeChatStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.
 	}
 	copyChatResponseHeaders(w, resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	n, err := copyOpenAIChatStream(withStreamChunkCounter(r.Context()), w, io.LimitReader(resp.Body, chatMaxBody), false)
+	n, err := copyOpenAIChatStream(withStreamChunkCounter(r.Context(), log), w, io.LimitReader(resp.Body, chatMaxBody), false)
 	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, int(n))
 	if err != nil {
 		return afterHeaders(r.Context(), err, false, "gateway.proxyChat", "copy stream")

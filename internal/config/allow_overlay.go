@@ -1,10 +1,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
-	"log/slog"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -84,14 +87,14 @@ func loadAllowOverlay(path string) (AllowOverlayFile, error) {
 	}
 	raw, err := os.ReadFile(path) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return AllowOverlayFile{}, nil
 		}
 		return AllowOverlayFile{}, derrors.Wrap(err, derrors.CodeInternal, "config.LoadAllowOverlay", "read")
 	}
 	var file AllowOverlayFile
 	if err := yaml.Unmarshal(raw, &file); err != nil {
-		return AllowOverlayFile{}, derrors.Wrap(err, derrors.CodeInternal, "config.LoadAllowOverlay", "parse")
+		return AllowOverlayFile{}, derrors.Wrap(err, derrors.CodeInvalid, "config.LoadAllowOverlay", "parse").With("path", path)
 	}
 	if file.Backends == nil {
 		file.Backends = make(map[string]AllowOverlayBackend)
@@ -99,31 +102,47 @@ func loadAllowOverlay(path string) (AllowOverlayFile, error) {
 	return file, nil
 }
 
-// ApplyAllowOverlay unions overlay allow entries into rcfg for gated backends only.
-func ApplyAllowOverlay(rcfg *RouterConfig, path string) error {
-	if err := applyAllowOverlay(rcfg, path); err != nil {
-		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.ApplyAllowOverlay", "apply allow overlay")
+// SkippedOverlay is an overlay backend ApplyAllowOverlay left out, with the reason.
+type SkippedOverlay struct {
+	Backend string
+	Reason  string
+}
+
+// Reasons an overlay backend is skipped.
+const (
+	SkipUnknownBackend = "unknown backend"
+	SkipNoAllowGate    = "backend has no models.allow gate"
+)
+
+// ApplyAllowOverlay unions overlay allow entries into rcfg for gated backends only,
+// and returns the overlay backends it skipped so the caller can log them.
+func ApplyAllowOverlay(rcfg *RouterConfig, path string) ([]SkippedOverlay, error) {
+	skipped, err := applyAllowOverlay(rcfg, path)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.ApplyAllowOverlay", "apply allow overlay")
 	}
-	return nil
+	return skipped, nil
 }
 
 // applyAllowOverlay is ApplyAllowOverlay before its error is typed at the package boundary.
-func applyAllowOverlay(rcfg *RouterConfig, path string) error {
+func applyAllowOverlay(rcfg *RouterConfig, path string) ([]SkippedOverlay, error) {
 	if rcfg == nil {
-		return derrors.New(derrors.CodeInvalid, "config.ApplyAllowOverlay", "nil RouterConfig")
+		return nil, derrors.New(derrors.CodeInvalid, "config.ApplyAllowOverlay", "nil RouterConfig")
 	}
 	overlay, err := LoadAllowOverlay(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for backendID, ob := range overlay.Backends {
+	var skipped []SkippedOverlay
+	for _, backendID := range slices.Sorted(maps.Keys(overlay.Backends)) {
+		ob := overlay.Backends[backendID]
 		b, ok := rcfg.Backends[backendID]
 		if !ok {
-			slog.Warn("allow overlay: skip unknown backend", "backend", backendID)
+			skipped = append(skipped, SkippedOverlay{Backend: backendID, Reason: SkipUnknownBackend})
 			continue
 		}
 		if b.Models == nil || !b.Models.HasAllowGate() {
-			slog.Warn("allow overlay: skip backend without models.allow gate", "backend", backendID)
+			skipped = append(skipped, SkippedOverlay{Backend: backendID, Reason: SkipNoAllowGate})
 			continue
 		}
 		for _, entry := range ob.Allow {
@@ -138,7 +157,7 @@ func applyAllowOverlay(rcfg *RouterConfig, path string) error {
 		}
 		rcfg.Backends[backendID] = b
 	}
-	return nil
+	return skipped, nil
 }
 
 // OverlayAdd appends a downstream model id to the overlay file (overlay-only extras).

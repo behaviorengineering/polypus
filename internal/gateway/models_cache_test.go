@@ -15,7 +15,7 @@ import (
 
 func TestModelsCacheFlushesOncePerPass(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models-inventory.json")
-	c := &modelsInventoryCache{byKey: map[string]modelsCacheEntry{}, ttl: time.Hour, path: path, now: time.Now}
+	c := &modelsInventoryCache{byKey: map[string]modelsCacheEntry{}, ttl: time.Hour, log: testShared.log, path: path, now: time.Now}
 	c.put("a", []openaiModel{{ID: "a/m1"}})
 	c.put("b", []openaiModel{{ID: "b/m1"}})
 	if _, err := os.Stat(path); err == nil {
@@ -30,7 +30,7 @@ func TestModelsCacheFlushesOncePerPass(t *testing.T) {
 	if err := json.Unmarshal(raw, &disk); err != nil || len(disk) != 2 {
 		t.Fatalf("flushed cache: %s (%v)", raw, err)
 	}
-	reloaded := &modelsInventoryCache{byKey: map[string]modelsCacheEntry{}, ttl: time.Hour, path: path, now: time.Now}
+	reloaded := &modelsInventoryCache{byKey: map[string]modelsCacheEntry{}, ttl: time.Hour, log: testShared.log, path: path, now: time.Now}
 	reloaded.loadDisk()
 	if got, ok := reloaded.get("b"); !ok || len(got) != 1 {
 		t.Fatalf("reloaded entry: %v %v", got, ok)
@@ -38,7 +38,7 @@ func TestModelsCacheFlushesOncePerPass(t *testing.T) {
 }
 
 func TestModelsCacheConcurrentPutAndFlush(t *testing.T) {
-	c := &modelsInventoryCache{byKey: map[string]modelsCacheEntry{}, ttl: time.Hour, path: filepath.Join(t.TempDir(), "m.json"), now: time.Now}
+	c := &modelsInventoryCache{byKey: map[string]modelsCacheEntry{}, ttl: time.Hour, log: testShared.log, path: filepath.Join(t.TempDir(), "m.json"), now: time.Now}
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Add(1)
@@ -60,7 +60,7 @@ func TestStreamChunkDumpsAreCappedPerStream(t *testing.T) {
 	prev := observability.FailureDumpDir()
 	observability.SetFailureDumpDir(dir)
 	t.Cleanup(func() { observability.SetFailureDumpDir(prev) })
-	ctx := withStreamChunkCounter(context.Background())
+	ctx := withStreamChunkCounter(context.Background(), testShared.log)
 	for i := range maxChunkDumpsPerStream + 5 {
 		dumpIllegalStreamChunk(ctx, i, []byte(`{"x":1}`), nil)
 	}

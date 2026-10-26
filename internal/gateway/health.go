@@ -49,14 +49,14 @@ func (h healthHandler) serveUpstreamHealth(w http.ResponseWriter, _ *http.Reques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	encodeJSON(w, resp)
+	h.encodeJSON(w, resp)
 }
 
 // serveHealth reports gateway liveness only (no upstream probes).
-func (healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
+func (h healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	encodeJSON(w, healthResponse{Status: "ok"})
+	h.encodeJSON(w, healthResponse{Status: "ok"})
 }
 
 // serveBackendHealth probes configured upstream backends (manual / stack-doctor use).
@@ -101,7 +101,7 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	encodeJSON(w, backendHealthResponse{
+	h.encodeJSON(w, backendHealthResponse{
 		Status:   status,
 		Router:   "bifrost",
 		Backends: backends,
