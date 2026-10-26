@@ -2,19 +2,12 @@ package anthropic
 
 import (
 	"fmt"
-	"sync"
 
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
 )
 
-var (
-	clientMu    sync.Mutex
-	clientCache = map[string]*Client{}
-)
-
-func clientCacheKey(backendID, token, listURL string) string {
-	return backendID + "\x00" + token + "\x00" + listURL
-}
+var clients catalog.Registry[Client]
 
 // GetClient returns a process-scoped Anthropic catalog client for b.
 func GetClient(b config.BackendDef) (*Client, error) {
@@ -26,17 +19,8 @@ func GetClient(b config.BackendDef) (*Client, error) {
 		return nil, err
 	}
 	listURL := modelsListURL(b.BaseURL)
-	key := clientCacheKey(b.ID, token, listURL)
-
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	if c, ok := clientCache[key]; ok {
-		return c, nil
-	}
-	c, err := newClient(listURL, token)
-	if err != nil {
-		return nil, err
-	}
-	clientCache[key] = c
-	return c, nil
+	key := b.ID + "\x00" + token + "\x00" + listURL
+	return clients.Get(key, func() (*Client, error) {
+		return newClient(listURL, token)
+	})
 }

@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
@@ -27,23 +26,13 @@ const (
 	modelsTimeout    = 30 * time.Second
 	modelsCacheTTL   = 10 * time.Minute
 	modelsMaxBody    = 4 << 20
-	objectList       = "list"
-	objectModel      = "model"
 )
 
 // Model is the OpenAI Models API object (bare downstream id for gateway prefixing).
-type Model struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
-}
+type Model = catalog.Model
 
 // ModelList is the OpenAI list response for GET /v1/models.
-type ModelList struct {
-	Object string  `json:"object"`
-	Data   []Model `json:"data"`
-}
+type ModelList = catalog.ModelList
 
 // anthropicModelPage is one page of the Anthropic Models API.
 type anthropicModelPage struct {
@@ -60,11 +49,7 @@ type Client struct {
 	listURL    string
 	apiKey     string
 	httpClient *http.Client
-
-	mu       sync.Mutex
-	cache    []Model
-	cacheAt  time.Time
-	cacheTTL time.Duration
+	cache      *catalog.Cache
 }
 
 // NewClient builds an Anthropic catalog client from a backend definition.
@@ -100,7 +85,7 @@ func newClient(listURL, token string) (*Client, error) {
 			Timeout:   modelsTimeout,
 			Transport: transport,
 		},
-		cacheTTL: modelsCacheTTL,
+		cache: catalog.NewCache(modelsCacheTTL),
 	}, nil
 }
 
@@ -124,22 +109,7 @@ func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if ctx == nil {
 		return ModelList{}, derrors.New(derrors.CodeInvalid, "anthropic.ListModelsStrict", "context required")
 	}
-	if cached, ok := c.cached(); ok {
-		return ModelList{Object: objectList, Data: cached}, nil
-	}
-	models, err := c.fetchAll(ctx)
-	if err != nil {
-		if cached, ok := c.cached(); ok {
-			slog.Warn("anthropic: models catalog fetch failed; using stale cache",
-				"err", err,
-				"cached_models", len(cached),
-			)
-			return ModelList{Object: objectList, Data: cached}, nil
-		}
-		return ModelList{Object: objectList}, err
-	}
-	c.storeCache(models)
-	return ModelList{Object: objectList, Data: models}, nil
+	return catalog.ListStrict(ctx, "anthropic", c.cache, c.fetchAll)
 }
 
 // fetchAll follows after_id pagination until has_more is false.
@@ -160,7 +130,7 @@ func (c *Client) fetchAll(ctx context.Context) ([]Model, error) {
 			}
 			out = append(out, Model{
 				ID:      id,
-				Object:  objectModel,
+				Object:  catalog.ObjectModel,
 				Created: createdUnix(m.CreatedAt),
 				OwnedBy: "anthropic",
 			})
@@ -207,9 +177,9 @@ func (c *Client) fetchPage(ctx context.Context, afterID string) (anthropicModelP
 				With("status", strconv.Itoa(resp.StatusCode))
 		}
 		if outbound.HTTPStatusPermanent(resp.StatusCode) {
-			return anthropicModelPage{}, outbound.Abort(fmt.Errorf("anthropic models: status %d: %s", resp.StatusCode, truncate(string(raw), 200)))
+			return anthropicModelPage{}, outbound.Abort(fmt.Errorf("anthropic models: status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200)))
 		}
-		return anthropicModelPage{}, fmt.Errorf("anthropic models: status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+		return anthropicModelPage{}, fmt.Errorf("anthropic models: status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200))
 	}
 	var page anthropicModelPage
 	if err := json.Unmarshal(raw, &page); err != nil {
@@ -225,32 +195,4 @@ func createdUnix(s string) int64 {
 		return 0
 	}
 	return t.Unix()
-}
-
-func (c *Client) cached() ([]Model, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.cache) == 0 {
-		return nil, false
-	}
-	if time.Since(c.cacheAt) > c.cacheTTL {
-		return nil, false
-	}
-	out := make([]Model, len(c.cache))
-	copy(out, c.cache)
-	return out, true
-}
-
-func (c *Client) storeCache(models []Model) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cache = append([]Model(nil), models...)
-	c.cacheAt = time.Now()
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }

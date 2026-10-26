@@ -5,13 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
@@ -26,29 +25,17 @@ const (
 )
 
 // Model is the OpenAI Models API object (bare downstream id for gateway prefixing).
-type Model struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
-}
+type Model = catalog.Model
 
 // ModelList is the OpenAI list response for GET /v1/models.
-type ModelList struct {
-	Object string  `json:"object"`
-	Data   []Model `json:"data"`
-}
+type ModelList = catalog.ModelList
 
 // Client lists Gemini Developer API models via the OpenAI-compat endpoint.
 type Client struct {
 	listURL    string
 	apiKey     string
 	httpClient *http.Client
-
-	mu       sync.Mutex
-	cache    []Model
-	cacheAt  time.Time
-	cacheTTL time.Duration
+	cache      *catalog.Cache
 }
 
 // NewClient builds a Gemini catalog client from a backend definition.
@@ -84,7 +71,7 @@ func newClient(listURL, token string) (*Client, error) {
 			Timeout:   modelsTimeout,
 			Transport: transport,
 		},
-		cacheTTL: modelsCacheTTL,
+		cache: catalog.NewCache(modelsCacheTTL),
 	}, nil
 }
 
@@ -113,22 +100,7 @@ func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if ctx == nil {
 		return ModelList{}, derrors.New(derrors.CodeInvalid, "gemini.ListModelsStrict", "context required")
 	}
-	if cached, ok := c.cached(); ok {
-		return ModelList{Object: "list", Data: cached}, nil
-	}
-	models, err := c.fetch(ctx)
-	if err != nil {
-		if cached, ok := c.cached(); ok {
-			slog.Warn("gemini: models catalog fetch failed; using stale cache",
-				"err", err,
-				"cached_models", len(cached),
-			)
-			return ModelList{Object: "list", Data: cached}, nil
-		}
-		return ModelList{Object: "list"}, err
-	}
-	c.storeCache(models)
-	return ModelList{Object: "list", Data: models}, nil
+	return catalog.ListStrict(ctx, "gemini", c.cache, c.fetch)
 }
 
 func (c *Client) fetch(ctx context.Context) ([]Model, error) {
@@ -156,9 +128,9 @@ func (c *Client) fetch(ctx context.Context) ([]Model, error) {
 				With("status", strconv.Itoa(resp.StatusCode))
 		}
 		if outbound.HTTPStatusPermanent(resp.StatusCode) {
-			return nil, outbound.Abort(fmt.Errorf("gemini models: status %d: %s", resp.StatusCode, truncate(string(raw), 200)))
+			return nil, outbound.Abort(fmt.Errorf("gemini models: status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200)))
 		}
-		return nil, fmt.Errorf("gemini models: status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+		return nil, fmt.Errorf("gemini models: status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200))
 	}
 	return parseOpenAIModelList(raw)
 }
@@ -176,7 +148,7 @@ func parseOpenAIModelList(raw []byte) ([]Model, error) {
 		}
 		out = append(out, Model{
 			ID:      id,
-			Object:  "model",
+			Object:  catalog.ObjectModel,
 			Created: m.Created,
 			OwnedBy: firstNonEmpty(m.OwnedBy, "google"),
 		})
@@ -188,34 +160,6 @@ func normalizeModelID(id string) string {
 	id = strings.TrimSpace(id)
 	id = strings.TrimPrefix(id, "models/")
 	return strings.TrimSpace(id)
-}
-
-func (c *Client) cached() ([]Model, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.cache) == 0 {
-		return nil, false
-	}
-	if time.Since(c.cacheAt) > c.cacheTTL {
-		return nil, false
-	}
-	out := make([]Model, len(c.cache))
-	copy(out, c.cache)
-	return out, true
-}
-
-func (c *Client) storeCache(models []Model) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cache = append([]Model(nil), models...)
-	c.cacheAt = time.Now()
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }
 
 func firstNonEmpty(vals ...string) string {

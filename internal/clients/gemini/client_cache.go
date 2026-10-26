@@ -2,15 +2,12 @@ package gemini
 
 import (
 	"fmt"
-	"sync"
 
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
 )
 
-var (
-	clientMu    sync.Mutex
-	clientCache = map[string]*Client{}
-)
+var clients catalog.Registry[Client]
 
 func clientCacheKey(backendID, token, listURL string) string {
 	return backendID + "\x00" + token + "\x00" + listURL
@@ -26,24 +23,12 @@ func GetClient(b config.BackendDef) (*Client, error) {
 		return nil, err
 	}
 	listURL := openAIModelsListURL(b.BaseURL)
-	key := clientCacheKey(b.ID, token, listURL)
-
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	if c, ok := clientCache[key]; ok {
-		return c, nil
-	}
-	c, err := newClient(listURL, token)
-	if err != nil {
-		return nil, err
-	}
-	clientCache[key] = c
-	return c, nil
+	return clients.Get(clientCacheKey(b.ID, token, listURL), func() (*Client, error) {
+		return newClient(listURL, token)
+	})
 }
 
 // resetClientCacheForTest clears the process client cache (tests only).
 func resetClientCacheForTest() {
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	clientCache = map[string]*Client{}
+	clients.Reset()
 }
