@@ -15,9 +15,11 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/admin/keys"
 	"github.com/behaviorengineering/polypus/internal/batch"
+	"github.com/behaviorengineering/polypus/internal/batch/service"
 	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/clients/gemini"
+	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
@@ -28,22 +30,24 @@ import (
 
 // shared holds dependencies used by capability handlers.
 type shared struct {
-	opts         config.ServeOptions
-	router       Router
-	ownedRouter  bool
-	proxy        http.Handler
-	invCache     *modelsInventoryCache
-	timeouts     config.Timeouts
-	client       *http.Client
-	upstreams    *upstream.Board
-	cfGet        CloudflareClientGet
-	geminiGet    GeminiClientGet
-	anthropicGet AnthropicClientGet
-	batchStore   *batch.DiskStore
-	batchNow     func() time.Time
-	overlayPath  string
-	adminKeys    *keys.Store
-	uiMounts     []uiProxyMount
+	opts          config.ServeOptions
+	router        Router
+	ownedRouter   bool
+	proxy         http.Handler
+	invCache      *modelsInventoryCache
+	timeouts      config.Timeouts
+	client        *http.Client
+	upstreams     *upstream.Board
+	cfGet         CloudflareClientGet
+	geminiGet     GeminiClientGet
+	anthropicGet  AnthropicClientGet
+	batchStore    *batch.DiskStore
+	batches       *service.Service
+	claudeBatches service.ClaudeBatches
+	batchNow      func() time.Time
+	overlayPath   string
+	adminKeys     *keys.Store
+	uiMounts      []uiProxyMount
 }
 
 // Gateway is the Polypus HTTP mux (controller) over capability handlers.
@@ -158,7 +162,7 @@ func newShared(opts config.ServeOptions, ho handlerOptions, rc Router, rcfg conf
 	if err != nil {
 		return nil, err
 	}
-	return &shared{
+	sh := &shared{
 		opts:         opts,
 		router:       rc,
 		proxy:        proxy,
@@ -174,7 +178,40 @@ func newShared(opts config.ServeOptions, ho handlerOptions, rc Router, rcfg conf
 		overlayPath:  ho.overlayPath,
 		adminKeys:    adminKeys,
 		uiMounts:     uiMounts,
-	}, nil
+	}
+	sh.claudeBatches = ho.claudeBatches
+	if client, ok := rc.(*router.Client); ok && sh.claudeBatches == nil {
+		sh.claudeBatches = router.NewClaudeBatches(client)
+	}
+	sh.batches, err = service.Config{
+		Store:     batchStore,
+		Breakers:  sh.upstreams,
+		Now:       ho.clock,
+		Submitter: sh.batchSubmitter,
+	}.CreateService()
+	if err != nil {
+		return nil, err
+	}
+	return sh, nil
+}
+
+// batchSubmitter picks the batch submitter for a backend.
+func (s *shared) batchSubmitter(b config.BackendDef) (service.Submitter, error) {
+	switch {
+	case b.IsAnthropicExtension():
+		if s.claudeBatches == nil {
+			return nil, derrors.New(derrors.CodeNotReady, "gateway.batchSubmitter", "claude batches need the bifrost router").
+				With("backend", b.ID)
+		}
+		return service.NewClaudeSubmitter(s.claudeBatches, b), nil
+	case b.IsOpenRouter():
+		return service.NewOpenRouterSubmitter(func() (*openrouter.Client, error) { return openrouter.GetClient(b) }), nil
+	case b.IsCloudflareExtension():
+		return service.NewCloudflareSubmitter(func() (*cloudflare.Client, error) { return s.cloudflareClient(b) }, s.batchNowTime), nil
+	default:
+		return nil, derrors.New(derrors.CodeFailedPrecondition, "gateway.batchSubmitter",
+			"batch only supported for cloudflare, openrouter and anthropic backends").With("backend", b.ID)
+	}
 }
 
 func (s *shared) batchNowTime() time.Time {

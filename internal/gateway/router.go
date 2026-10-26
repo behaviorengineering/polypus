@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/behaviorengineering/polypus/internal/batch"
+	"github.com/behaviorengineering/polypus/internal/batch/service"
 	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/clients/gemini"
@@ -40,20 +40,12 @@ type SystemOneRouter interface {
 
 // Router is the composed gateway dial dependency (Registry + Chat + Speech + SystemOne).
 // Prefer depending on the smaller interfaces at call sites; *router.Client implements all.
+// Batches run through the batch service, not the router.
 type Router interface {
 	RegistryProvider
 	ChatRouter
 	SpeechRouter
 	SystemOneRouter
-	BatchRouter
-}
-
-// BatchRouter is the Claude Message Batches dial surface (4 methods).
-type BatchRouter interface {
-	ClaudeBatchCreate(ctx context.Context, backendID, model string, lines []batch.InputLine, timeout time.Duration) (string, error)
-	ClaudeBatchStatus(ctx context.Context, backendID, batchID string, timeout time.Duration) (router.BatchPoll, error)
-	ClaudeBatchResults(ctx context.Context, backendID, batchID, publicModel string, timeout time.Duration) ([]router.BatchLineResult, error)
-	ClaudeBatchCancel(ctx context.Context, backendID, batchID string, timeout time.Duration) error
 }
 
 // routerCloser is optional; owned Bifrost clients implement Close.
@@ -81,6 +73,7 @@ type handlerOptions struct {
 	overlayPath   string
 	adminKeysPath string
 	clock         func() time.Time
+	claudeBatches service.ClaudeBatches
 }
 
 // WithRouter injects a Router so tests can avoid bifrost.Init.
@@ -123,6 +116,17 @@ func WithAdminStateDir(dir string) HandlerOption {
 	return func(o *handlerOptions) {
 		o.overlayPath = filepath.Join(dir, "models-allow-overlay.yaml")
 		o.adminKeysPath = filepath.Join(dir, "admin-api-keys.json")
+	}
+}
+
+// WithClaudeBatches sets the Anthropic Message Batches surface the batch service
+// uses (tests). By default it comes from the router client. Panics if b is nil.
+func WithClaudeBatches(b service.ClaudeBatches) HandlerOption {
+	if b == nil {
+		panic("gateway: WithClaudeBatches(nil)")
+	}
+	return func(o *handlerOptions) {
+		o.claudeBatches = b
 	}
 }
 

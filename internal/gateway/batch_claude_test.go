@@ -18,34 +18,35 @@ import (
 // claudeBatchKeyEnv names the env var that holds the test key.
 const claudeBatchKeyEnv = "CLAUDE_BATCH_TEST_KEY"
 
-// claudeBatchRouter scripts the Claude Message Batches calls over a fake registry.
+// claudeBatchRouter scripts the Claude Message Batches calls (service.ClaudeBatches)
+// beside a fake registry.
 type claudeBatchRouter struct {
 	*fakeRouter
 	createdLines []batch.InputLine
 	createdModel string
 	ended        bool
 	cancelled    bool
-	results      []router.BatchLineResult
+	results      []batch.LineResult
 }
 
-func (r *claudeBatchRouter) ClaudeBatchCreate(_ context.Context, _, model string, lines []batch.InputLine, _ time.Duration) (string, error) {
+func (r *claudeBatchRouter) Create(_ context.Context, _, model string, lines []batch.InputLine, _ time.Duration) (string, error) {
 	r.createdModel = model
 	r.createdLines = lines
 	return "msgbatch_1", nil
 }
 
-func (r *claudeBatchRouter) ClaudeBatchStatus(_ context.Context, _, batchID string, _ time.Duration) (router.BatchPoll, error) {
+func (r *claudeBatchRouter) Status(_ context.Context, _, batchID string, _ time.Duration) (router.BatchPoll, error) {
 	if batchID != "msgbatch_1" {
 		return router.BatchPoll{}, context.Canceled
 	}
 	return router.BatchPoll{Ended: r.ended, Cancelling: r.cancelled && !r.ended}, nil
 }
 
-func (r *claudeBatchRouter) ClaudeBatchResults(_ context.Context, _, _, _ string, _ time.Duration) ([]router.BatchLineResult, error) {
+func (r *claudeBatchRouter) Results(_ context.Context, _, _, _ string, _ time.Duration) ([]batch.LineResult, error) {
 	return r.results, nil
 }
 
-func (r *claudeBatchRouter) ClaudeBatchCancel(context.Context, string, string, time.Duration) error {
+func (r *claudeBatchRouter) Cancel(context.Context, string, string, time.Duration) error {
 	r.cancelled = true
 	return nil
 }
@@ -76,7 +77,7 @@ func newClaudeBatchGateway(t *testing.T) (http.Handler, *claudeBatchRouter) {
 		t.Fatal(err)
 	}
 	fr := &claudeBatchRouter{fakeRouter: &fakeRouter{reg: reg}}
-	return newTestGateway(t, config.ServeOptions{}, fr), fr
+	return newTestGateway(t, config.ServeOptions{}, fr, WithClaudeBatches(fr)), fr
 }
 
 const claudeBatchLine = `{"custom_id":"job-1","method":"POST","url":"/v1/chat/completions","body":{"model":"claude_team/claude-sonnet-5-5","messages":[{"role":"user","content":"hi"}]}}`
@@ -133,7 +134,7 @@ func TestClaudeBatchLifecycle(t *testing.T) {
 	}
 
 	fr.ended = true
-	fr.results = []router.BatchLineResult{
+	fr.results = []batch.LineResult{
 		{CustomID: "job-1", Body: json.RawMessage(`{"object":"chat.completion","model":"claude_team/claude-sonnet-5-5","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`)},
 		{CustomID: "job-2", ErrCode: "errored", ErrMessage: "invalid_request_error"},
 	}
@@ -167,7 +168,7 @@ func TestClaudeBatchCancelKeepsFinishedLines(t *testing.T) {
 	}
 
 	fr.ended = true
-	fr.results = []router.BatchLineResult{
+	fr.results = []batch.LineResult{
 		{CustomID: "job-1", Body: json.RawMessage(`{"object":"chat.completion","choices":[]}`)},
 	}
 	done := getBatch(t, h, created.ID)
@@ -186,7 +187,7 @@ func TestClaudeBatchRejectsEmbeddings(t *testing.T) {
 }
 
 func TestBuildBatchLineOutputCounts(t *testing.T) {
-	ok, errs, completed, failed := buildBatchLineOutput([]router.BatchLineResult{
+	ok, errs, completed, failed := batch.BuildOutput([]batch.LineResult{
 		{CustomID: "a", Body: json.RawMessage(`{"x":1}`)},
 		{CustomID: "b", ErrCode: "expired", ErrMessage: "expired"},
 		{CustomID: "c", Body: json.RawMessage(`{"x":2}`)},
@@ -197,7 +198,7 @@ func TestBuildBatchLineOutputCounts(t *testing.T) {
 }
 
 func TestBatchLineOutputKeepsLinesThatFailToEncode(t *testing.T) {
-	ok, errs, completed, failed := buildBatchLineOutput([]router.BatchLineResult{
+	ok, errs, completed, failed := batch.BuildOutput([]batch.LineResult{
 		{CustomID: "good", Body: []byte(`{"object":"chat.completion"}`)},
 		{CustomID: "bad", Body: []byte(`{not json`)},
 		{CustomID: "err", ErrCode: "errored", ErrMessage: "boom"},
