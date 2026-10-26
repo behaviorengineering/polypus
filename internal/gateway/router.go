@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/clients/gemini"
@@ -44,6 +45,15 @@ type Router interface {
 	ChatRouter
 	SpeechRouter
 	SystemOneRouter
+	BatchRouter
+}
+
+// BatchRouter is the Claude Message Batches dial surface (4 methods).
+type BatchRouter interface {
+	ClaudeBatchCreate(ctx context.Context, backendID, model string, lines []batch.InputLine, timeout time.Duration) (string, error)
+	ClaudeBatchStatus(ctx context.Context, backendID, batchID string, timeout time.Duration) (router.BatchPoll, error)
+	ClaudeBatchResults(ctx context.Context, backendID, batchID, publicModel string, timeout time.Duration) ([]router.BatchLineResult, error)
+	ClaudeBatchCancel(ctx context.Context, backendID, batchID string, timeout time.Duration) error
 }
 
 // routerCloser is optional; owned Bifrost clients implement Close.

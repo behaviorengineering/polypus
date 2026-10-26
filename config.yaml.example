@@ -89,6 +89,8 @@ backends:
 # Omit base_url (defaults to https://api.anthropic.com). Uses a Claude Console API key.
 # prompt_cache defaults to true: Polypus adds a top-level 5-minute cache_control when a
 # request carries none. Set prompt_cache: false to turn that off.
+# Add batch to capabilities (and batch_backend.default: claude_team) for /v1/batches on
+# Claude Message Batches (chat completions only).
 # claude_team:
 #   remote: true
 #   extension: anthropic
