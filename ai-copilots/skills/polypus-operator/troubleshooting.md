@@ -5,9 +5,9 @@ Symptom-first table. Run health before chasing downstream errors.
 ## Quick probes
 
 ```bash
-curl -sf http://127.0.0.1:1320/health | jq .
-curl -sf http://127.0.0.1:1320/health/backends | jq .   # upstream probe; may be slow
-curl -sf http://127.0.0.1:1320/health/upstreams | jq .  # circuit breaker board (no dials)
+curl -sf http://127.0.0.1:1320/health | jq .   # liveness only; the two below need the key once one exists
+curl -sf -H "Authorization: Bearer $POLYPUS_KEY" http://127.0.0.1:1320/health/backends | jq .   # upstream probe; may be slow
+curl -sf -H "Authorization: Bearer $POLYPUS_KEY" http://127.0.0.1:1320/health/upstreams | jq .  # circuit breaker board (no dials)
 curl -sS http://127.0.0.1:1320/v1/apis | jq '.apis[].id'
 curl -sS http://127.0.0.1:1320/v1/apis/openai/models | jq '.data | length'
 curl -sS 'http://127.0.0.1:1320/v1/apis/openai/models?view=inventory' | jq '.data | length'   # cf_local catalog

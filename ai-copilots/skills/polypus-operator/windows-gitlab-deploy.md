@@ -52,7 +52,7 @@ go list -m -f '{{.Dir}}' github.com/behaviorengineering/operatorconfig
 
 ```bash
 curl -sf http://127.0.0.1:1320/health
-curl -sf http://127.0.0.1:1320/health/backends
+curl -sf -H "Authorization: Bearer $POLYPUS_KEY" http://127.0.0.1:1320/health/backends   # $POLYPUS_KEY: your gateway access key, once one exists
 ```
 
 Switchyard must be healthy when `routers:` are configured. `routes.toml` must use `http://gateway:1320/v1`, not `127.0.0.1`.
