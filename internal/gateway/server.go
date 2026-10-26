@@ -509,6 +509,11 @@ func writeHandlerError(w http.ResponseWriter, err error) {
 		writeUnavailableError(w, err, err.Error(), upstream.ResolveUpstreamName(err, ""))
 		return
 	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+		return
+	}
 	http.Error(w, err.Error(), derrors.HTTPStatus(err))
 }
 
@@ -614,7 +619,15 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Request body caps. Past them MaxBytesReader fails the read and writeHandlerError
+// answers 413.
+const (
+	speechMaxBody        = 1 << 20  // TTS JSON; OpenAI caps input at 4096 characters
+	transcriptionMaxBody = 26 << 20 // OpenAI's 25 MB audio cap plus multipart overhead
+)
+
 func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, speechMaxBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "read body"))
@@ -676,6 +689,7 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, transcriptionMaxBody)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "multipart"))
 		return

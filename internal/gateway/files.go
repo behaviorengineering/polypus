@@ -54,6 +54,8 @@ func (h filesHandler) serveFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h filesHandler) serveFileUpload(w http.ResponseWriter, r *http.Request) {
+	// The batch input cap plus multipart overhead; past it the upload gets 413.
+	r.Body = http.MaxBytesReader(w, r.Body, batchMaxInputBytes+1<<20)
 	if err := r.ParseMultipartForm(batchMaxInputBytes); err != nil {
 		writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "multipart"))
 		return
