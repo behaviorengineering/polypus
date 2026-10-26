@@ -1,8 +1,13 @@
 package batch
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func TestDiskStoreFileRoundTrip(t *testing.T) {
@@ -33,6 +38,41 @@ func TestDiskStoreFileRoundTrip(t *testing.T) {
 	}
 	if string(raw) != string(content) {
 		t.Fatalf("content mismatch")
+	}
+}
+
+func TestDiskStoreRejectsIDsOutsideRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "store")
+	store, err := NewDiskStore(root, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A file beside the store that a traversal id would reach.
+	outside := filepath.Join(parent, "secret.json")
+	if err := os.WriteFile(outside, []byte(`{"id":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"../../secret", "../secret.json", "a/b", `a\b`, "..", "file_ok\x00"} {
+		var de *derrors.Error
+		if _, err := store.GetFile(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+			t.Errorf("GetFile(%q): want CodeInvalid, got %v", id, err)
+		}
+		if _, err := store.ReadFileContent(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+			t.Errorf("ReadFileContent(%q): want CodeInvalid, got %v", id, err)
+		}
+		if err := store.DeleteFile(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+			t.Errorf("DeleteFile(%q): want CodeInvalid, got %v", id, err)
+		}
+		if _, err := store.GetBatch(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+			t.Errorf("GetBatch(%q): want CodeInvalid, got %v", id, err)
+		}
+		if err := store.UpdateBatch(BatchMeta{ID: id}); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+			t.Errorf("UpdateBatch(%q): want CodeInvalid, got %v", id, err)
+		}
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("file outside the store root was touched: %v", err)
 	}
 }
 

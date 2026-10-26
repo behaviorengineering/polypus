@@ -79,6 +79,9 @@ func (s *DiskStore) prepareFileRecordLocked(rec *FileRecord, content []byte) err
 }
 
 func (s *DiskStore) saveFileUnlocked(rec *FileRecord, content []byte) error {
+	if _, err := checkID("batch.SaveFile", rec.ID); err != nil {
+		return err
+	}
 	contentPath := filepath.Join(s.root, fileContentDir, rec.ID)
 	if err := writeFileAtomic(contentPath, content); err != nil {
 		return err
@@ -99,9 +102,9 @@ func (s *DiskStore) GetFile(id string) (FileRecord, error) {
 	if s == nil {
 		return FileRecord{}, derrors.New(derrors.CodeFailedPrecondition, "batch.GetFile", "not configured")
 	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return FileRecord{}, derrors.New(derrors.CodeInvalid, "batch.GetFile", "id required")
+	id, err := checkID("batch.GetFile", id)
+	if err != nil {
+		return FileRecord{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,9 +132,9 @@ func (s *DiskStore) ReadFileContent(id string) ([]byte, error) {
 	if s == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "batch.ReadFileContent", "not configured")
 	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return nil, derrors.New(derrors.CodeInvalid, "batch.ReadFileContent", "id required")
+	id, err := checkID("batch.ReadFileContent", id)
+	if err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,9 +154,9 @@ func (s *DiskStore) DeleteFile(id string) error {
 	if s == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.DeleteFile", "not configured")
 	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return derrors.New(derrors.CodeInvalid, "batch.DeleteFile", "id required")
+	id, err := checkID("batch.DeleteFile", id)
+	if err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -216,8 +219,8 @@ func (s *DiskStore) UpdateBatch(meta BatchMeta) error {
 	if s == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.UpdateBatch", "not configured")
 	}
-	if strings.TrimSpace(meta.ID) == "" {
-		return derrors.New(derrors.CodeInvalid, "batch.UpdateBatch", "id required")
+	if _, err := checkID("batch.UpdateBatch", meta.ID); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -225,6 +228,9 @@ func (s *DiskStore) UpdateBatch(meta BatchMeta) error {
 }
 
 func (s *DiskStore) writeBatchMeta(meta *BatchMeta) error {
+	if _, err := checkID("batch.SaveBatch", meta.ID); err != nil {
+		return err
+	}
 	metaPath := filepath.Join(s.root, batchMetaDir, meta.ID+".json")
 	raw, err := json.Marshal(meta)
 	if err != nil {
@@ -238,9 +244,9 @@ func (s *DiskStore) GetBatch(id string) (BatchMeta, error) {
 	if s == nil {
 		return BatchMeta{}, derrors.New(derrors.CodeFailedPrecondition, "batch.GetBatch", "not configured")
 	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return BatchMeta{}, derrors.New(derrors.CodeInvalid, "batch.GetBatch", "id required")
+	id, err := checkID("batch.GetBatch", id)
+	if err != nil {
+		return BatchMeta{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
