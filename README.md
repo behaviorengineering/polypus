@@ -17,3 +17,7 @@ Manual packaging rebuild:
 ```bash
 gh workflow run packaging-rebuild.yml -f tag=v0.2.40 -f image_revision=1
 ```
+
+## Licence
+
+Apache 2.0, see [LICENSE](LICENSE). The Switchyard image also carries NVIDIA's Switchyard licence and notice under `/usr/share/doc/polypus-switchyard/`.

@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1
-# Runtime image: COPY pre-built linux/amd64 polypus binary from GitHub Release assets (see docker-release.yml).
+# Runtime image: COPY the pre-built polypus binary for TARGETARCH (amd64 or arm64) from
+# GitHub Release assets, unpacked under docker-bin/<arch>/ (see docker-release.yml).
 
 FROM debian:bookworm-slim
 
+ARG TARGETARCH
 ARG APP_VERSION=
 ARG GIT_REVISION=
 ARG BUILD_CREATED=
@@ -19,6 +21,7 @@ LABEL org.opencontainers.image.title="polypus" \
       org.opencontainers.image.revision="${GIT_REVISION}" \
       org.opencontainers.image.created="${BUILD_CREATED}" \
       org.opencontainers.image.vendor="behaviorengineering" \
+      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.base.name="${BASE_IMAGE}" \
       org.opencontainers.image.base.digest="${BASE_DIGEST}" \
       com.behaviorengineering.image.rebuild-revision="${REBUILD_REVISION}"
@@ -27,7 +30,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY docker-bin/polypus /usr/local/bin/polypus
+COPY docker-bin/${TARGETARCH}/polypus /usr/local/bin/polypus
+COPY LICENSE /usr/share/doc/polypus/LICENSE
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY ports.env /etc/polypus/ports.env
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/polypus
