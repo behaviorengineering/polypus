@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/behaviorengineering/olly/pkg/dump"
 	"github.com/behaviorengineering/olly/pkg/olly"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -67,7 +69,7 @@ func Init(cfg Config) (func(context.Context) error, error) {
 
 	shutdown, err := olly.Init(ollyCfg)
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "observability.Init", "olly init")
 	}
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},

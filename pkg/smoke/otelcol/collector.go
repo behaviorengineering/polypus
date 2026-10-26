@@ -228,7 +228,7 @@ func exportCollectorSpan(ctx context.Context, endpoint, spanName string, attrs .
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 	defer func() {
-		_ = tp.Shutdown(context.Background())
+		_ = tp.Shutdown(ctx) // the caller's deadline bounds the final export.
 	}()
 
 	tracer := tp.Tracer("polypus-local-collector-smoke")

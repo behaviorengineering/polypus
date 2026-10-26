@@ -119,7 +119,10 @@ func uploadBatchJSONL(ctx context.Context, baseURL, content string) (string, err
 		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, _ := ioReadAllLimit(resp.Body, 1<<20)
+	raw, err := ioReadAllLimit(resp.Body, 1<<20)
+	if err != nil {
+		return "", fmt.Errorf("files upload: read body: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("files upload status %d: %s", resp.StatusCode, string(raw))
 	}
@@ -149,7 +152,10 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, _ := ioReadAllLimit(resp.Body, 1<<20)
+	raw, err := ioReadAllLimit(resp.Body, 1<<20)
+	if err != nil {
+		return "", fmt.Errorf("batches create: read body: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("batches create status %d: %s", resp.StatusCode, string(raw))
 	}
@@ -219,7 +225,10 @@ func getBatch(ctx context.Context, baseURL, batchID string) (batchMetaSmoke, err
 		return zero, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, _ := ioReadAllLimit(resp.Body, 1<<20)
+	raw, err := ioReadAllLimit(resp.Body, 1<<20)
+	if err != nil {
+		return zero, fmt.Errorf("batches get: read body: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return zero, fmt.Errorf("batches get status %d: %s", resp.StatusCode, string(raw))
 	}

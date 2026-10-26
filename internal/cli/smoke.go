@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/buildinfo"
+	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/smoke"
 	"github.com/spf13/cobra"
 )
@@ -88,6 +89,17 @@ func newSmokeRunCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), smokeRunBudget)
 			defer cancel()
+			// Trace the probes so a failure shows the client side, not only the
+			// gateway's server spans. Export failures never fail the smoke.
+			shutdown, err := observability.Init(observability.LoadConfig())
+			if err != nil {
+				return &exitError{code: 1, msg: "polypus-smoke: tracing: " + err.Error(), err: err}
+			}
+			defer func() {
+				flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer flushCancel()
+				_ = shutdown(flushCtx) //nolint:errcheck // best-effort span flush at exit
+			}()
 			results, runErr := smoke.Run(ctx, opts)
 			enc := json.NewEncoder(cmd.OutOrStdout())
 			for _, r := range results {

@@ -128,7 +128,10 @@ func chatPing(ctx context.Context, opts Options, model string) (content, reasoni
 		return "", "", "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, _ := ioReadAllLimit(resp.Body, 1<<20)
+	raw, err := ioReadAllLimit(resp.Body, 1<<20)
+	if err != nil {
+		return "", "", "", fmt.Errorf("chat: read body: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", "", "", fmt.Errorf("chat status %d: %s", resp.StatusCode, string(raw))
 	}

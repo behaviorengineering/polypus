@@ -31,6 +31,7 @@ const (
 	DepGemini       = "gemini"
 	DepAnthropic    = "anthropic"
 	DepOpenRouter   = "openrouter"
+	DepSmoke        = "smoke"
 	DepGateway      = "gateway"
 )
 

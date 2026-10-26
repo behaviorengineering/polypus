@@ -5,10 +5,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
+
+	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
-var smokeHTTPClient = &http.Client{Timeout: 120 * time.Second}
+// smokeHTTPClient has no Timeout: Run requires a ctx deadline, which bounds every
+// probe. The transport adds a client span per request, carrying traceparent.
+var smokeHTTPClient = &http.Client{Transport: observability.WrapTransport(http.DefaultTransport)}
 
 func httpNewGet(ctx context.Context, url string) (*http.Request, error) {
 	return http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -23,8 +27,10 @@ func httpNewPost(ctx context.Context, url, body string) (*http.Request, error) {
 	return req, nil
 }
 
+// httpDefaultDo sends a probe once through the outbound seam: no retry, so a real
+// 5xx is reported rather than hidden, and no call without a deadline.
 func httpDefaultDo(req *http.Request) (*http.Response, error) {
-	return smokeHTTPClient.Do(req)
+	return outbound.DoOnce(req.Context(), outbound.DepSmoke, smokeHTTPClient, req)
 }
 
 func ioReadAllLimit(r io.Reader, n int64) ([]byte, error) {
