@@ -85,3 +85,18 @@ func TestTruncate(t *testing.T) {
 		t.Fatal("truncate")
 	}
 }
+
+func TestListStrictServesStaleCacheAfterTTLWhenFetchFails(t *testing.T) {
+	now := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	c := NewCacheClock(time.Minute, func() time.Time { return now })
+	c.Put([]Model{{ID: "a"}})
+	now = now.Add(time.Hour) // well past the TTL.
+	fetches := 0
+	list, err := ListStrict(context.Background(), "test", c, func(context.Context) ([]Model, error) {
+		fetches++
+		return nil, errors.New("upstream down")
+	})
+	if err != nil || fetches != 1 || len(list.Data) != 1 || list.Data[0].ID != "a" {
+		t.Fatalf("want the stale list after a failed fetch: list=%+v err=%v fetches=%d", list, err, fetches)
+	}
+}

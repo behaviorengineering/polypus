@@ -90,6 +90,7 @@ func (h batchesHandler) refreshClaudeBatch(ctx context.Context, meta batch.Batch
 }
 
 // buildBatchLineOutput writes OpenAI batch output and error JSONL from translated lines.
+// Every line lands in one of the two files, so completed + failed equals len(results).
 func buildBatchLineOutput(results []router.BatchLineResult) (okJSONL, errJSONL []byte, completed, failed int) {
 	var okLines, errLines []string
 	for _, item := range results {
@@ -102,7 +103,13 @@ func buildBatchLineOutput(results []router.BatchLineResult) (okJSONL, errJSONL [
 		}
 		b, err := json.Marshal(line)
 		if err != nil {
-			continue
+			// An upstream body that is not valid JSON fails here; record the line as
+			// failed (an error line of plain strings always encodes) so no line is lost.
+			line.Response = nil
+			line.Error = &batchLineError{Code: "output_encode_failed", Message: err.Error()}
+			if b, err = json.Marshal(line); err != nil {
+				b = []byte(`{"error":{"code":"output_encode_failed","message":"line could not be encoded"}}`)
+			}
 		}
 		if line.Response != nil {
 			okLines = append(okLines, string(b))

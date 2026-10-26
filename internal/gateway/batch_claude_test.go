@@ -195,3 +195,18 @@ func TestBuildBatchLineOutputCounts(t *testing.T) {
 		t.Fatalf("completed=%d failed=%d ok=%q errs=%q", completed, failed, ok, errs)
 	}
 }
+
+func TestBatchLineOutputKeepsLinesThatFailToEncode(t *testing.T) {
+	ok, errs, completed, failed := buildBatchLineOutput([]router.BatchLineResult{
+		{CustomID: "good", Body: []byte(`{"object":"chat.completion"}`)},
+		{CustomID: "bad", Body: []byte(`{not json`)},
+		{CustomID: "err", ErrCode: "errored", ErrMessage: "boom"},
+	})
+	if completed != 1 || failed != 2 {
+		t.Fatalf("completed=%d failed=%d, want 1 and 2", completed, failed)
+	}
+	if !strings.Contains(string(ok), `"custom_id":"good"`) ||
+		!strings.Contains(string(errs), `"custom_id":"bad"`) || !strings.Contains(string(errs), "output_encode_failed") {
+		t.Fatalf("ok=%s errs=%s", ok, errs)
+	}
+}

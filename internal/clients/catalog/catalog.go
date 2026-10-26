@@ -37,11 +37,20 @@ type Cache struct {
 	models []Model
 	at     time.Time
 	ttl    time.Duration
+	now    func() time.Time
 }
 
 // NewCache returns an empty cache that serves entries younger than ttl.
 func NewCache(ttl time.Duration) *Cache {
-	return &Cache{ttl: ttl}
+	return NewCacheClock(ttl, time.Now)
+}
+
+// NewCacheClock is NewCache with an injected clock (tests step past the TTL).
+func NewCacheClock(ttl time.Duration, now func() time.Time) *Cache {
+	if now == nil {
+		panic("catalog.NewCacheClock: nil clock")
+	}
+	return &Cache{ttl: ttl, now: now}
 }
 
 // Get returns a copy of the cached models when they are present and fresh.
@@ -51,7 +60,20 @@ func (c *Cache) Get() ([]Model, bool) {
 	if len(c.models) == 0 {
 		return nil, false
 	}
-	if time.Since(c.at) > c.ttl {
+	if c.now().Sub(c.at) > c.ttl {
+		return nil, false
+	}
+	out := make([]Model, len(c.models))
+	copy(out, c.models)
+	return out, true
+}
+
+// GetStale returns a copy of the cached models whatever their age: the fallback
+// when a fetch fails.
+func (c *Cache) GetStale() ([]Model, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.models) == 0 {
 		return nil, false
 	}
 	out := make([]Model, len(c.models))
@@ -64,7 +86,7 @@ func (c *Cache) Put(models []Model) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.models = append([]Model(nil), models...)
-	c.at = time.Now()
+	c.at = c.now()
 }
 
 // ListStrict serves a fresh cache hit, else fetches and caches. When the fetch fails it
@@ -75,7 +97,7 @@ func ListStrict(ctx context.Context, provider string, cache *Cache, fetch func(c
 	}
 	models, err := fetch(ctx)
 	if err != nil {
-		if cached, ok := cache.Get(); ok {
+		if cached, ok := cache.GetStale(); ok {
 			slog.Warn(provider+": models catalog fetch failed; using stale cache",
 				"err", err,
 				"cached_models", len(cached),

@@ -160,13 +160,19 @@ func (s *DiskStore) DeleteFile(id string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, err := s.readFileMeta(id); err != nil {
+		return err
+	}
 	if inUse, err := s.fileReferencedByBatchLocked(id); err != nil {
 		return err
 	} else if inUse {
 		return derrors.New(derrors.CodeConflict, "batch.DeleteFile", "file referenced by a batch")
 	}
-	_ = os.Remove(filepath.Join(s.root, fileMetaDir, id+".json"))
-	_ = os.Remove(filepath.Join(s.root, fileContentDir, id))
+	for _, path := range []string{filepath.Join(s.root, fileMetaDir, id+".json"), filepath.Join(s.root, fileContentDir, id)} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return derrors.Wrap(err, derrors.CodeInternal, "batch.DeleteFile", "remove").With("file_id", id)
+		}
+	}
 	return nil
 }
 
@@ -186,7 +192,9 @@ func (s *DiskStore) fileReferencedByBatchLocked(fileID string) (bool, error) {
 		bid := e.Name()[:len(e.Name())-len(".json")]
 		meta, err := s.readBatchMetaUnlocked(bid)
 		if err != nil {
-			continue
+			// Fail closed: an unreadable batch may reference this file.
+			return false, derrors.Wrap(err, derrors.CodeInternal, "batch.fileReferencedByBatchLocked", "read batch meta").
+				With("batch_id", bid)
 		}
 		if meta.InputFileID == fileID || meta.OutputFileID == fileID || meta.ErrorFileID == fileID {
 			return true, nil
@@ -285,7 +293,8 @@ func (s *DiskStore) ListBatches() ([]BatchMeta, error) {
 		id := e.Name()[:len(e.Name())-len(".json")]
 		meta, err := s.readBatchMetaUnlocked(id)
 		if err != nil {
-			continue
+			return nil, derrors.Wrap(err, derrors.CodeInternal, "batch.ListBatches", "read batch meta").
+				With("batch_id", id)
 		}
 		out = append(out, meta)
 	}

@@ -12,9 +12,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
@@ -32,18 +32,10 @@ const (
 var accountIDRE = regexp.MustCompile(`/accounts/([^/]+)/`)
 
 // Model is the OpenAI Models API object.
-type Model struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
-}
+type Model = catalog.Model
 
 // ModelList is the OpenAI list response for GET /v1/models.
-type ModelList struct {
-	Object string  `json:"object"`
-	Data   []Model `json:"data"`
-}
+type ModelList = catalog.ModelList
 
 // Client implements Cloudflare Workers AI extension hooks for Polypus.
 type Client struct {
@@ -52,10 +44,7 @@ type Client struct {
 	httpClient   *http.Client // catalog / ping (short timeout)
 	speechClient *http.Client // /run TTS/STT (shared transport; timeout via ctx)
 
-	mu       sync.Mutex
-	cache    []Model
-	cacheAt  time.Time
-	cacheTTL time.Duration
+	cache *catalog.Cache
 }
 
 // NewClient builds an uncached Cloudflare extension client from a remote backend
@@ -93,7 +82,7 @@ func newClient(apiBase, token string) (*Client, error) {
 			Timeout:   0,
 			Transport: transport,
 		},
-		cacheTTL: modelsCacheTTL,
+		cache: catalog.NewCache(modelsCacheTTL),
 	}, nil
 }
 
@@ -119,22 +108,7 @@ func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
 		return ModelList{}, fmt.Errorf("cloudflare: not configured")
 	}
-	if cached, ok := c.cached(); ok {
-		return ModelList{Object: "list", Data: cached}, nil
-	}
-	models, err := c.fetchAll(ctx)
-	if err != nil {
-		if cached, ok := c.cached(); ok {
-			slog.Warn("cloudflare: models catalog fetch failed; using stale cache",
-				"err", err,
-				"cached_models", len(cached),
-			)
-			return ModelList{Object: "list", Data: cached}, nil
-		}
-		return ModelList{Object: "list"}, err
-	}
-	c.storeCache(models)
-	return ModelList{Object: "list", Data: models}, nil
+	return catalog.ListStrict(ctx, "cloudflare", c.cache, c.fetchAll)
 }
 
 // ListModels returns OpenAI-shaped models (ids are bare @cf/... for Polypus to prefix).
@@ -298,26 +272,4 @@ func normalizeWorkersAIModelName(name string) string {
 		return "@cf/" + strings.TrimPrefix(name, "cf/")
 	}
 	return name
-}
-
-func (c *Client) cached() ([]Model, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.cache) == 0 || c.cacheAt.IsZero() {
-		return nil, false
-	}
-	if time.Since(c.cacheAt) > c.cacheTTL {
-		return nil, false
-	}
-	out := make([]Model, len(c.cache))
-	copy(out, c.cache)
-	return out, true
-}
-
-func (c *Client) storeCache(models []Model) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cache = make([]Model, len(models))
-	copy(c.cache, models)
-	c.cacheAt = time.Now()
 }

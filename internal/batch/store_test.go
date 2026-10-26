@@ -111,3 +111,38 @@ func TestParseBatchJSONLSingleModel(t *testing.T) {
 		t.Fatalf("parsed: %+v", parsed)
 	}
 }
+
+func TestDeleteFileFailsClosedOnUnreadableBatch(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewDiskStore(root, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &FileRecord{Filename: "in.jsonl", Purpose: FilePurposeBatch}
+	if err := store.SaveFile(rec, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, batchMetaDir, "batch_corrupt.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteFile(rec.ID); err == nil {
+		t.Fatal("an unreadable batch may reference the file; delete must refuse")
+	}
+	if _, err := store.GetFile(rec.ID); err != nil {
+		t.Fatalf("file must still exist: %v", err)
+	}
+	if _, err := store.ListBatches(); err == nil {
+		t.Fatal("ListBatches must surface the corrupt batch")
+	}
+}
+
+func TestDeleteFileMissingIsNotFound(t *testing.T) {
+	store, err := NewDiskStore(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var de *derrors.Error
+	if err := store.DeleteFile("file_missing"); !errors.As(err, &de) || de.Code() != derrors.CodeNotFound {
+		t.Fatalf("want CodeNotFound, got %v", err)
+	}
+}

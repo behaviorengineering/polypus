@@ -307,16 +307,8 @@ func (h batchesHandler) refreshBatchFromCloudflare(ctx context.Context, backend 
 
 func (h batchesHandler) finalizeBatch(meta batch.BatchMeta, poll cloudflare.BatchPollResult) (batch.BatchMeta, error) {
 	createdUnix := h.batchNowTime().Unix()
-	okJSONL, errJSONL := buildBatchOutputLines(meta.Endpoint, meta.PublicModel, createdUnix, poll.Responses)
-	completed := 0
-	failed := 0
-	for _, item := range poll.Responses {
-		if item.Success {
-			completed++
-		} else {
-			failed++
-		}
-	}
+	okJSONL, errJSONL, completed, failed := buildBatchLineOutput(
+		cloudflareBatchLines(meta.Endpoint, meta.PublicModel, createdUnix, poll.Responses))
 	return h.finalizeBatchOutput(meta, okJSONL, errJSONL, completed, failed)
 }
 

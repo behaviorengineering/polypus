@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
+
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 )
@@ -25,62 +27,28 @@ type batchLineError struct {
 	Message string `json:"message"`
 }
 
-func buildBatchOutputLines(endpoint, publicModel string, createdUnix int64, items []cloudflare.BatchResponseItem) (successJSONL, errorJSONL []byte) {
-	var okLines, errLines []string
+// cloudflareBatchLines turns Workers AI batch items into batch lines, synthesising the
+// OpenAI response body for each success. buildBatchLineOutput writes the JSONL.
+func cloudflareBatchLines(endpoint, publicModel string, createdUnix int64, items []cloudflare.BatchResponseItem) []router.BatchLineResult {
+	out := make([]router.BatchLineResult, 0, len(items))
 	for _, item := range items {
-		customID := strings.TrimSpace(item.ExternalReference)
-		lineID := "batch_req_" + customID
+		line := router.BatchLineResult{CustomID: item.ExternalReference}
 		if !item.Success {
-			errObj := batchOutputLine{
-				ID:       lineID,
-				CustomID: customID,
-				Error: &batchLineError{
-					Code:    "batch_failed",
-					Message: strings.TrimSpace(item.ErrorMessage),
-				},
-			}
-			if errObj.Error.Message == "" {
-				errObj.Error.Message = "workers ai batch line failed"
-			}
-			if b, err := json.Marshal(errObj); err == nil {
-				errLines = append(errLines, string(b))
-			}
+			line.ErrCode = "batch_failed"
+			line.ErrMessage = firstNonEmpty(strings.TrimSpace(item.ErrorMessage), "workers ai batch line failed")
+			out = append(out, line)
 			continue
 		}
 		body, err := synthesizeOpenAIBody(endpoint, publicModel, createdUnix, item.Result)
 		if err != nil {
-			errObj := batchOutputLine{
-				ID:       lineID,
-				CustomID: customID,
-				Error: &batchLineError{
-					Code:    "synthesis_failed",
-					Message: err.Error(),
-				},
-			}
-			if b, err := json.Marshal(errObj); err == nil {
-				errLines = append(errLines, string(b))
-			}
-			continue
+			line.ErrCode = "synthesis_failed"
+			line.ErrMessage = err.Error()
+		} else {
+			line.Body = body
 		}
-		okObj := batchOutputLine{
-			ID:       lineID,
-			CustomID: customID,
-			Response: &batchLineResp{
-				StatusCode: 200,
-				Body:       body,
-			},
-		}
-		if b, err := json.Marshal(okObj); err == nil {
-			okLines = append(okLines, string(b))
-		}
+		out = append(out, line)
 	}
-	if len(okLines) > 0 {
-		successJSONL = []byte(strings.Join(okLines, "\n") + "\n")
-	}
-	if len(errLines) > 0 {
-		errorJSONL = []byte(strings.Join(errLines, "\n") + "\n")
-	}
-	return successJSONL, errorJSONL
+	return out
 }
 
 func synthesizeOpenAIBody(endpoint, publicModel string, created int64, result json.RawMessage) (json.RawMessage, error) {
