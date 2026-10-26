@@ -23,6 +23,9 @@ const (
 	modelsInventoryCacheTTL = time.Hour
 )
 
+// openaiModelObject is the OpenAI Models API object type for one model.
+const openaiModelObject = "model"
+
 // openaiModel is the OpenAI Models API object (list + retrieve).
 type openaiModel struct {
 	ID      string `json:"id"`
@@ -300,6 +303,24 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 			return mergeEnabledSyntheticMissing(b, nil)
 		}
 		if live := h.geminiInventory(r, b); len(live) > 0 {
+			live = mergeEnabledSyntheticMissing(b, live)
+			if h.invCache != nil {
+				h.invCache.put(b.ID, live)
+			}
+			return live
+		}
+		if h.invCache != nil {
+			if cached, ok := h.invCache.get(b.ID); ok {
+				return cached
+			}
+		}
+		return mergeEnabledSyntheticMissing(b, nil)
+	}
+	if b.IsAnthropicExtension() {
+		if modelsCfg != nil && !modelsCfg.ShouldSync() {
+			return mergeEnabledSyntheticMissing(b, nil)
+		}
+		if live := h.anthropicInventory(r, b); len(live) > 0 {
 			live = mergeEnabledSyntheticMissing(b, live)
 			if h.invCache != nil {
 				h.invCache.put(b.ID, live)

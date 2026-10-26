@@ -27,6 +27,7 @@ const (
 	DepDockerDaemon = "docker-daemon"
 	DepCloudflare   = "cloudflare"
 	DepGemini       = "gemini"
+	DepAnthropic    = "anthropic"
 	DepGateway      = "gateway"
 )
 
@@ -98,7 +99,7 @@ var (
 
 func breakerFor(name string) failsafe.Policy[any] {
 	switch name {
-	case DepGitHub, DepGHCR, DepRegistry, DepCloudflare, DepGemini:
+	case DepGitHub, DepGHCR, DepRegistry, DepCloudflare, DepGemini, DepAnthropic:
 	default:
 		return nil
 	}
@@ -153,6 +154,9 @@ func retryableErr(name string, err error) bool {
 	case DepGemini:
 		return strings.Contains(msg, "gemini models: status 429") ||
 			strings.Contains(msg, "gemini models: status 5")
+	case DepAnthropic:
+		return strings.Contains(msg, "anthropic models: status 429") ||
+			strings.Contains(msg, "anthropic models: status 5")
 	default:
 		return false
 	}

@@ -1,6 +1,7 @@
 package router
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -152,7 +153,7 @@ func (c *Client) bifrostUseRawChatBody(backendID string) bool {
 	if !ok {
 		return true
 	}
-	return !b.IsGeminiExtension()
+	return !b.IsGeminiExtension() && !b.IsAnthropicExtension()
 }
 
 func bifrostChatRequest(backendID, model string, messages []schemas.ChatMessage, body []byte, useRaw bool) (*schemas.BifrostChatRequest, error) {
@@ -171,6 +172,34 @@ func bifrostChatRequest(backendID, model string, messages []schemas.ChatMessage,
 	}
 	req.Params = params
 	return req, nil
+}
+
+// applyAutoPromptCache adds a top-level ephemeral cache_control (the 5-minute lifetime)
+// when the backend turns automatic caching on and the client sent no cache_control.
+func (c *Client) applyAutoPromptCache(backendID string, body []byte, req *schemas.BifrostChatRequest) {
+	if c == nil || c.reg == nil {
+		return
+	}
+	b, ok := c.reg.Backend(backendID)
+	if !ok {
+		return
+	}
+	withAutoPromptCache(b, body, req)
+}
+
+func withAutoPromptCache(b config.BackendDef, body []byte, req *schemas.BifrostChatRequest) {
+	if req == nil || req.RawRequestBody != nil || !b.AutoPromptCache() {
+		return
+	}
+	// A quoted key cannot appear unescaped inside a JSON string value, so this
+	// matches only a real cache_control field, at any depth (tools, system, messages).
+	if bytes.Contains(body, []byte(`"cache_control"`)) {
+		return
+	}
+	if req.Params == nil {
+		req.Params = &schemas.ChatParameters{}
+	}
+	req.Params.CacheControl = &schemas.CacheControl{Type: schemas.CacheControlTypeEphemeral}
 }
 
 // chatParamsFromOpenAIBody reads every chat parameter Bifrost models (tools,
@@ -219,6 +248,7 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string,
 	if err != nil {
 		return nil, err
 	}
+	c.applyAutoPromptCache(backendID, body, chatReq)
 	resp, berr := c.bf.ChatCompletionRequest(bctx, chatReq)
 	if berr != nil {
 		return nil, bifrostErr(berr, bifrostProviderHeader(bctx))
@@ -260,6 +290,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 	if err != nil {
 		return nil, nil, err
 	}
+	c.applyAutoPromptCache(backendID, body, chatReq)
 	stream, berr := c.bf.ChatCompletionStreamRequest(bctx, chatReq)
 	if berr != nil {
 		return nil, nil, bifrostErr(berr, bifrostProviderHeader(bctx))

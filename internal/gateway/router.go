@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/clients/gemini"
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -56,6 +57,9 @@ type CloudflareClientGet func(config.BackendDef) (*cloudflare.Client, error)
 // GeminiClientGet constructs Gemini catalog clients (defaults to gemini.GetClient).
 type GeminiClientGet func(config.BackendDef) (*gemini.Client, error)
 
+// AnthropicClientGet constructs Anthropic catalog clients (defaults to anthropic.GetClient).
+type AnthropicClientGet func(config.BackendDef) (*anthropic.Client, error)
+
 // HandlerOption configures NewHandler.
 type HandlerOption func(*handlerOptions)
 
@@ -63,6 +67,7 @@ type handlerOptions struct {
 	router        Router
 	cfGet         CloudflareClientGet
 	geminiGet     GeminiClientGet
+	anthropicGet  AnthropicClientGet
 	overlayPath   string
 	adminKeysPath string
 	clock         func() time.Time
@@ -90,6 +95,13 @@ func WithCloudflareClientGet(fn CloudflareClientGet) HandlerOption {
 func WithGeminiClientGet(fn GeminiClientGet) HandlerOption {
 	return func(o *handlerOptions) {
 		o.geminiGet = fn
+	}
+}
+
+// WithAnthropicClientGet injects Anthropic catalog client construction for inventory.
+func WithAnthropicClientGet(fn AnthropicClientGet) HandlerOption {
+	return func(o *handlerOptions) {
+		o.anthropicGet = fn
 	}
 }
 

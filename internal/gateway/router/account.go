@@ -91,6 +91,10 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 			baseURL = strings.TrimRight(strings.TrimSpace(b.BaseURL), "/")
 		}
 	}
+	if b.IsAnthropicExtension() {
+		baseType = schemas.Anthropic
+		baseURL = anthropicBaseURL(b.BaseURL)
+	}
 	return &schemas.ProviderConfig{
 		NetworkConfig: schemas.NetworkConfig{
 			BaseURL:                        baseURL,
@@ -108,6 +112,13 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 			AllowedRequests:  allowedRequestsForBackend(b),
 		},
 	}, nil
+}
+
+// anthropicBaseURL returns the origin Bifrost's Anthropic provider expects (it appends
+// /v1/messages). Empty keeps Bifrost's default, https://api.anthropic.com.
+func anthropicBaseURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	return strings.TrimSuffix(base, "/v1")
 }
 
 func openRouterProviderConfig(b config.BackendDef, timeouts config.Timeouts) *schemas.ProviderConfig {

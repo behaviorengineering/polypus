@@ -85,6 +85,22 @@ backends:
 #       - gemma-4-26b-a4b-it
 #       - gemma-4-31b-it
 
+# Optional Claude (native Messages API via extension anthropic; Bifrost translates OpenAI chat).
+# Omit base_url (defaults to https://api.anthropic.com). Uses a Claude Console API key.
+# prompt_cache defaults to true: Polypus adds a top-level 5-minute cache_control when a
+# request carries none. Set prompt_cache: false to turn that off.
+# claude_team:
+#   remote: true
+#   extension: anthropic
+#   auth:
+#     bearer_env: ANTHROPIC_API_KEY
+#   capabilities: [chat, vision]
+#   models:
+#     sync: true
+#     allow:
+#       - claude-sonnet-5-5
+#       - claude-haiku-5-5
+
 # Optional OpenRouter (OpenAI-compat remote; optional extra_headers for attribution):
 # openrouter:
 #   remote: true
