@@ -81,7 +81,7 @@ func relabelModel(body json.RawMessage, publicModel string) json.RawMessage {
 	if err != nil {
 		return body
 	}
-	obj["model"] = model
+	obj[keyModel] = model
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return body

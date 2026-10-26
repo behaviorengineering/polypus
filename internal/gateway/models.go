@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
@@ -177,15 +178,11 @@ func (h modelsHandler) serveModelsListForSurface(surface ModelSurface, w http.Re
 }
 
 func writeAPINotConfigured(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotFound)
-	encodeJSON(w, map[string]any{
-		"error": map[string]any{
-			"message": "SystemOne API is not configured on this gateway",
-			"type":    "invalid_request_error",
-			"code":    "api_not_configured",
-		},
-	})
+	writeOpenAIJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
+		Message: "SystemOne API is not configured on this gateway",
+		Type:    errTypeInvalidRequest,
+		Code:    "api_not_configured",
+	}})
 }
 
 func (h modelsHandler) serveModelRetrieve(w http.ResponseWriter, r *http.Request) {
@@ -223,16 +220,12 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface ModelSurface, pathPr
 		encodeJSON(w, m)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotFound)
-	encodeJSON(w, map[string]any{
-		"error": map[string]any{
-			"message": fmt.Sprintf("The model `%s` does not exist", id),
-			"type":    "invalid_request_error",
-			"param":   "model",
-			"code":    "model_not_found",
-		},
-	})
+	writeOpenAIJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
+		Message: fmt.Sprintf("The model `%s` does not exist", id),
+		Type:    errTypeInvalidRequest,
+		Param:   keyModel,
+		Code:    "model_not_found",
+	}})
 }
 
 // collectModelsForRetrieve loads catalog data for a single model id when not in inventory view.
@@ -359,7 +352,7 @@ func syntheticModels(backendID string, allow []string) []openaiModel {
 	for _, id := range ids {
 		out = append(out, openaiModel{
 			ID:      id,
-			Object:  "model",
+			Object:  keyModel,
 			Created: 0,
 			OwnedBy: backendID,
 		})
@@ -384,7 +377,7 @@ func (h modelsHandler) cloudflareInventory(r *http.Request, b config.BackendDef)
 		for _, m := range list.Data {
 			out = append(out, openaiModel{
 				ID:      prefixModelID(b.ID, m.ID),
-				Object:  "model",
+				Object:  keyModel,
 				Created: m.Created,
 				OwnedBy: firstNonEmpty(m.OwnedBy, b.ID),
 			})
@@ -444,66 +437,46 @@ func openRouterModelsListURL(base string, modality string) string {
 }
 
 func fetchBackendModelsAtURL(r *http.Request, b config.BackendDef, target string) ([]openaiModel, error) {
+	const op = "gateway.fetchBackendModels"
 	ctx := r.Context()
 	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, modelsListTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInternal, op, "request").With("backend", b.ID)
 	}
 	req.Header.Set("Accept", "application/json")
-	if auth, err := bearerAuthHeader(b); err == nil && auth != "" {
+	// A remote backend gets its own credential or nothing: the caller's
+	// Authorization header never leaves for a third-party provider.
+	auth, err := bearerAuthHeader(b)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeNotReady, op, "backend auth").With("backend", b.ID)
+	}
+	if auth != "" {
 		req.Header.Set("Authorization", auth)
-	} else if auth := r.Header.Get("Authorization"); auth != "" {
-		req.Header.Set("Authorization", auth)
+	} else if a := r.Header.Get("Authorization"); a != "" && !b.Remote {
+		req.Header.Set("Authorization", a)
 	}
 	client := &http.Client{Timeout: modelsListTimeout}
 	resp, err := outbound.Do(ctx, outbound.DepGateway, client, req)
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, op, "get").With("backend", b.ID)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("models list status %d", resp.StatusCode)
+		return nil, derrors.New(derrors.CodeUnavailable, op, fmt.Sprintf("models list status %d", resp.StatusCode)).
+			With("backend", b.ID)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, op, "read body").With("backend", b.ID)
 	}
 	return rewriteBackendModelList(raw, b.ID), nil
 }
 
 func fetchBackendModelsErr(r *http.Request, b config.BackendDef) ([]openaiModel, error) {
-	target := openAIModelsListURL(b.BaseURL)
-	ctx := r.Context()
-	ctx, cancel := outbound.WithDeadlineIfMissing(ctx, modelsListTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	if auth, err := bearerAuthHeader(b); err == nil && auth != "" {
-		req.Header.Set("Authorization", auth)
-	} else if auth := r.Header.Get("Authorization"); auth != "" {
-		req.Header.Set("Authorization", auth)
-	}
-	client := &http.Client{Timeout: modelsListTimeout}
-	resp, err := outbound.Do(ctx, outbound.DepGateway, client, req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("models list status %d", resp.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
-	if err != nil {
-		return nil, err
-	}
-	return rewriteBackendModelList(raw, b.ID), nil
+	return fetchBackendModelsAtURL(r, b, openAIModelsListURL(b.BaseURL))
 }
 
 func rewriteBackendModelList(raw []byte, backendID string) []openaiModel {
@@ -517,7 +490,7 @@ func rewriteBackendModelList(raw []byte, backendID string) []openaiModel {
 			}
 			out = append(out, openaiModel{
 				ID:      prefixModelID(backendID, id),
-				Object:  "model",
+				Object:  keyModel,
 				Created: m.Created,
 				OwnedBy: firstNonEmpty(m.OwnedBy, backendID),
 			})
@@ -534,7 +507,7 @@ func rewriteBackendModelList(raw []byte, backendID string) []openaiModel {
 			}
 			out = append(out, openaiModel{
 				ID:      prefixModelID(backendID, id),
-				Object:  "model",
+				Object:  keyModel,
 				Created: m.Created,
 				OwnedBy: firstNonEmpty(m.OwnedBy, backendID),
 			})
@@ -662,7 +635,7 @@ func seedModelsFromEnv(cfg config.RouterConfig) []openaiModel {
 		seen[id] = struct{}{}
 		out = append(out, openaiModel{
 			ID:      id,
-			Object:  "model",
+			Object:  keyModel,
 			Created: 0,
 			OwnedBy: backendID,
 		})
@@ -671,7 +644,7 @@ func seedModelsFromEnv(cfg config.RouterConfig) []openaiModel {
 				seen[modelID] = struct{}{}
 				out = append(out, openaiModel{
 					ID:      modelID,
-					Object:  "model",
+					Object:  keyModel,
 					Created: 0,
 					OwnedBy: backendID,
 				})
@@ -713,16 +686,12 @@ func firstNonEmpty(vals ...string) string {
 }
 
 func writeModelNotAllowed(w http.ResponseWriter, model string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusBadRequest)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{
-			"message": fmt.Sprintf("The model `%s` is not enabled on this gateway (models.allow)", model),
-			"type":    "invalid_request_error",
-			"param":   "model",
-			"code":    "model_not_allowed",
-		},
-	})
+	writeOpenAIJSON(w, http.StatusBadRequest, openaiErrorBody{Error: openaiError{
+		Message: fmt.Sprintf("The model `%s` is not enabled on this gateway (models.allow)", model),
+		Type:    errTypeInvalidRequest,
+		Param:   keyModel,
+		Code:    "model_not_allowed",
+	}})
 }
 
 func (s *shared) ensureModelAllowed(backendID, model string) bool {

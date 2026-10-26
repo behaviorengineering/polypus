@@ -223,6 +223,35 @@ func CodeOf(err error) Code {
 	return CodeInternal
 }
 
+// PublicMessage is the error text safe to return to an HTTP client: the domain
+// messages along the chain, without op names. Foreign causes (dial errors, URLs,
+// parser output) are kept only for caller errors (4xx), where they describe the
+// request; for 5xx they stay in the server log.
+func PublicMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	callerError := HTTPStatus(err) < http.StatusInternalServerError
+	var parts []string
+	for e := err; e != nil; {
+		var de *Error
+		if !stderrors.As(e, &de) || de == nil {
+			if callerError {
+				parts = append(parts, strings.TrimSpace(e.Error()))
+			}
+			break
+		}
+		if m := strings.TrimSpace(de.message); m != "" {
+			parts = append(parts, m)
+		}
+		e = de.cause
+	}
+	if len(parts) == 0 {
+		return http.StatusText(HTTPStatus(err))
+	}
+	return strings.Join(parts, ": ")
+}
+
 // HTTPStatus maps a domain code to an HTTP status for gateway handlers.
 func HTTPStatus(err error) int {
 	if err == nil {

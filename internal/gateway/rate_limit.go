@@ -14,9 +14,18 @@ type openaiErrorBody struct {
 	Polypus *polypusFailureBody `json:"polypus,omitempty"`
 }
 
+// OpenAI error types clients switch on.
+const (
+	errTypeInvalidRequest = "invalid_request_error"
+	errTypeAuthentication = "authentication_error"
+	errTypeNotFound       = "not_found_error"
+	errTypeAPI            = "api_error"
+)
+
 type openaiError struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
+	Param   string `json:"param,omitempty"`
 	Code    string `json:"code"`
 }
 

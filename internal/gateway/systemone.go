@@ -11,6 +11,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/maximhq/bifrost/core/schemas"
 )
@@ -175,8 +176,11 @@ func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *ht
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		w.Header().Set("Content-Type", firstNonEmpty(resp.Header.Get("Content-Type"), "application/json"))
 		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(raw)
-		return nil
+		if _, err := w.Write(raw); err != nil {
+			return afterHeaders(r.Context(), err, true, "gateway.proxySystemOnePassthrough", "write upstream error")
+		}
+		// A 5xx counts against the breaker like the chat and embeddings proxies.
+		return upstream.StatusFailure(resp.StatusCode)
 	}
 	publicID := prefixModelID(backend.ID, downstream)
 	raw, err = rewriteSystemOneResponseModel(raw, publicID)
@@ -231,7 +235,7 @@ func rewriteSystemOneModel(body []byte, model string) ([]byte, error) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteSystemOneModel", "invalid json")
 	}
-	payload["model"] = model
+	payload[keyModel] = model
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteSystemOneModel", "marshal")
@@ -248,7 +252,7 @@ func rewriteSystemOneResponseModel(body []byte, publicModel string) ([]byte, err
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, nil
 	}
-	payload["model"] = publicModel
+	payload[keyModel] = publicModel
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteSystemOneResponseModel", "marshal")

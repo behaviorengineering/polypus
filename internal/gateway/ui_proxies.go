@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/behaviorengineering/polypus/internal/config"
 )
 
@@ -65,7 +67,8 @@ func newUIReverseProxy(prefix string, target *url.URL, stripPrefix bool) http.Ha
 			}
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			http.Error(w, fmt.Sprintf("polypus ui proxy unavailable: %v", err), http.StatusBadGateway)
+			writeErrorJSON(w, http.StatusBadGateway,
+				derrors.Wrap(err, derrors.CodeUnavailable, "gateway.uiProxy", "polypus ui proxy unavailable"), "")
 		},
 	}
 }

@@ -35,7 +35,7 @@ func rewriteEmbedModel(body []byte, model string) ([]byte, error) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteEmbedModel", "invalid json")
 	}
-	payload["model"] = model
+	payload[keyModel] = model
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteEmbedModel", "marshal")

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -45,7 +46,8 @@ func (h healthHandler) serveFailureDump(w http.ResponseWriter, r *http.Request) 
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Warn("polypus: read failure dump", "err", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -69,7 +69,7 @@ func rewriteChatModel(body []byte, model string) ([]byte, error) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteChatModel", "invalid json")
 	}
-	payload["model"] = model
+	payload[keyModel] = model
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteChatModel", "marshal")
@@ -295,7 +295,7 @@ func applyChatThinking(body []byte, extension string, model string) ([]byte, boo
 	wants := chatMapWantsThinking(root)
 	model = strings.ToLower(strings.TrimSpace(model))
 	if model == "" {
-		model = strings.ToLower(strings.TrimSpace(fmt.Sprint(root["model"])))
+		model = strings.ToLower(strings.TrimSpace(fmt.Sprint(root[keyModel])))
 	}
 	ext := strings.ToLower(strings.TrimSpace(extension))
 	var changed bool

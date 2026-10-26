@@ -107,10 +107,10 @@ func synthesizeChatBody(publicModel string, created int64, result json.RawMessag
 			"id":      "chatcmpl-batch",
 			"object":  "chat.completion",
 			"created": created,
-			"model":   publicModel,
+			keyModel:  publicModel,
 		}
 		_ = json.Unmarshal(result, &wrap)
-		wrap["model"] = publicModel
+		wrap[keyModel] = publicModel
 		wrap["created"] = created
 		return json.Marshal(wrap)
 	}
@@ -125,7 +125,7 @@ func synthesizeChatBody(publicModel string, created int64, result json.RawMessag
 		"id":      "chatcmpl-batch",
 		"object":  "chat.completion",
 		"created": created,
-		"model":   publicModel,
+		keyModel:  publicModel,
 		"choices": []map[string]interface{}{
 			{
 				"index": 0,
@@ -153,7 +153,7 @@ func synthesizeEmbedBody(publicModel string, created int64, result json.RawMessa
 	if raw, ok := probe["data"]; ok && len(raw) > 0 {
 		wrap := map[string]interface{}{
 			"object": "list",
-			"model":  publicModel,
+			keyModel: publicModel,
 			"data":   json.RawMessage(raw),
 		}
 		return json.Marshal(wrap)
@@ -168,7 +168,7 @@ func synthesizeEmbedBody(publicModel string, created int64, result json.RawMessa
 		if len(vec.Data) > 0 {
 			wrap := map[string]interface{}{
 				"object": "list",
-				"model":  publicModel,
+				keyModel: publicModel,
 				"data":   vec.Data,
 			}
 			return json.Marshal(wrap)
@@ -176,7 +176,7 @@ func synthesizeEmbedBody(publicModel string, created int64, result json.RawMessa
 	}
 	body := map[string]interface{}{
 		"object": "list",
-		"model":  publicModel,
+		keyModel: publicModel,
 		"data": []map[string]interface{}{
 			{
 				"object":    "embedding",

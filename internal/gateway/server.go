@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -222,7 +223,8 @@ func newFallbackProxy(backendURL string) (http.Handler, error) {
 			pr.Out.Host = target.Host
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			http.Error(w, fmt.Sprintf("polypus backend unavailable: %v", err), http.StatusBadGateway)
+			writeErrorJSON(w, http.StatusBadGateway,
+				derrors.Wrap(err, derrors.CodeUnavailable, "gateway.backendProxy", "polypus backend unavailable"), "")
 		},
 	}
 	return proxy, nil
@@ -382,7 +384,7 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 	nr, ok := lookupRouter(cfg, routerName)
 	if !ok {
 		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unknown router").
-			With("model", model).
+			With(keyModel, model).
 			With("router", routerName))
 		return
 	}
@@ -398,7 +400,7 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 		h.serveSwitchyardRouterChat(w, r, body, model, routerName, cfg.EffectiveSwitchyardBaseURL())
 	default:
 		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unsupported route type").
-			With("model", model).
+			With(keyModel, model).
 			With("router", routerName))
 	}
 }
@@ -509,12 +511,39 @@ func writeHandlerError(w http.ResponseWriter, err error) {
 		writeUnavailableError(w, err, err.Error(), upstream.ResolveUpstreamName(err, ""))
 		return
 	}
+	status := derrors.HTTPStatus(err)
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
-		return
+		status = http.StatusRequestEntityTooLarge
 	}
-	http.Error(w, err.Error(), derrors.HTTPStatus(err))
+	writeErrorJSON(w, status, err, "")
+}
+
+// writeErrorJSON answers with an OpenAI-shaped error body. The client sees the
+// public message; the full chain (ops, upstream URLs, causes) goes to the log.
+func writeErrorJSON(w http.ResponseWriter, status int, err error, prefix string) {
+	if status >= http.StatusInternalServerError {
+		slog.Warn("polypus: request failed", "status", status, "err", err)
+	}
+	writeOpenAIJSON(w, status, openaiErrorBody{Error: openaiError{
+		Message: prefix + derrors.PublicMessage(err),
+		Type:    openaiErrorType(status),
+		Code:    string(derrors.CodeOf(err)),
+	}})
+}
+
+// openaiErrorType maps a status to the OpenAI error type clients switch on.
+func openaiErrorType(status int) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return errTypeAuthentication
+	case status == http.StatusNotFound:
+		return errTypeNotFound
+	case status < http.StatusInternalServerError:
+		return errTypeInvalidRequest
+	default:
+		return errTypeAPI
+	}
 }
 
 // writeUpstreamDialError writes a dial failure unless the upstream body was already sent.
@@ -527,12 +556,9 @@ func writeUpstreamDialError(w http.ResponseWriter, err error, prefix, upstreamNa
 	if writeRateLimitError(w, err) {
 		return
 	}
-	msg := err.Error()
-	if prefix != "" {
-		msg = prefix + msg
-	}
 	if upstream.Unavailable(err) || (unreachable != nil && unreachable(err)) {
-		writeUnavailableError(w, err, msg, upstreamName)
+		slog.Warn("polypus: upstream unavailable", "upstream", upstreamName, "err", err)
+		writeUnavailableError(w, err, prefix+derrors.PublicMessage(err), upstreamName)
 		return
 	}
 	code := http.StatusBadGateway
@@ -540,7 +566,7 @@ func writeUpstreamDialError(w http.ResponseWriter, err error, prefix, upstreamNa
 	if errors.As(err, &de) {
 		code = derrors.HTTPStatus(err)
 	}
-	http.Error(w, msg, code)
+	writeErrorJSON(w, code, err, prefix)
 }
 
 func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
@@ -645,18 +671,16 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	backendID, downstream, resolveErr := h.router.Registry().ResolveTTS(req.Model)
-	if resolveErr == nil && strings.TrimSpace(req.Model) != "" {
-		if !h.ensureModelAllowed(string(backendID), req.Model) {
-			writeModelNotAllowed(w, req.Model)
-			return
-		}
+	if resolveErr != nil {
+		writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.serveSpeech", "resolve backend").
+			With(keyModel, req.Model))
+		return
 	}
-	backendURL := ""
-	if resolveErr == nil {
-		if u, ok := h.router.Registry().BackendURL(string(backendID)); ok {
-			backendURL = u
-		}
+	if strings.TrimSpace(req.Model) != "" && !h.ensureModelAllowed(string(backendID), req.Model) {
+		writeModelNotAllowed(w, req.Model)
+		return
 	}
+	backendURL, _ := h.router.Registry().BackendURL(string(backendID))
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.speech", req.Model, string(backendID), backendURL, downstream)
 	dialUpstream := string(backendID)
 	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
@@ -713,20 +737,18 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 	if format == "" {
 		format = "json"
 	}
-	sttModel := r.FormValue("model")
+	sttModel := r.FormValue(keyModel)
 	backendID, downstream, resolveErr := h.router.Registry().ResolveSTT(sttModel)
-	if resolveErr == nil && strings.TrimSpace(sttModel) != "" {
-		if !h.ensureModelAllowed(string(backendID), sttModel) {
-			writeModelNotAllowed(w, sttModel)
-			return
-		}
+	if resolveErr != nil {
+		writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.serveTranscription", "resolve backend").
+			With(keyModel, sttModel))
+		return
 	}
-	backendURL := ""
-	if resolveErr == nil {
-		if u, ok := h.router.Registry().BackendURL(string(backendID)); ok {
-			backendURL = u
-		}
+	if strings.TrimSpace(sttModel) != "" && !h.ensureModelAllowed(string(backendID), sttModel) {
+		writeModelNotAllowed(w, sttModel)
+		return
 	}
+	backendURL, _ := h.router.Registry().BackendURL(string(backendID))
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.transcription", sttModel, string(backendID), backendURL, downstream)
 	dialUpstream := string(backendID)
 	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()

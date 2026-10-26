@@ -34,7 +34,7 @@ func validateBatchBackend(backend config.BackendDef, endpoint, downstream string
 	}
 	if backend.IsCloudflareExtension() && !cloudflare.ModelSupportsBatch(downstream) {
 		return derrors.New(derrors.CodeInvalid, "gateway.validateBatchBackend", "model does not support cloudflare batch").
-			With("model", downstream)
+			With(keyModel, downstream)
 	}
 	return nil
 }
