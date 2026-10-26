@@ -24,7 +24,6 @@ import (
 
 const (
 	modelsListTimeout       = 5 * time.Second
-	modelsMaxBody           = 4 << 20
 	modelsInventoryCacheTTL = time.Hour
 )
 
