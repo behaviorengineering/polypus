@@ -57,7 +57,12 @@ func newModelsInventoryCache() *modelsInventoryCache {
 			ttl = d
 		}
 	}
-	path := config.ResolveModelsInventoryCachePath()
+	path, err := config.ResolveModelsInventoryCachePath()
+	if err != nil {
+		// The disk cache is optional: run memory-only and say why.
+		slog.Warn("polypus: models inventory disk cache disabled", "err", err)
+		path = ""
+	}
 	c := &modelsInventoryCache{
 		byKey: make(map[string]modelsCacheEntry),
 		ttl:   ttl,

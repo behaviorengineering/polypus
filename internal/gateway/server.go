@@ -92,11 +92,19 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 
 	overlayPath := ho.overlayPath
 	if overlayPath == "" {
-		overlayPath = config.ResolveModelsAllowOverlayPath()
+		p, err := config.ResolveModelsAllowOverlayPath()
+		if err != nil {
+			return nil, fmt.Errorf("gateway: %w", err)
+		}
+		overlayPath = p
 	}
 	adminKeysPath := ho.adminKeysPath
 	if adminKeysPath == "" {
-		adminKeysPath = config.ResolveAdminKeysPath()
+		p, err := config.ResolveAdminKeysPath()
+		if err != nil {
+			return nil, fmt.Errorf("gateway: %w", err)
+		}
+		adminKeysPath = p
 	}
 	jobClock := ho.clock
 	if jobClock == nil {
@@ -162,17 +170,17 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 		timeouts = config.DefaultTimeouts()
 	}
 	var batchStore *batch.DiskStore
-	if batchRoot := config.ResolveBatchDir(); batchRoot != "" {
-		bs, batchStoreErr := batch.NewDiskStore(batchRoot, func() time.Time { return time.Now().UTC() })
-		if batchStoreErr != nil {
-			if owned {
-				if c, ok := rc.(routerCloser); ok {
-					c.Close()
-				}
+	batchRoot, batchStoreErr := config.ResolveBatchDir()
+	if batchStoreErr == nil {
+		batchStore, batchStoreErr = batch.NewDiskStore(batchRoot, func() time.Time { return time.Now().UTC() })
+	}
+	if batchStoreErr != nil {
+		if owned {
+			if c, ok := rc.(routerCloser); ok {
+				c.Close()
 			}
-			return nil, fmt.Errorf("gateway: batch store: %w", batchStoreErr)
 		}
-		batchStore = bs
+		return nil, fmt.Errorf("gateway: batch store: %w", batchStoreErr)
 	}
 	uiMounts, uiErr := buildUIMounts(rcfg.UIProxies)
 	if uiErr != nil {

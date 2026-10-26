@@ -17,10 +17,11 @@ import (
 var adminKeyNow = func() time.Time { return time.Now().UTC() }
 
 func openAdminKeyStore() (*keys.Store, error) {
-	return keys.Config{
-		Path:  config.ResolveAdminKeysPath(),
-		Clock: adminKeyNow,
-	}.CreateStore()
+	path, err := config.ResolveAdminKeysPath()
+	if err != nil {
+		return nil, err
+	}
+	return keys.Config{Path: path, Clock: adminKeyNow}.CreateStore()
 }
 
 func runAdminKeyGenerate(args []string) int {

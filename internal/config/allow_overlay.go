@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -25,28 +26,28 @@ type AllowOverlayBackend struct {
 
 // ResolveModelsAllowOverlayPath picks the overlay file path.
 // Order: POLYPUS_MODELS_ALLOW_OVERLAY, then $XDG_STATE_HOME/polypus/models-allow-overlay.yaml.
-func ResolveModelsAllowOverlayPath() string {
+func ResolveModelsAllowOverlayPath() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("POLYPUS_MODELS_ALLOW_OVERLAY")); path != "" {
-		return path
+		return path, nil
 	}
 	dir, err := DefaultStateDir()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("models allow overlay path: %w", err)
 	}
-	return filepath.Join(dir, modelsAllowOverlayFile)
+	return filepath.Join(dir, modelsAllowOverlayFile), nil
 }
 
 // ResolveAdminKeysPath picks the admin API key store path.
 // Order: POLYPUS_ADMIN_KEYS, then $XDG_STATE_HOME/polypus/admin-api-keys.json.
-func ResolveAdminKeysPath() string {
+func ResolveAdminKeysPath() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("POLYPUS_ADMIN_KEYS")); path != "" {
-		return path
+		return path, nil
 	}
 	dir, err := DefaultStateDir()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("admin keys path: %w", err)
 	}
-	return filepath.Join(dir, "admin-api-keys.json")
+	return filepath.Join(dir, "admin-api-keys.json"), nil
 }
 
 // LoadAllowOverlay reads overlay YAML. Missing file returns empty overlay, not an error.

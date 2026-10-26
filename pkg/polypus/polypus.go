@@ -31,8 +31,9 @@ const (
 	DefaultBatchModel     = smoke.DefaultBatchModel
 )
 
-// LoadServeOptions resolves host/port/backend from the environment.
-func LoadServeOptions() ServeOptions {
+// LoadServeOptions resolves host/port/backend from the environment. A set but
+// invalid POLYPUS_PORT or POLYPUS_MLX_PORT is an error.
+func LoadServeOptions() (ServeOptions, error) {
 	return config.LoadServeOptions()
 }
 

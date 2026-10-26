@@ -12,7 +12,11 @@ import (
 )
 
 func runServeWithOpts(host string, port int, backend string) int {
-	opts := config.LoadServeOptions()
+	opts, err := config.LoadServeOptions()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "polypus serve: %v\n", err)
+		return 2
+	}
 	if host != "" {
 		opts.Host = host
 	}

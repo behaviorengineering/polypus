@@ -16,10 +16,21 @@ const (
 
 // ExpandEnv replaces ${VAR} placeholders in s from the process environment.
 // Substituted values are trimmed so pasted line endings do not reach URLs or headers.
-func ExpandEnv(s string) string {
-	return os.Expand(s, func(key string) string {
-		return strings.TrimSpace(os.Getenv(key))
+// A placeholder whose variable is unset or blank is an error, so a config value
+// never loads with a silent hole (".../accounts//ai/v1").
+func ExpandEnv(s string) (string, error) {
+	var missing []string
+	out := os.Expand(s, func(key string) string {
+		v := strings.TrimSpace(os.Getenv(key))
+		if v == "" {
+			missing = append(missing, key)
+		}
+		return v
 	})
+	if len(missing) > 0 {
+		return "", fmt.Errorf("unset environment variable(s) %s", strings.Join(missing, ", "))
+	}
+	return out, nil
 }
 
 // BackendAuth holds credentials for a remote backend.

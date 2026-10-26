@@ -25,16 +25,15 @@ type ServeOptions struct {
 }
 
 // LoadServeOptions reads POLYPUS_* and POLYPUS_BACKEND_URL / POLYPUS_MLX_URL from the environment.
-func LoadServeOptions() ServeOptions {
+// A set but invalid port is an error rather than a silent fall back to the default.
+func LoadServeOptions() (ServeOptions, error) {
 	host := strings.TrimSpace(os.Getenv("POLYPUS_HOST"))
 	if host == "" {
 		host = DefaultHost
 	}
-	port := DefaultPort
-	if raw := strings.TrimSpace(os.Getenv("POLYPUS_PORT")); raw != "" {
-		if p, err := strconv.Atoi(raw); err == nil && p > 0 {
-			port = p
-		}
+	port, err := envPort("POLYPUS_PORT", DefaultPort)
+	if err != nil {
+		return ServeOptions{}, err
 	}
 	backend := strings.TrimSpace(os.Getenv("POLYPUS_BACKEND_URL"))
 	if backend == "" {
@@ -45,11 +44,9 @@ func LoadServeOptions() ServeOptions {
 		if mlxHost == "" {
 			mlxHost = DefaultHost
 		}
-		mlxPort := 1322
-		if raw := strings.TrimSpace(os.Getenv("POLYPUS_MLX_PORT")); raw != "" {
-			if p, err := strconv.Atoi(raw); err == nil && p > 0 {
-				mlxPort = p
-			}
+		mlxPort, err := envPort("POLYPUS_MLX_PORT", 1322)
+		if err != nil {
+			return ServeOptions{}, err
 		}
 		backend = fmt.Sprintf("http://%s:%d", mlxHost, mlxPort)
 	}
@@ -58,7 +55,7 @@ func LoadServeOptions() ServeOptions {
 		Host:       host,
 		Port:       port,
 		BackendURL: backend,
-	}
+	}, nil
 }
 
 // ListenAddr returns host:port for the gateway.
@@ -82,4 +79,17 @@ func (o ServeOptions) GatewayBaseURL() string {
 		port = DefaultPort
 	}
 	return fmt.Sprintf("http://%s:%d", host, port)
+}
+
+// envPort reads a TCP port from env, or returns def when it is unset.
+func envPort(env string, def int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(env))
+	if raw == "" {
+		return def, nil
+	}
+	p, err := strconv.Atoi(raw)
+	if err != nil || p < 1 || p > 65535 {
+		return 0, fmt.Errorf("%s=%q is not a port (1-65535)", env, raw)
+	}
+	return p, nil
 }

@@ -330,7 +330,15 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 			}
 			caps = append(caps, c)
 		}
-		baseURL := ExpandEnv(strings.TrimSpace(entry.BaseURL))
+		baseURL, err := ExpandEnv(strings.TrimSpace(entry.BaseURL))
+		if err != nil {
+			return RouterConfig{}, false, fmt.Errorf("router config %s: backends.%s.base_url: %w", path, id, err)
+		}
+		if baseURL != "" {
+			if u, perr := url.Parse(baseURL); perr != nil || u.Scheme == "" || u.Host == "" {
+				return RouterConfig{}, false, fmt.Errorf("router config %s: backends.%s.base_url %q needs a scheme and host", path, id, baseURL)
+			}
+		}
 		cfg.Backends[id] = BackendDef{
 			ID:           id,
 			Remote:       entry.Remote,

@@ -24,7 +24,11 @@ func runSwitchyardRender(args []string) int {
 	if *configPath != "" {
 		_ = os.Setenv("POLYPUS_CONFIG", *configPath)
 	}
-	opts := config.LoadServeOptions()
+	opts, err := config.LoadServeOptions()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "polypus switchyard-render: %v\n", err)
+		return 2
+	}
 	rcfg, err := config.LoadRouterConfig(opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus switchyard-render: %v\n", err)

@@ -36,7 +36,10 @@ func (p ProcessFlags) MLXSet() bool {
 // LoadProcessFlags reads processes.* from the resolved router config file.
 // Missing config file yields zero ProcessFlags (all keys unset).
 func LoadProcessFlags() (ProcessFlags, error) {
-	path := ResolveConfigPath()
+	path, err := ResolveConfigPathWithError()
+	if err != nil {
+		return ProcessFlags{}, fmt.Errorf("process flags: %w", err)
+	}
 	if path == "" {
 		return ProcessFlags{}, nil
 	}

@@ -91,7 +91,7 @@ func TestOverlayAddRoundTrip(t *testing.T) {
 
 func TestResolveModelsAllowOverlayPathEnv(t *testing.T) {
 	t.Setenv("POLYPUS_MODELS_ALLOW_OVERLAY", "/tmp/custom-overlay.yaml")
-	if got := ResolveModelsAllowOverlayPath(); got != "/tmp/custom-overlay.yaml" {
+	if got, err := ResolveModelsAllowOverlayPath(); err != nil || got != "/tmp/custom-overlay.yaml" {
 		t.Fatalf("got %q", got)
 	}
 }

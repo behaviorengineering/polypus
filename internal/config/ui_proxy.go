@@ -48,7 +48,10 @@ func ParseUIProxies(entries []uiProxyFile) ([]UIProxy, error) {
 				return nil, fmt.Errorf("router: ui_proxies path %q conflicts with reserved prefix %q", path, reserved)
 			}
 		}
-		rawURL := ExpandEnv(strings.TrimSpace(e.URL))
+		rawURL, err := ExpandEnv(strings.TrimSpace(e.URL))
+		if err != nil {
+			return nil, fmt.Errorf("router: ui_proxies[%d].url: %w", i, err)
+		}
 		if rawURL == "" {
 			return nil, fmt.Errorf("router: ui_proxies[%d].url required", i)
 		}

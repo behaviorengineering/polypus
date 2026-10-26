@@ -48,15 +48,11 @@ func DefaultModelsInventoryCachePath() (string, error) {
 
 // ResolveModelsInventoryCachePath picks the inventory cache file.
 // Order: POLYPUS_MODELS_CACHE, then ~/.cache/polypus/models-inventory.json.
-func ResolveModelsInventoryCachePath() string {
+func ResolveModelsInventoryCachePath() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("POLYPUS_MODELS_CACHE")); path != "" {
-		return path
+		return path, nil
 	}
-	path, err := DefaultModelsInventoryCachePath()
-	if err != nil {
-		return ""
-	}
-	return path
+	return DefaultModelsInventoryCachePath()
 }
 
 // DefaultStateDir returns ~/.local/state/polypus (or $XDG_STATE_HOME/polypus).
@@ -82,15 +78,11 @@ func DefaultBatchDir() (string, error) {
 
 // ResolveBatchDir picks the on-disk batch and files store root.
 // Order: POLYPUS_BATCH_DIR, then DefaultBatchDir.
-func ResolveBatchDir() string {
+func ResolveBatchDir() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("POLYPUS_BATCH_DIR")); path != "" {
-		return path
+		return path, nil
 	}
-	path, err := DefaultBatchDir()
-	if err != nil {
-		return ""
-	}
-	return path
+	return DefaultBatchDir()
 }
 
 // DefaultProcessComposeSockPath returns the default process-compose Unix socket path.
@@ -102,15 +94,10 @@ func DefaultProcessComposeSockPath() (string, error) {
 	return filepath.Join(dir, "process-compose.sock"), nil
 }
 
-// ResolveConfigPath picks the router config file.
+// ResolveConfigPathWithError picks the router config file.
 // Order: POLYPUS_CONFIG, ~/.config/polypus/config.yaml, $POLYPUS_ROOT/config.yaml, ./config.yaml.
-// Returns "" when none exist (caller may fall back to env-only defaults).
-func ResolveConfigPath() string {
-	path, _ := ResolveConfigPathWithError()
-	return path
-}
-
-// ResolveConfigPathWithError is ResolveConfigPath but surfaces invalid override paths.
+// Returns "" when none exist (caller may fall back to env-only defaults), and an
+// error for an invalid override path.
 func ResolveConfigPathWithError() (string, error) {
 	return operatorconfig.ResolveConfigPath(operatorConfigOptions())
 }

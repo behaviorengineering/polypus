@@ -43,7 +43,7 @@ func TestResolveConfigPathPrefersEnv(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("POLYPUS_CONFIG", explicit)
 	t.Setenv("POLYPUS_ROOT", "")
-	if got := ResolveConfigPath(); got != explicit {
+	if got, err := ResolveConfigPathWithError(); err != nil || got != explicit {
 		t.Fatalf("got %q want %q", got, explicit)
 	}
 }
@@ -67,7 +67,7 @@ func TestResolveConfigPathPrefersHomeOverRepo(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("POLYPUS_CONFIG", "")
 	t.Setenv("POLYPUS_ROOT", repo)
-	if got := ResolveConfigPath(); got != homeCfg {
+	if got, err := ResolveConfigPathWithError(); err != nil || got != homeCfg {
 		t.Fatalf("got %q want %q", got, homeCfg)
 	}
 }
@@ -83,7 +83,7 @@ func TestResolveConfigPathFallsBackToRepo(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("POLYPUS_CONFIG", "")
 	t.Setenv("POLYPUS_ROOT", repo)
-	if got := ResolveConfigPath(); got != repoCfg {
+	if got, err := ResolveConfigPathWithError(); err != nil || got != repoCfg {
 		t.Fatalf("got %q want %q", got, repoCfg)
 	}
 }
@@ -105,7 +105,7 @@ func TestResolveModelsInventoryCachePathPrefersEnv(t *testing.T) {
 	explicit := filepath.Join(t.TempDir(), "inv.json")
 	t.Setenv("POLYPUS_MODELS_CACHE", explicit)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	if got := ResolveModelsInventoryCachePath(); got != explicit {
+	if got, err := ResolveModelsInventoryCachePath(); err != nil || got != explicit {
 		t.Fatalf("got %q want %q", got, explicit)
 	}
 }
@@ -127,7 +127,7 @@ func TestResolveBatchDirPrefersEnv(t *testing.T) {
 	explicit := filepath.Join(t.TempDir(), "batch-store")
 	t.Setenv("POLYPUS_BATCH_DIR", explicit)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	if got := ResolveBatchDir(); got != explicit {
+	if got, err := ResolveBatchDir(); err != nil || got != explicit {
 		t.Fatalf("got %q want %q", got, explicit)
 	}
 }

@@ -7,20 +7,20 @@ import (
 )
 
 func TestExpandEnv(t *testing.T) {
-	t.Setenv("CF_ACCOUNT_ID", "acct-test")
-	got := ExpandEnv("https://example.com/accounts/${CF_ACCOUNT_ID}/ai/v1")
-	want := "https://example.com/accounts/acct-test/ai/v1"
-	if got != want {
-		t.Fatalf("got %q want %q", got, want)
+	for _, val := range []string{"acct-test", "acct-test\n"} {
+		t.Setenv("CF_ACCOUNT_ID", val)
+		got, err := ExpandEnv("https://example.com/accounts/${CF_ACCOUNT_ID}/ai/v1")
+		want := "https://example.com/accounts/acct-test/ai/v1"
+		if err != nil || got != want {
+			t.Fatalf("value %q: got %q err %v, want %q", val, got, err, want)
+		}
 	}
 }
 
-func TestExpandEnvTrimsSubstitution(t *testing.T) {
-	t.Setenv("CF_ACCOUNT_ID", "acct-test\n")
-	got := ExpandEnv("https://example.com/accounts/${CF_ACCOUNT_ID}/ai/v1")
-	want := "https://example.com/accounts/acct-test/ai/v1"
-	if got != want {
-		t.Fatalf("got %q want %q", got, want)
+func TestExpandEnvFailsOnUnsetVariable(t *testing.T) {
+	t.Setenv("POLYPUS_TEST_UNSET_ACCT", "")
+	if got, err := ExpandEnv("https://example.com/accounts/${POLYPUS_TEST_UNSET_ACCT}/ai/v1"); err == nil {
+		t.Fatalf("an unset placeholder must fail, got %q", got)
 	}
 }
 
@@ -206,5 +206,28 @@ backends:
 	t.Setenv("POLYPUS_CONFIG", path)
 	if _, err := LoadRouterConfig(ServeOptions{}); err == nil || !strings.Contains(err.Error(), `unknown capability "vison"`) {
 		t.Fatalf("a capability typo must fail the load, got %v", err)
+	}
+}
+
+func TestLoadServeOptionsRejectsBadPorts(t *testing.T) {
+	for _, tc := range []struct{ env, val string }{
+		{"POLYPUS_PORT", "abc"},
+		{"POLYPUS_PORT", "70000"},
+		{"POLYPUS_MLX_PORT", "0"},
+	} {
+		t.Run(tc.env+"="+tc.val, func(t *testing.T) {
+			t.Setenv("POLYPUS_BACKEND_URL", "")
+			t.Setenv("POLYPUS_MLX_URL", "")
+			t.Setenv(tc.env, tc.val)
+			if _, err := LoadServeOptions(); err == nil {
+				t.Fatalf("%s=%q must be rejected", tc.env, tc.val)
+			}
+		})
+	}
+	t.Setenv("POLYPUS_PORT", "1400")
+	t.Setenv("POLYPUS_MLX_PORT", "")
+	opts, err := LoadServeOptions()
+	if err != nil || opts.Port != 1400 {
+		t.Fatalf("opts=%+v err=%v", opts, err)
 	}
 }
