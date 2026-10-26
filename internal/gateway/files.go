@@ -19,7 +19,7 @@ func (h filesHandler) serveFiles(w http.ResponseWriter, r *http.Request) {
 		writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveFiles", "batch store not configured"))
 		return
 	}
-	if r.URL.Path == "/v1/files" {
+	if r.URL.Path == pathFiles {
 		if r.Method == http.MethodPost {
 			h.serveFileUpload(w, r)
 			return

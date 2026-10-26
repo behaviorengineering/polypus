@@ -217,10 +217,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Which methods a route answers.
 const (
-	methodsRead = iota // GET and HEAD
-	methodsGet         // GET only
-	methodsPost        // POST only
-	methodsAny         // the handler checks the method itself
+	methodsRead = iota // GET and HEAD.
+	methodsGet         // GET only.
+	methodsPost        // POST only.
+	methodsAny         // The handler checks the method itself.
 )
 
 // gatewayRoute is one entry of the routing table. Routes are tried in order, so a
@@ -300,8 +300,8 @@ var gatewayRoutes = []gatewayRoute{
 	{path: "/v1/systemone", methods: methodsPost, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
 		systemOneHandler{g.shared}.serveSystemOne(w, r)
 	}},
-	{path: "/v1/files", prefix: true, methods: methodsAny, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { filesHandler{g.shared}.serveFiles(w, r) }},
-	{path: "/v1/batches", methods: methodsAny, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { batchesHandler{g.shared}.serveBatches(w, r) }},
+	{path: pathFiles, prefix: true, methods: methodsAny, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { filesHandler{g.shared}.serveFiles(w, r) }},
+	{path: pathBatches, methods: methodsAny, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) { batchesHandler{g.shared}.serveBatches(w, r) }},
 	{path: "/v1/batches/", prefix: true, methods: methodsAny, serve: func(g *Gateway, w http.ResponseWriter, r *http.Request) {
 		batchesHandler{g.shared}.serveBatchByID(w, r)
 	}},

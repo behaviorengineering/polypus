@@ -20,6 +20,8 @@ const (
 const (
 	pathOpenAIModels    = "/v1/apis/openai/models"
 	pathSystemOneModels = "/v1/apis/systemone/models"
+	pathFiles           = "/v1/files"
+	pathBatches         = "/v1/batches"
 )
 
 const openAIModelsCanonicalPath = pathOpenAIModels
@@ -72,8 +74,8 @@ func openAICatalogEntry() apiCatalogEntry {
 			"audio_speech":         {Method: http.MethodPost, Path: "/v1/audio/speech"},
 			"audio_transcriptions": {Method: http.MethodPost, Path: "/v1/audio/transcriptions"},
 			"audio_voices":         {Method: http.MethodGet, Path: "/v1/audio/voices"},
-			"files":                {Method: http.MethodGet, Path: "/v1/files"},
-			"batches":              {Method: http.MethodPost, Path: "/v1/batches"},
+			"files":                {Method: http.MethodGet, Path: pathFiles},
+			"batches":              {Method: http.MethodPost, Path: pathBatches},
 		},
 	}
 }
