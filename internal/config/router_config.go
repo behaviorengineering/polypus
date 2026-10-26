@@ -35,6 +35,8 @@ type BackendDef struct {
 	ExtraHeaders map[string]string `yaml:"extra_headers"`
 	Capabilities []Capability      `yaml:"capabilities"`
 	Models       *BackendModels    `yaml:"models"`
+	// PromptCache turns automatic prompt caching off when false (Anthropic extension only; default on).
+	PromptCache *bool `yaml:"prompt_cache"`
 }
 
 // HasExtension reports whether the backend uses a named extension module.
@@ -50,6 +52,25 @@ func (b BackendDef) IsCloudflareExtension() bool {
 // IsGeminiExtension reports whether the backend uses the Google Gemini Developer API extension.
 func (b BackendDef) IsGeminiExtension() bool {
 	return b.HasExtension(ExtensionGemini)
+}
+
+// IsAnthropicExtension reports whether the backend uses the native Anthropic Messages API extension.
+func (b BackendDef) IsAnthropicExtension() bool {
+	return b.HasExtension(ExtensionAnthropic)
+}
+
+// AutoPromptCache reports whether Polypus adds a top-level cache_control to chat requests
+// that carry none. On by default for Anthropic backends; prompt_cache: false turns it off.
+func (b BackendDef) AutoPromptCache() bool {
+	if !b.IsAnthropicExtension() {
+		return false
+	}
+	return b.PromptCache == nil || *b.PromptCache
+}
+
+// baseURLOptional reports whether the extension supplies its own default upstream URL.
+func (b BackendDef) baseURLOptional() bool {
+	return b.IsGeminiExtension() || b.IsAnthropicExtension()
 }
 
 // CapabilityBackend is an optional capability default (chat, vision, embed, TTS, STT, proxy, systemone, batch).
@@ -182,6 +203,7 @@ type backendFileEntry struct {
 	Auth         BackendAuth    `yaml:"auth"`
 	Capabilities []string       `yaml:"capabilities"`
 	Models       *BackendModels `yaml:"models"`
+	PromptCache  *bool          `yaml:"prompt_cache"`
 }
 
 func parseCapabilityBackend(file capabilityBackendFile) CapabilityBackend {
@@ -288,6 +310,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 			Auth:         entry.Auth,
 			Capabilities: caps,
 			Models:       entry.Models,
+			PromptCache:  entry.PromptCache,
 		}
 	}
 	return cfg, true, nil
@@ -485,7 +508,7 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 		if b.ID == "" {
 			b.ID = id
 		}
-		if b.BaseURL == "" && !b.IsGeminiExtension() {
+		if b.BaseURL == "" && !b.baseURLOptional() {
 			return fmt.Errorf("router: backends.%s.base_url required", id)
 		}
 		if b.Remote {

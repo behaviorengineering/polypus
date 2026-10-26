@@ -22,6 +22,9 @@ func ValidateBackend(b config.BackendDef, policy config.RouterPolicy) error {
 	if b.IsGeminiExtension() {
 		return validateGeminiBackendURL(b.BaseURL)
 	}
+	if b.IsAnthropicExtension() {
+		return validateAnthropicBackendURL(b.BaseURL)
+	}
 	raw := strings.TrimSpace(b.BaseURL)
 	if raw == "" {
 		return fmt.Errorf("backend url required")
@@ -44,6 +47,25 @@ func validateGeminiBackendURL(raw string) error {
 	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
 	if host != "generativelanguage.googleapis.com" && !strings.HasSuffix(host, ".generativelanguage.googleapis.com") {
 		return fmt.Errorf("backend host %q is not allowed for gemini extension", host)
+	}
+	return nil
+}
+
+// validateAnthropicBackendURL allows an empty base_url (Bifrost defaults to
+// https://api.anthropic.com) or the Anthropic API host only. The general remote
+// rule still blocks api.anthropic.com for every other backend.
+func validateAnthropicBackendURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := parseBackendURL(raw)
+	if err != nil {
+		return err
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	if host != "api.anthropic.com" {
+		return fmt.Errorf("backend host %q is not allowed for anthropic extension", host)
 	}
 	return nil
 }

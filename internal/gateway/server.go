@@ -14,6 +14,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/admin/keys"
 	"github.com/behaviorengineering/polypus/internal/batch"
+	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/clients/gemini"
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -26,21 +27,22 @@ import (
 
 // shared holds dependencies used by capability handlers.
 type shared struct {
-	opts        config.ServeOptions
-	router      Router
-	ownedRouter bool
-	proxy       http.Handler
-	invCache    *modelsInventoryCache
-	timeouts    config.Timeouts
-	client      *http.Client
-	upstreams   *upstream.Board
-	cfGet       CloudflareClientGet
-	geminiGet   GeminiClientGet
-	batchStore  *batch.DiskStore
-	batchNow    func() time.Time
-	overlayPath string
-	adminKeys   *keys.Store
-	uiMounts    []uiProxyMount
+	opts         config.ServeOptions
+	router       Router
+	ownedRouter  bool
+	proxy        http.Handler
+	invCache     *modelsInventoryCache
+	timeouts     config.Timeouts
+	client       *http.Client
+	upstreams    *upstream.Board
+	cfGet        CloudflareClientGet
+	geminiGet    GeminiClientGet
+	anthropicGet AnthropicClientGet
+	batchStore   *batch.DiskStore
+	batchNow     func() time.Time
+	overlayPath  string
+	adminKeys    *keys.Store
+	uiMounts     []uiProxyMount
 }
 
 // Gateway is the Polypus HTTP mux (controller) over capability handlers.
@@ -67,6 +69,13 @@ func (s *shared) geminiClient(b config.BackendDef) (*gemini.Client, error) {
 		return s.geminiGet(b)
 	}
 	return gemini.GetClient(b)
+}
+
+func (s *shared) anthropicClient(b config.BackendDef) (*anthropic.Client, error) {
+	if s != nil && s.anthropicGet != nil {
+		return s.anthropicGet(b)
+	}
+	return anthropic.GetClient(b)
 }
 
 // NewHandler returns the public Polypus HTTP handler (*Gateway).
@@ -104,6 +113,10 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 	geminiGet := ho.geminiGet
 	if geminiGet == nil {
 		geminiGet = gemini.GetClient
+	}
+	anthropicGet := ho.anthropicGet
+	if anthropicGet == nil {
+		anthropicGet = anthropic.GetClient
 	}
 
 	var rc Router
@@ -170,21 +183,22 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 		return nil, uiErr
 	}
 	s := &shared{
-		opts:        opts,
-		router:      rc,
-		ownedRouter: owned,
-		proxy:       proxy,
-		invCache:    newModelsInventoryCache(),
-		timeouts:    timeouts,
-		client:      newChatProxyClient(timeouts.Max),
-		upstreams:   upstream.NewBoard(),
-		cfGet:       cfGet,
-		geminiGet:   geminiGet,
-		batchStore:  batchStore,
-		batchNow:    jobClock,
-		overlayPath: overlayPath,
-		adminKeys:   adminKeys,
-		uiMounts:    uiMounts,
+		opts:         opts,
+		router:       rc,
+		ownedRouter:  owned,
+		proxy:        proxy,
+		invCache:     newModelsInventoryCache(),
+		timeouts:     timeouts,
+		client:       newChatProxyClient(timeouts.Max),
+		upstreams:    upstream.NewBoard(),
+		cfGet:        cfGet,
+		geminiGet:    geminiGet,
+		anthropicGet: anthropicGet,
+		batchStore:   batchStore,
+		batchNow:     jobClock,
+		overlayPath:  overlayPath,
+		adminKeys:    adminKeys,
+		uiMounts:     uiMounts,
 	}
 	gw := &Gateway{shared: s}
 	return wrapGatewayAccess(adminKeys, gw), nil

@@ -11,6 +11,7 @@ import (
 const (
 	ExtensionCloudflare = "cloudflare"
 	ExtensionGemini     = "gemini"
+	ExtensionAnthropic  = "anthropic"
 )
 
 // ExpandEnv replaces ${VAR} placeholders in s from the process environment.
