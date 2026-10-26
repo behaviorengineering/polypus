@@ -137,7 +137,7 @@ func TestSanitizeFailOpenOnMalformedJSON(t *testing.T) {
 func TestSanitizePerIndexFinish(t *testing.T) {
 	san := newOpenAIStreamSanitizer()
 	sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":0,"finish_reason":"stop","delta":{}}]}`), san, false)
-	// index 1 still allowed
+	// index 1 still allowed.
 	out, _, emit := sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":1,"delta":{"content":"ok"}}]}`), san, false)
 	if !emit || !strings.Contains(string(out), `"content":"ok"`) {
 		t.Fatalf("index 1 should forward: %q", out)

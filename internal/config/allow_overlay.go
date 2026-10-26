@@ -55,7 +55,7 @@ func LoadAllowOverlay(path string) (AllowOverlayFile, error) {
 	if strings.TrimSpace(path) == "" {
 		return AllowOverlayFile{}, nil
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return AllowOverlayFile{}, nil

@@ -35,7 +35,7 @@ func TestDefaultConfigPathUsesHomeDotConfig(t *testing.T) {
 
 func TestResolveConfigPathPrefersEnv(t *testing.T) {
 	explicit := filepath.Join(t.TempDir(), "explicit.yaml")
-	if err := os.WriteFile(explicit, []byte("backends: {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(explicit, []byte("backends: {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	home := t.TempDir()
@@ -51,16 +51,16 @@ func TestResolveConfigPathPrefersEnv(t *testing.T) {
 func TestResolveConfigPathPrefersHomeOverRepo(t *testing.T) {
 	home := t.TempDir()
 	xdgPolypus := filepath.Join(home, ".config", "polypus")
-	if err := os.MkdirAll(xdgPolypus, 0o755); err != nil {
+	if err := os.MkdirAll(xdgPolypus, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	homeCfg := filepath.Join(xdgPolypus, "config.yaml")
-	if err := os.WriteFile(homeCfg, []byte("backends: {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(homeCfg, []byte("backends: {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	repo := t.TempDir()
 	repoCfg := filepath.Join(repo, "config.yaml")
-	if err := os.WriteFile(repoCfg, []byte("backends: {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(repoCfg, []byte("backends: {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
@@ -76,7 +76,7 @@ func TestResolveConfigPathFallsBackToRepo(t *testing.T) {
 	home := t.TempDir()
 	repo := t.TempDir()
 	repoCfg := filepath.Join(repo, "config.yaml")
-	if err := os.WriteFile(repoCfg, []byte("backends: {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(repoCfg, []byte("backends: {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)

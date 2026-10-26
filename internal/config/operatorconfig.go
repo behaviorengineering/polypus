@@ -88,7 +88,7 @@ func declaredSecretEnvs() ([]string, error) {
 	if path == "" {
 		return nil, fmt.Errorf("no router config found; run polypus init and declare secrets: before secret set")
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}

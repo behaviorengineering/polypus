@@ -8,10 +8,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/statefile"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -98,14 +99,11 @@ func (c *modelsInventoryCache) persist() error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
-		return err
-	}
 	raw, err := json.MarshalIndent(c.byKey, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(c.path, raw, 0o644)
+	return statefile.WriteAtomic(c.path, raw, 0o600)
 }
 
 func (c *modelsInventoryCache) get(key string) ([]openaiModel, bool) {

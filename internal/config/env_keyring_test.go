@@ -33,7 +33,7 @@ backends:
     capabilities: [chat]
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -77,7 +77,7 @@ chat_backend:
   default: remote_one
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -107,7 +107,7 @@ stt_backend:
   default: mlx_local
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)

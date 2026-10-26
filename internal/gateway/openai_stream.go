@@ -47,7 +47,6 @@ func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtr
 		st = newOpenAIStreamSanitizer()
 	}
 	action = StreamSSEForward
-	emit = true
 	changed := false
 
 	var root map[string]json.RawMessage

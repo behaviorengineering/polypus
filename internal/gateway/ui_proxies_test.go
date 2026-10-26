@@ -42,7 +42,7 @@ backends:
     base_url: http://127.0.0.1:1322
     capabilities: [tts, stt, voices]
 `
-	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", cfgPath)
@@ -85,7 +85,7 @@ backends:
     base_url: http://127.0.0.1:1322
     capabilities: [tts, stt, voices]
 `
-	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", cfgPath)

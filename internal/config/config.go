@@ -21,7 +21,7 @@ type ServeOptions struct {
 	Host       string
 	Port       int
 	BackendURL string
-	Keyring    operatorconfig.Keyring // optional; defaults to OS keyring when resolving config secrets
+	Keyring    operatorconfig.Keyring // optional; defaults to OS keyring when resolving config secrets.
 }
 
 // LoadServeOptions reads POLYPUS_* and POLYPUS_BACKEND_URL / POLYPUS_MLX_URL from the environment.

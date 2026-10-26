@@ -32,7 +32,7 @@ const (
 // Options configures a multi-channel smoke run.
 type Options struct {
 	BaseURL        string
-	Channels       []string // empty means all
+	Channels       []string // empty means all.
 	ChatModel      string
 	TTSModel       string
 	STTModel       string
@@ -40,8 +40,8 @@ type Options struct {
 	BatchModel     string
 	TTSVoice       string
 	TTSText        string
-	AudioOutPath   string // optional TTS output file (POLYPUS_SMOKE_OUT)
-	RequireCF      bool   // when true, TypeSafe billing skips become failures (CI)
+	AudioOutPath   string // optional TTS output file (POLYPUS_SMOKE_OUT).
+	RequireCF      bool   // when true, TypeSafe billing skips become failures (CI).
 	// RequireSelectedModel fails chat when Switchyard routing metadata is missing.
 	RequireSelectedModel bool
 	// AllowedSelectedModels when non-empty requires chat selected leaf ∈ list.
@@ -56,7 +56,7 @@ type Result struct {
 	Model         string `json:"model,omitempty"`
 	SelectedModel string `json:"selected_model,omitempty"`
 	Probe         string `json:"probe"`
-	Status        string `json:"status"` // pass | fail | skip
+	Status        string `json:"status"` // pass | fail | skip.
 	Ms            int64  `json:"ms"`
 	Detail        string `json:"detail"`
 }

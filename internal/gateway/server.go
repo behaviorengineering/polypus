@@ -406,6 +406,8 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 		h.servePassthroughRouterChat(w, r, body, model, nr.Route.Target)
 	case dispatchSwitchyard:
 		h.serveSwitchyardRouterChat(w, r, body, model, routerName, cfg.EffectiveSwitchyardBaseURL())
+	case dispatchUnknown:
+		fallthrough
 	default:
 		writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unsupported route type").
 			With(keyModel, model).

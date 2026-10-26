@@ -62,6 +62,7 @@ func (p *runSpeechPlugin) PreLLMHook(
 		return req, nil, nil
 	}
 
+	//exhaustive:ignore // the plugin acts on speech and transcription only; every other request type passes through
 	switch req.RequestType {
 	case schemas.SpeechStreamRequest, schemas.TranscriptionStreamRequest:
 		provider, model, _ := req.GetRequestFields()

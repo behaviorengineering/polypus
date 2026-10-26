@@ -271,7 +271,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 	if path == "" {
 		return RouterConfig{}, false, nil
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return RouterConfig{}, false, nil

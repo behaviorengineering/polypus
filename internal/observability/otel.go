@@ -22,7 +22,7 @@ import (
 const instrumentationName = "github.com/behaviorengineering/polypus"
 
 // skipHTTPPaths holds the active SERVER skip list (set by Init; read by WrapHandler).
-var skipHTTPPaths atomic.Value // []string
+var skipHTTPPaths atomic.Value // []string.
 
 func init() {
 	skipHTTPPaths.Store(append([]string(nil), defaultSkipPaths...))

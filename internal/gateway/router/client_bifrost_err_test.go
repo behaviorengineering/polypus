@@ -105,18 +105,16 @@ func assertProduction429(t *testing.T, berr *schemas.BifrostError, hdr http.Head
 	}
 	msg := ""
 	for e := err; e != nil; {
-		if de, ok := e.(*derrors.Error); ok && de != nil && de.Code() == derrors.CodeRateLimited {
+		var de *derrors.Error
+		if !errors.As(e, &de) || de == nil {
+			break
+		}
+		if de.Code() == derrors.CodeRateLimited {
 			if m := strings.TrimSpace(de.Message()); m != "" {
 				msg = m
 			}
-			e = de.Unwrap()
-			continue
 		}
-		u, ok := e.(interface{ Unwrap() error })
-		if !ok {
-			break
-		}
-		e = u.Unwrap()
+		e = de.Unwrap()
 	}
 	if !strings.Contains(msg, "Capacity temporarily exceeded") {
 		t.Fatalf("message=%q", msg)

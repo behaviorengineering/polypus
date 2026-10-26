@@ -89,7 +89,7 @@ backends:
         - "cf_local/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -493,7 +493,7 @@ backends:
         - "cf_local/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 `
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)

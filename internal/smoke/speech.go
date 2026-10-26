@@ -93,7 +93,7 @@ func synthesize(ctx context.Context, opts Options) ([]byte, error) {
 		return nil, fmt.Errorf("speech status %d: %s", resp.StatusCode, truncate(string(body), 200))
 	}
 	if path := strings.TrimSpace(opts.AudioOutPath); path != "" {
-		if err := os.WriteFile(path, body, 0o644); err != nil {
+		if err := os.WriteFile(path, body, 0o600); err != nil {
 			return nil, fmt.Errorf("write audio out %q: %w", path, err)
 		}
 	}

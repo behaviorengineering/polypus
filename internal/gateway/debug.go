@@ -40,7 +40,7 @@ func (h healthHandler) serveFailureDump(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid trace_id", http.StatusBadRequest)
 		return
 	}
-	body, err := os.ReadFile(cleanPath)
+	body, err := os.ReadFile(cleanPath) //nolint:gosec // G703: traceID matched ^[0-9a-f]{32}$ and the path is checked to stay in the dump dir
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.NotFound(w, r)
@@ -51,6 +51,7 @@ func (h healthHandler) serveFailureDump(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	_, _ = w.Write(body) //nolint:gosec // G705: a JSON dump served as application/json with nosniff
 }

@@ -192,7 +192,7 @@ func TestLLMGoOracleDualTable(t *testing.T) {
 		name       string
 		upstream   string
 		stripExtra bool
-		rawSub     string // malformed substring; empty => expect EOF
+		rawSub     string // malformed substring; empty => expect EOF.
 		rawText    string
 		sanSub     string
 		sanText    string

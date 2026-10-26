@@ -2,11 +2,11 @@ package switchyard
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/behaviorengineering/polypus/internal/statefile"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 )
@@ -229,10 +229,8 @@ func WriteConfig(cfg config.RouterConfig, polypusBaseURL string) (string, error)
 			return "", err
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", fmt.Errorf("switchyard config dir: %w", err)
-	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
+	// Atomic, so Switchyard never reads a half-written routes.toml.
+	if err := statefile.WriteAtomic(path, out, 0o600); err != nil {
 		return "", fmt.Errorf("switchyard config write: %w", err)
 	}
 	return path, nil

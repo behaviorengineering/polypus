@@ -40,8 +40,8 @@ type ModelList = catalog.ModelList
 type Client struct {
 	apiBase      string
 	apiKey       string
-	httpClient   *http.Client // catalog / ping (short timeout)
-	speechClient *http.Client // /run TTS/STT (shared transport; timeout via ctx)
+	httpClient   *http.Client // Catalog and ping (short timeout).
+	speechClient *http.Client // Workers AI /run (shared transport; timeout via ctx).
 
 	cache *catalog.Cache
 }

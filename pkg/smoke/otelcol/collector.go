@@ -92,7 +92,7 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			if lastErr != nil {
-				return fmt.Errorf("collector smoke: %w (last probe: %v)", err, lastErr)
+				return fmt.Errorf("collector smoke: %w (last probe: %w)", err, lastErr)
 			}
 			return fmt.Errorf("collector smoke: %w", err)
 		}
@@ -128,7 +128,7 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 			okGenPhoenix, okPlainAbsentPhoenix, okGenHyper, okPlainHyper)
 
 		if time.Now().Add(opts.PollInterval).After(deadline) {
-			return fmt.Errorf("collector smoke: timed out: %v", lastErr)
+			return fmt.Errorf("collector smoke: timed out: %w", lastErr)
 		}
 		if err := sleepContext(ctx, opts.PollInterval); err != nil {
 			return err
@@ -483,7 +483,7 @@ func hyperdxClickhouseDocker(ctx context.Context, container, traceID string) (in
 	query := fmt.Sprintf("SELECT count() FROM default.otel_traces WHERE TraceId = '%s'", traceID)
 	var out []byte
 	err = outbound.Run(ctx, outbound.DepDockerDaemon, func() error {
-		cmd := exec.CommandContext(ctx, "docker", "exec", container,
+		cmd := exec.CommandContext(ctx, "docker", "exec", container, //nolint:gosec // G204: traceID is normalised hex and container is the smoke's own name
 			"clickhouse-client", "--query", query)
 		b, err := cmd.CombinedOutput()
 		if err != nil {

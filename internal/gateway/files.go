@@ -111,8 +111,9 @@ func (h filesHandler) serveFileContent(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	w.Header().Set("Content-Type", "application/jsonl")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(content)
+	_, _ = w.Write(content) //nolint:gosec // G705: stored JSONL served as application/jsonl with nosniff
 }
 
 func (h filesHandler) serveFileDelete(w http.ResponseWriter, r *http.Request, id string) {

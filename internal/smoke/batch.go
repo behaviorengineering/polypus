@@ -68,7 +68,7 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 	}
 	switch meta.Status {
 	case "completed":
-		// continue
+		// continue.
 	case "failed", "expired", "cancelled":
 		return "", fmt.Errorf("batch terminal status %s", meta.Status)
 	default:
@@ -194,7 +194,7 @@ func pollBatchTerminal(ctx context.Context, baseURL, batchID string) (batchMetaS
 		case "completed", "failed", "expired", "cancelled":
 			return meta, nil
 		case "validating", "in_progress":
-			// keep polling
+			// keep polling.
 		default:
 			return meta, fmt.Errorf("batch poll unexpected status %s", meta.Status)
 		}

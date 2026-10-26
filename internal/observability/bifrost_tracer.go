@@ -26,7 +26,7 @@ const (
 type BifrostOTelTracer struct {
 	schemas.NoOpTracer
 
-	handles sync.Map // span handle -> *otelSpanBridge
+	handles sync.Map // span handle -> *otelSpanBridge.
 }
 
 // NewBifrostOTelTracer returns a tracer suitable for schemas.BifrostConfig.Tracer.
@@ -102,6 +102,8 @@ func (t *BifrostOTelTracer) EndSpan(handle schemas.SpanHandle, status schemas.Sp
 	switch status {
 	case schemas.SpanStatusError:
 		bridge.otel.SetStatus(codes.Error, statusMsg)
+	case schemas.SpanStatusOk, schemas.SpanStatusUnset:
+		bridge.otel.SetStatus(codes.Ok, "")
 	default:
 		bridge.otel.SetStatus(codes.Ok, "")
 	}
@@ -232,6 +234,7 @@ func geminiSyntheticURLFull() string {
 }
 
 func openInferenceKind(kind schemas.SpanKind) string {
+	//exhaustive:ignore // only LLM calls are LLM spans; every other Bifrost kind is a CHAIN step
 	switch kind {
 	case schemas.SpanKindLLMCall:
 		return "LLM"
@@ -243,6 +246,7 @@ func openInferenceKind(kind schemas.SpanKind) string {
 }
 
 func otelSpanKind(kind schemas.SpanKind) trace.SpanKind {
+	//exhaustive:ignore // only LLM calls leave the process; every other Bifrost kind is internal
 	switch kind {
 	case schemas.SpanKindLLMCall:
 		return trace.SpanKindClient

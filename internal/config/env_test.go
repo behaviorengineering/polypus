@@ -186,7 +186,7 @@ backends:
 }
 
 func writeTestFile(path, content string) error {
-	return os.WriteFile(path, []byte(content), 0o644)
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 func TestLoadRouterRejectsUnknownCapability(t *testing.T) {

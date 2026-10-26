@@ -17,7 +17,7 @@ func TestNewAccountRegistersCloudflareChatAndSpeech(t *testing.T) {
 				Remote:    true,
 				Extension: config.ExtensionCloudflare,
 				BaseURL:   "https://api.cloudflare.com/client/v4/accounts/x/ai/v1",
-				Auth:      config.BackendAuth{BearerEnv: "CF_AI_API_KEY"},
+				Auth:      config.BackendAuth{BearerEnv: "CF_AI_API_KEY"}, //nolint:gosec // G101: an env var name, not a credential
 				Capabilities: []config.Capability{
 					config.CapChat, config.CapEmbed, config.CapTTS, config.CapSTT,
 				},
@@ -124,7 +124,7 @@ func TestNewAccountRegistersGeminiChat(t *testing.T) {
 				ID:        "gemini_studio",
 				Remote:    true,
 				Extension: config.ExtensionGemini,
-				Auth:      config.BackendAuth{BearerEnv: "GEMINI_API_KEY"},
+				Auth:      config.BackendAuth{BearerEnv: "GEMINI_API_KEY"}, //nolint:gosec // G101: an env var name, not a credential
 				Capabilities: []config.Capability{
 					config.CapChat,
 				},
@@ -160,7 +160,7 @@ func TestNewAccountCopiesExtraHeaders(t *testing.T) {
 				ID:      "openrouter",
 				Remote:  true,
 				BaseURL: "https://openrouter.ai/api/v1",
-				Auth:    config.BackendAuth{BearerEnv: "OPENROUTER_API_KEY"},
+				Auth:    config.BackendAuth{BearerEnv: "OPENROUTER_API_KEY"}, //nolint:gosec // G101: an env var name, not a credential
 				ExtraHeaders: map[string]string{
 					"HTTP-Referer": "https://example.com",
 					"X-Title":      "Polypus",
@@ -193,7 +193,7 @@ func TestNewAccountRegistersNativeOpenRouter(t *testing.T) {
 				ID:      "openrouter",
 				Remote:  true,
 				BaseURL: "https://openrouter.ai/api/v1",
-				Auth:    config.BackendAuth{BearerEnv: "OPENROUTER_API_KEY"},
+				Auth:    config.BackendAuth{BearerEnv: "OPENROUTER_API_KEY"}, //nolint:gosec // G101: an env var name, not a credential
 				Capabilities: []config.Capability{
 					config.CapChat, config.CapSystemOne,
 				},

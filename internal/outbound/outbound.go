@@ -37,7 +37,7 @@ func Abort(err error) error {
 	if err == nil {
 		return fmt.Errorf("%w: nil", ErrAbort)
 	}
-	return fmt.Errorf("%w: %v", ErrAbort, err)
+	return fmt.Errorf("%w: %w", ErrAbort, err)
 }
 
 // HTTPStatusRetryable reports whether an HTTP status should be retried.

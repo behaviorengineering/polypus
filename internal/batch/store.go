@@ -113,7 +113,7 @@ func (s *DiskStore) GetFile(id string) (FileRecord, error) {
 
 func (s *DiskStore) readFileMeta(id string) (FileRecord, error) {
 	metaPath := filepath.Join(s.root, fileMetaDir, id+".json")
-	raw, err := os.ReadFile(metaPath)
+	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
 		if os.IsNotExist(err) {
 			return FileRecord{}, derrors.New(derrors.CodeNotFound, "batch.GetFile", "file not found")
@@ -139,7 +139,7 @@ func (s *DiskStore) ReadFileContent(id string) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	contentPath := filepath.Join(s.root, fileContentDir, id)
-	raw, err := os.ReadFile(contentPath)
+	raw, err := os.ReadFile(contentPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, derrors.New(derrors.CodeNotFound, "batch.ReadFileContent", "file not found")
@@ -259,7 +259,7 @@ func (s *DiskStore) GetBatch(id string) (BatchMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	metaPath := filepath.Join(s.root, batchMetaDir, id+".json")
-	raw, err := os.ReadFile(metaPath)
+	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
 		if os.IsNotExist(err) {
 			return BatchMeta{}, derrors.New(derrors.CodeNotFound, "batch.GetBatch", "batch not found")
@@ -303,7 +303,7 @@ func (s *DiskStore) ListBatches() ([]BatchMeta, error) {
 
 func (s *DiskStore) readBatchMetaUnlocked(id string) (BatchMeta, error) {
 	metaPath := filepath.Join(s.root, batchMetaDir, id+".json")
-	raw, err := os.ReadFile(metaPath)
+	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
 		return BatchMeta{}, err
 	}

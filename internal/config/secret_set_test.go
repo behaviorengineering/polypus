@@ -22,7 +22,7 @@ backends:
     base_url: http://127.0.0.1:1322
     capabilities: [tts]
 `
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -50,7 +50,7 @@ backends:
     base_url: http://127.0.0.1:1322
     capabilities: [tts]
 `
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -70,7 +70,7 @@ func TestSetPolypusSecretWritesInjectedKeyring(t *testing.T) {
 secrets:
   - CF_AI_API_KEY
 `
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
@@ -90,7 +90,7 @@ secrets:
 func TestSetPolypusSecretDoesNotWriteUndeclared(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("secrets:\n  - CF_AI_API_KEY\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("secrets:\n  - CF_AI_API_KEY\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)

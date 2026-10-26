@@ -15,7 +15,7 @@ func TestParseUIProxiesOK(t *testing.T) {
 	if len(proxies) != 2 {
 		t.Fatalf("len %d", len(proxies))
 	}
-	// sorted longest prefix first (same length here, stable order)
+	// sorted longest prefix first (same length here, stable order).
 	if proxies[0].Path != "/hyperdx" && proxies[0].Path != "/phoenix" {
 		t.Fatalf("paths: %#v", proxies)
 	}

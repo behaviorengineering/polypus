@@ -20,7 +20,7 @@ func WithFileLock(path string, fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WithFileLock", "mkdir")
 	}
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WithFileLock", "open lock")
 	}

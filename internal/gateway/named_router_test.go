@@ -550,7 +550,7 @@ func TestParseNamedRouterModel(t *testing.T) {
 func writeConfig(t *testing.T, dir, content string) {
 	t.Helper()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("POLYPUS_CONFIG", path)

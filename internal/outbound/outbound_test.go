@@ -19,7 +19,7 @@ func TestRunMissingDeadline(t *testing.T) {
 }
 
 func TestRunNilContext(t *testing.T) {
-	var ctx context.Context // nil on purpose
+	var ctx context.Context // Nil on purpose.
 	err := Run(ctx, DepGitHub, func() error { return nil })
 	if err == nil || err.Error() != "outbound: context required" {
 		t.Fatalf("got %v", err)

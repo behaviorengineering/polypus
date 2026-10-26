@@ -2,7 +2,7 @@ package observability
 
 import "sync/atomic"
 
-var failureDumpDir atomic.Value // string
+var failureDumpDir atomic.Value // string.
 
 // SetFailureDumpDir records the active dump directory for debug fetch handlers.
 func SetFailureDumpDir(dir string) {
