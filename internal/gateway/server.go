@@ -372,23 +372,23 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "read body"))
 		return
 	}
-	model, err := extractChatModel(body)
+	req, err := parseChatRequest(body)
 	if err != nil {
 		h.writeHandlerError(w, err)
 		return
 	}
+	model := req.model
 
 	reg := h.router.Registry()
 	cfg := reg.Config()
-	vision := chatBodyHasVision(body)
 
 	if routerName, ok := parseNamedRouterModel(model); ok {
-		h.serveNamedRouterChat(w, r, body, model, routerName, vision)
+		h.serveNamedRouterChat(w, r, body, req, routerName)
 		return
 	}
 
 	var backendID, downstream string
-	if vision {
+	if req.vision {
 		backendID, downstream, err = reg.ResolveVision(model)
 	} else {
 		if cfg.EffectiveChatBackend() == "" {
@@ -405,40 +405,16 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 		h.writeModelNotAllowed(w, model)
 		return
 	}
-	backendURL, ok := reg.BackendURL(backendID)
-	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveChatCompletions", errBackendNotFound).
-			With("backend", backendID))
-		return
-	}
-	backend, ok := reg.Backend(backendID)
-	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveChatCompletions", errBackendNotFound).
-			With("backend", backendID))
-		return
-	}
-	backendAuth, authErr := mustBackendAuth(backend)
-	if authErr != nil {
-		h.writeHandlerError(w, authErr)
-		return
-	}
-	rewritten, err := rewriteChatModel(body, downstream)
+	t, err := h.resolveTarget("gateway.serveChatCompletions", backendID, downstream)
 	if err != nil {
 		h.writeHandlerError(w, err)
 		return
 	}
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
-	dialUpstream := backendID
-	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
-	r = r.WithContext(ctx)
-	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, vision, chatBodyWantsThinking(body))
-	if err = h.proxyOrBifrostChat(w, r, backendID, downstream, backendURL, rewritten, hop, backendAuth, true); err != nil {
-		h.writeUpstreamDialError(w, err, "", string(backendID), nil)
-		return
-	}
+	h.dialChat(w, r, req, t, req.vision)
 }
 
-func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request, body []byte, model, routerName string, vision bool) {
+func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request, body []byte, req chatRequest, routerName string) {
+	model := req.model
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	nr, ok := lookupRouter(cfg, routerName)
@@ -448,16 +424,17 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 			With("router", routerName))
 		return
 	}
-	if msg := validateNamedRouterForChat(nr, model, vision); msg != "" {
+	if msg := validateNamedRouterForChat(nr, model, req.vision); msg != "" {
 		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", msg))
 		return
 	}
 
 	switch classifyNamedRouterRoute(nr.Route.Type) {
 	case dispatchPassthrough:
-		h.servePassthroughRouterChat(w, r, body, model, nr.Route.Target)
+		h.servePassthroughRouterChat(w, r, req, nr.Route.Target)
 	case dispatchSwitchyard:
-		h.serveSwitchyardRouterChat(w, r, body, model, routerName, cfg.EffectiveSwitchyardBaseURL())
+		// Switchyard picks the leaf itself, so it gets the body as the client sent it.
+		h.serveSwitchyardRouterChat(w, r, body, req, routerName, cfg.EffectiveSwitchyardBaseURL())
 	case dispatchUnknown:
 		fallthrough
 	default:
@@ -467,51 +444,26 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.Request, body []byte, model, target string) {
-	reg := h.router.Registry()
-	backendID, downstream, resolveErr := reg.ResolveChat(target)
-	if resolveErr != nil {
-		h.writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.servePassthroughRouterChat", "resolve target"))
+func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.Request, req chatRequest, target string) {
+	backendID, downstream, err := h.router.Registry().ResolveChat(target)
+	if err != nil {
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.servePassthroughRouterChat", "resolve target"))
 		return
 	}
 	if !h.ensureModelAllowed(backendID, target) {
 		h.writeModelNotAllowed(w, target)
 		return
 	}
-	backendURL, ok := reg.BackendURL(backendID)
-	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.servePassthroughRouterChat", errBackendNotFound).
-			With("backend", backendID))
+	t, err := h.resolveTarget("gateway.servePassthroughRouterChat", backendID, downstream)
+	if err != nil {
+		h.writeHandlerError(w, err)
 		return
 	}
-	backend, ok := reg.Backend(backendID)
-	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.servePassthroughRouterChat", errBackendNotFound).
-			With("backend", backendID))
-		return
-	}
-	backendAuth, authErr := mustBackendAuth(backend)
-	if authErr != nil {
-		h.writeHandlerError(w, authErr)
-		return
-	}
-	rewritten, rewriteErr := rewriteChatModel(body, downstream)
-	if rewriteErr != nil {
-		h.writeHandlerError(w, rewriteErr)
-		return
-	}
-	var err error
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", model, backendID, backendURL, downstream)
-	dialUpstream := backendID
-	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
-	r = r.WithContext(ctx)
-	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, chatBodyWantsThinking(body))
-	if err = h.proxyOrBifrostChat(w, r, backendID, downstream, backendURL, rewritten, hop, backendAuth, true); err != nil {
-		h.writeUpstreamDialError(w, err, "", string(backendID), nil)
-	}
+	h.dialChat(w, r, req, t, false)
 }
 
-func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Request, body []byte, model, routerName, switchyardURL string) {
+func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Request, body []byte, req chatRequest, routerName, switchyardURL string) {
+	model := req.model
 	var err error
 	ctx, span := observability.StartRouterSpan(r.Context(), "polypus.router", model, routerName, switchyardURL)
 	dialUpstream := upstream.NameSwitchyard
@@ -527,6 +479,7 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 			client:                    h.client,
 			hop:                       hop,
 			streamIdle:                h.timeouts.ResolveStreamIdle(upstream.NameSwitchyard),
+			stream:                    req.stream,
 			recordRouterSelectedModel: true,
 			log:                       h.log,
 		})
@@ -644,23 +597,12 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		h.writeModelNotAllowed(w, model)
 		return
 	}
-	backendURL, ok := reg.BackendURL(backendID)
-	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveEmbeddings", errBackendNotFound).
-			With("backend", backendID))
+	t, err := h.resolveTarget("gateway.serveEmbeddings", backendID, downstream)
+	if err != nil {
+		h.writeHandlerError(w, err)
 		return
 	}
-	backend, ok := reg.Backend(backendID)
-	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveEmbeddings", errBackendNotFound).
-			With("backend", backendID))
-		return
-	}
-	backendAuth, authErr := mustBackendAuth(backend)
-	if authErr != nil {
-		h.writeHandlerError(w, authErr)
-		return
-	}
+	backendURL, backendAuth := t.url, t.auth
 	rewritten, err := rewriteEmbedModel(body, downstream)
 	if err != nil {
 		h.writeHandlerError(w, err)

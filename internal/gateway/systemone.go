@@ -55,16 +55,10 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		h.writeModelNotAllowed(w, publicModel)
 		return
 	}
-	backend, ok := reg.Backend(backendID)
-	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveSystemOne", errBackendNotFound).
-			With("backend", backendID))
-		return
-	}
-	backendURL, ok := reg.BackendURL(backendID)
-	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveSystemOne", errBackendNotFound).
-			With("backend", backendID))
+	// The credential is resolved later, only on the path that sends one.
+	backend, backendURL, err := h.lookupBackend("gateway.serveSystemOne", backendID)
+	if err != nil {
+		h.writeHandlerError(w, err)
 		return
 	}
 

@@ -7,42 +7,52 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
+	"github.com/behaviorengineering/polypus/internal/observability"
 )
+
+// dialChat encodes the request for its target and sends it, answering the client
+// itself on failure. vision picks the vision hop budget.
+func (h chatHandler) dialChat(w http.ResponseWriter, r *http.Request, req chatRequest, t backendTarget, vision bool) {
+	body, err := req.outbound(t.downstream, t.backend.Extension)
+	if err != nil {
+		h.writeHandlerError(w, err)
+		return
+	}
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", req.model, t.id, t.url, t.downstream)
+	defer func() { observability.EndDialSpan(span, err, t.id) }()
+	r = r.WithContext(ctx)
+	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), t.id, vision, req.thinking)
+	if err = h.proxyOrBifrostChat(w, r, t, body, req.stream, hop); err != nil {
+		h.writeUpstreamDialError(w, err, "", t.id, nil)
+	}
+}
 
 // proxyOrBifrostChat sends leaf chat via Bifrost when the backend is registered;
 // otherwise falls back to the OpenAI HTTP proxy.
-func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, backendID, downstream, backendURL string, body []byte, hop time.Duration, backendAuth string, patchThinking bool) error {
-	thinkingExtension := ""
-	if patchThinking {
-		if b, ok := h.router.Registry().Backend(backendID); ok {
-			thinkingExtension = b.Extension
-		}
-		if patched, ok := applyChatThinking(body, thinkingExtension, downstream); ok {
-			body = patched
-		}
-	}
-	return h.upstreams.Execute(backendID, func() error {
-		if !h.router.UsesBifrost(backendID) {
+func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, t backendTarget, body []byte, stream bool, hop time.Duration) error {
+	return h.upstreams.Execute(t.id, func() error {
+		if !h.router.UsesBifrost(t.id) {
 			return proxyChat(w, r, body, chatDial{
-				backendURL:    backendURL,
-				client:        h.client,
-				hop:           hop,
-				streamIdle:    h.timeouts.ResolveStreamIdle(backendID),
-				backendAuth:   backendAuth,
-				thinkingModel: downstream,
-				log:           h.log,
+				backendURL:  t.url,
+				client:      h.client,
+				hop:         hop,
+				streamIdle:  h.timeouts.ResolveStreamIdle(t.id),
+				stream:      stream,
+				backendAuth: t.auth,
+				log:         h.log,
 			})
 		}
-		return h.bifrostChatResponse(w, r, backendID, downstream, body, hop)
+		return h.bifrostChatResponse(w, r, t.id, t.downstream, body, stream, hop)
 	})
 }
 
 // bifrostChatResponse dials chat through Bifrost (stream or non-stream).
-func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request, backendID, model string, body []byte, hop time.Duration) error {
-	if chatBodyIsStream(body) {
+func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request, backendID, model string, body []byte, stream bool, hop time.Duration) error {
+	if stream {
 		chunks, errCh, err := h.router.ChatCompletionStreamRaw(r.Context(), backendID, model, body)
 		if err != nil {
 			return gatewayErr(err, "gateway.bifrostChatResponse", "stream").With("backend", backendID)

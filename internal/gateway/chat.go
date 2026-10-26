@@ -51,70 +51,6 @@ func streamSafeClient(client *http.Client) *http.Client {
 	return &http.Client{Transport: client.Transport}
 }
 
-func extractChatModel(body []byte) (string, error) {
-	var payload struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", derrors.Wrap(err, derrors.CodeInvalid, "gateway.extractChatModel", "invalid json")
-	}
-	model := strings.TrimSpace(payload.Model)
-	if model == "" {
-		return "", derrors.New(derrors.CodeInvalid, "gateway.extractChatModel", "model required")
-	}
-	return model, nil
-}
-
-func rewriteChatModel(body []byte, model string) ([]byte, error) {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteChatModel", "invalid json")
-	}
-	payload[keyModel] = model
-	out, err := json.Marshal(payload)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteChatModel", "marshal")
-	}
-	return out, nil
-}
-
-func chatBodyIsStream(body []byte) bool {
-	var payload struct {
-		Stream bool `json:"stream"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return false
-	}
-	return payload.Stream
-}
-
-func chatBodyHasVision(body []byte) bool {
-	var payload struct {
-		Messages []struct {
-			Content any `json:"content"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return false
-	}
-	for _, msg := range payload.Messages {
-		parts, ok := msg.Content.([]any)
-		if !ok {
-			continue
-		}
-		for _, part := range parts {
-			m, ok := part.(map[string]any)
-			if !ok {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(fmt.Sprint(m["type"])), "image_url") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // chatCompletionsURL joins base (with or without trailing /v1 or /v1/openai) to the OpenAI chat path.
 func chatCompletionsURL(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
@@ -154,10 +90,8 @@ type chatDial struct {
 	// streamIdle is the longest gap allowed between stream chunks.
 	streamIdle  time.Duration
 	backendAuth string
-	// patchThinking applies the thinking defaults for thinkingModel.
-	patchThinking     bool
-	thinkingExtension string
-	thinkingModel     string
+	// stream is whether the body asks for SSE.
+	stream bool
 	// recordRouterSelectedModel tags the span with the model a router picked.
 	recordRouterSelectedModel bool
 	log                       *slog.Logger
@@ -167,13 +101,8 @@ func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) 
 	if d.log == nil {
 		return derrors.New(derrors.CodeInternal, "gateway.proxyChat", "chat dial needs a logger")
 	}
-	if d.patchThinking {
-		if patched, ok := applyChatThinking(body, d.thinkingExtension, d.thinkingModel); ok {
-			body = patched
-		}
-	}
 	target := chatCompletionsURL(d.backendURL)
-	streaming := chatBodyIsStream(body)
+	streaming := d.stream
 	observability.RecordProxyIO(r.Context(), target, streaming, 0, -1)
 	hop := hopBudget(d.hop, config.DefaultTimeouts().Chat)
 	// Non-stream: the hop bounds the whole call. Stream: the hop bounds the wait for
@@ -312,12 +241,9 @@ func copyChatResponseHeaders(w http.ResponseWriter, header http.Header) {
 	}
 }
 
-// applyChatThinking maps inbound OpenAI reasoning to backend-specific outbound fields.
-func applyChatThinking(body []byte, extension string, model string) ([]byte, bool) {
-	var root map[string]any
-	if err := json.Unmarshal(body, &root); err != nil {
-		return body, false
-	}
+// applyChatThinkingRoot maps inbound OpenAI reasoning to the backend's own fields in
+// root, and reports whether it changed anything.
+func applyChatThinkingRoot(root map[string]any, extension string, model string) bool {
 	wants := chatMapWantsThinking(root)
 	model = strings.ToLower(strings.TrimSpace(model))
 	if model == "" {
@@ -334,14 +260,7 @@ func applyChatThinking(body []byte, extension string, model string) ([]byte, boo
 	default:
 		changed = stripCloudflareThinkingFields(root)
 	}
-	if !changed {
-		return body, false
-	}
-	out, err := json.Marshal(root)
-	if err != nil {
-		return body, false
-	}
-	return out, true
+	return changed
 }
 
 func stripCloudflareThinkingFields(root map[string]any) bool {
@@ -560,14 +479,6 @@ func jsonStringField(raw json.RawMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(s)
-}
-
-func chatBodyWantsThinking(body []byte) bool {
-	var root map[string]any
-	if err := json.Unmarshal(body, &root); err != nil {
-		return false
-	}
-	return chatMapWantsThinking(root)
 }
 
 func chatMapReasoningEffort(root map[string]any) string {

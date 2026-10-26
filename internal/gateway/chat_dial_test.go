@@ -39,7 +39,7 @@ func TestProxyChatStreamWithoutHeadersHitsTheHop(t *testing.T) {
 	t.Cleanup(func() { close(release); srv.Close() })
 	start := time.Now()
 	err := proxyChat(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", nil),
-		[]byte(`{"model":"m","stream":true,"messages":[]}`), chatDial{backendURL: srv.URL, hop: 100 * time.Millisecond, log: testShared.log})
+		[]byte(`{"model":"m","stream":true,"messages":[]}`), chatDial{backendURL: srv.URL, hop: 100 * time.Millisecond, stream: true, log: testShared.log})
 	if err == nil || time.Since(start) > 3*time.Second {
 		t.Fatalf("a stream with no headers must fail at the hop: err=%v after %s", err, time.Since(start))
 	}
@@ -62,7 +62,7 @@ func TestProxyChatStreamThatStallsIsCutOff(t *testing.T) {
 	start := time.Now()
 	err := proxyChat(rec, httptest.NewRequest(http.MethodPost, "/", nil),
 		[]byte(`{"model":"m","stream":true,"messages":[]}`),
-		chatDial{backendURL: srv.URL, hop: 5 * time.Second, streamIdle: 150 * time.Millisecond, log: testShared.log})
+		chatDial{backendURL: srv.URL, hop: 5 * time.Second, streamIdle: 150 * time.Millisecond, stream: true, log: testShared.log})
 	if err == nil || time.Since(start) > 3*time.Second {
 		t.Fatalf("a stalled stream must be cut off at the idle limit: err=%v after %s", err, time.Since(start))
 	}
