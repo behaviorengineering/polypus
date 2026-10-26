@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
@@ -19,6 +21,15 @@ const (
 // A placeholder whose variable is unset or blank is an error, so a config value
 // never loads with a silent hole (".../accounts//ai/v1").
 func ExpandEnv(s string) (string, error) {
+	out, err := expandEnv(s)
+	if err != nil {
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.ExpandEnv", "expand")
+	}
+	return out, nil
+}
+
+// expandEnv is ExpandEnv before its error is typed at the package boundary.
+func expandEnv(s string) (string, error) {
 	var missing []string
 	out := os.Expand(s, func(key string) string {
 		v := strings.TrimSpace(os.Getenv(key))

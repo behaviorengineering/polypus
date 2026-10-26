@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/behaviorengineering/polypus/internal/statefile"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -14,6 +16,15 @@ import (
 // Render builds Switchyard routes.toml from Polypus router config.
 // Passthrough routers are omitted; composed stage_router, llm_classifier and fallback entries are emitted.
 func Render(cfg config.RouterConfig, polypusBaseURL string) ([]byte, error) {
+	out, err := render(cfg, polypusBaseURL)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "switchyard.Render", "render routes")
+	}
+	return out, nil
+}
+
+// render is Render before its error is typed at the package boundary.
+func render(cfg config.RouterConfig, polypusBaseURL string) ([]byte, error) {
 	polypusBaseURL = normalizePolypusBaseURL(polypusBaseURL)
 	var b strings.Builder
 	b.WriteString("schema_version = 1\n\n")
@@ -217,6 +228,15 @@ func WriteConfigIfNeeded(cfg config.RouterConfig, polypusBaseURL string) (string
 
 // WriteConfig renders and writes Switchyard TOML to cfg.Switchyard.ConfigPath.
 func WriteConfig(cfg config.RouterConfig, polypusBaseURL string) (string, error) {
+	out, err := writeConfig(cfg, polypusBaseURL)
+	if err != nil {
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "switchyard.WriteConfig", "write routes")
+	}
+	return out, nil
+}
+
+// writeConfig is WriteConfig before its error is typed at the package boundary.
+func writeConfig(cfg config.RouterConfig, polypusBaseURL string) (string, error) {
 	out, err := Render(cfg, polypusBaseURL)
 	if err != nil {
 		return "", err

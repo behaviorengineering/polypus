@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 	"gopkg.in/yaml.v3"
 )
@@ -250,6 +252,15 @@ func parseCapabilityBackend(file capabilityBackendFile) CapabilityBackend {
 
 // LoadRouterConfig builds routing from config file and POLYPUS_* env.
 func LoadRouterConfig(opts ServeOptions) (RouterConfig, error) {
+	out, err := loadRouterConfig(opts)
+	if err != nil {
+		return RouterConfig{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.LoadRouterConfig", "router config")
+	}
+	return out, nil
+}
+
+// loadRouterConfig is LoadRouterConfig before its error is typed at the package boundary.
+func loadRouterConfig(opts ServeOptions) (RouterConfig, error) {
 	cfg, fromFile, err := loadRouterFile(opts)
 	if err != nil {
 		return RouterConfig{}, err

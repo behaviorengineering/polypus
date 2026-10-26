@@ -27,6 +27,15 @@ type AllowOverlayBackend struct {
 // ResolveModelsAllowOverlayPath picks the overlay file path.
 // Order: POLYPUS_MODELS_ALLOW_OVERLAY, then $XDG_STATE_HOME/polypus/models-allow-overlay.yaml.
 func ResolveModelsAllowOverlayPath() (string, error) {
+	out, err := resolveModelsAllowOverlayPath()
+	if err != nil {
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), "config.ResolveModelsAllowOverlayPath", "state dir")
+	}
+	return out, nil
+}
+
+// resolveModelsAllowOverlayPath is ResolveModelsAllowOverlayPath before its error is typed at the package boundary.
+func resolveModelsAllowOverlayPath() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("POLYPUS_MODELS_ALLOW_OVERLAY")); path != "" {
 		return path, nil
 	}
@@ -40,6 +49,15 @@ func ResolveModelsAllowOverlayPath() (string, error) {
 // ResolveAdminKeysPath picks the admin API key store path.
 // Order: POLYPUS_ADMIN_KEYS, then $XDG_STATE_HOME/polypus/admin-api-keys.json.
 func ResolveAdminKeysPath() (string, error) {
+	out, err := resolveAdminKeysPath()
+	if err != nil {
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), "config.ResolveAdminKeysPath", "state dir")
+	}
+	return out, nil
+}
+
+// resolveAdminKeysPath is ResolveAdminKeysPath before its error is typed at the package boundary.
+func resolveAdminKeysPath() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("POLYPUS_ADMIN_KEYS")); path != "" {
 		return path, nil
 	}
@@ -52,6 +70,15 @@ func ResolveAdminKeysPath() (string, error) {
 
 // LoadAllowOverlay reads overlay YAML. Missing file returns empty overlay, not an error.
 func LoadAllowOverlay(path string) (AllowOverlayFile, error) {
+	out, err := loadAllowOverlay(path)
+	if err != nil {
+		return AllowOverlayFile{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.LoadAllowOverlay", "allow overlay")
+	}
+	return out, nil
+}
+
+// loadAllowOverlay is LoadAllowOverlay before its error is typed at the package boundary.
+func loadAllowOverlay(path string) (AllowOverlayFile, error) {
 	if strings.TrimSpace(path) == "" {
 		return AllowOverlayFile{}, nil
 	}
@@ -74,6 +101,14 @@ func LoadAllowOverlay(path string) (AllowOverlayFile, error) {
 
 // ApplyAllowOverlay unions overlay allow entries into rcfg for gated backends only.
 func ApplyAllowOverlay(rcfg *RouterConfig, path string) error {
+	if err := applyAllowOverlay(rcfg, path); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.ApplyAllowOverlay", "apply allow overlay")
+	}
+	return nil
+}
+
+// applyAllowOverlay is ApplyAllowOverlay before its error is typed at the package boundary.
+func applyAllowOverlay(rcfg *RouterConfig, path string) error {
 	if rcfg == nil {
 		return derrors.New(derrors.CodeInvalid, "config.ApplyAllowOverlay", "nil RouterConfig")
 	}
@@ -108,6 +143,14 @@ func ApplyAllowOverlay(rcfg *RouterConfig, path string) error {
 
 // OverlayAdd appends a downstream model id to the overlay file (overlay-only extras).
 func OverlayAdd(path, backendID, downstream string) error {
+	if err := overlayAdd(path, backendID, downstream); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "config.OverlayAdd", "overlay add")
+	}
+	return nil
+}
+
+// overlayAdd is OverlayAdd before its error is typed at the package boundary.
+func overlayAdd(path, backendID, downstream string) error {
 	backendID = strings.TrimSpace(backendID)
 	downstream = strings.TrimSpace(NormalizeDownstream(backendID, downstream))
 	if backendID == "" || downstream == "" {
@@ -139,6 +182,14 @@ func OverlayAdd(path, backendID, downstream string) error {
 
 // OverlayRemove drops one downstream model id from the overlay file (no-op if missing).
 func OverlayRemove(path, backendID, downstream string) error {
+	if err := overlayRemove(path, backendID, downstream); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "config.OverlayRemove", "overlay remove")
+	}
+	return nil
+}
+
+// overlayRemove is OverlayRemove before its error is typed at the package boundary.
+func overlayRemove(path, backendID, downstream string) error {
 	backendID = strings.TrimSpace(backendID)
 	downstream = strings.TrimSpace(NormalizeDownstream(backendID, downstream))
 	if backendID == "" || downstream == "" {

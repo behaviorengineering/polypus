@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,6 +38,15 @@ func (p ProcessFlags) MLXSet() bool {
 // LoadProcessFlags reads processes.* from the resolved router config file.
 // Missing config file yields zero ProcessFlags (all keys unset).
 func LoadProcessFlags() (ProcessFlags, error) {
+	out, err := loadProcessFlags()
+	if err != nil {
+		return ProcessFlags{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.LoadProcessFlags", "process flags")
+	}
+	return out, nil
+}
+
+// loadProcessFlags is LoadProcessFlags before its error is typed at the package boundary.
+func loadProcessFlags() (ProcessFlags, error) {
 	path, err := ResolveConfigPathWithError()
 	if err != nil {
 		return ProcessFlags{}, fmt.Errorf("process flags: %w", err)

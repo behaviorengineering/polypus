@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
@@ -27,6 +29,15 @@ type ServeOptions struct {
 // LoadServeOptions reads POLYPUS_* and POLYPUS_BACKEND_URL / POLYPUS_MLX_URL from the environment.
 // A set but invalid port is an error rather than a silent fall back to the default.
 func LoadServeOptions() (ServeOptions, error) {
+	out, err := loadServeOptions()
+	if err != nil {
+		return ServeOptions{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.LoadServeOptions", "serve options")
+	}
+	return out, nil
+}
+
+// loadServeOptions is LoadServeOptions before its error is typed at the package boundary.
+func loadServeOptions() (ServeOptions, error) {
 	host := strings.TrimSpace(os.Getenv("POLYPUS_HOST"))
 	if host == "" {
 		host = DefaultHost
