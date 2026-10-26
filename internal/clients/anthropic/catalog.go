@@ -49,6 +49,8 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	cache      *catalog.Cache
+	backendID  string             // scopes the outbound breaker to this backend.
+	policies   *outbound.Policies // nil: the process default.
 }
 
 // NewClient builds an Anthropic catalog client from a backend definition.
@@ -158,7 +160,7 @@ func (c *Client) fetchPage(ctx context.Context, afterID string) (anthropicModelP
 	req.Header.Set("anthropic-version", apiVersion)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := outbound.Do(ctx, outbound.DepAnthropic, c.httpClient, req)
+	resp, err := c.policies.Do(ctx, outbound.Scoped(outbound.DepAnthropic, c.backendID), c.httpClient, req)
 	if err != nil {
 		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "anthropic models", "fetch")
 	}

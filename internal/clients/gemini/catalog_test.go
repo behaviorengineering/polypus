@@ -122,8 +122,8 @@ func TestGeminiListModelsUnauthorized(t *testing.T) {
 	}
 }
 
-func TestGeminiGetClientProcessScoped(t *testing.T) {
-	resetClientCacheForTest()
+func TestGeminiClientsCacheOneInstance(t *testing.T) {
+	cs := &Clients{}
 	t.Setenv("GEMINI_TEST_KEY", "secret")
 	b := config.BackendDef{
 		ID:        "gemini_studio",
@@ -131,11 +131,11 @@ func TestGeminiGetClientProcessScoped(t *testing.T) {
 		Extension: config.ExtensionGemini,
 		Auth:      config.BackendAuth{BearerEnv: "GEMINI_TEST_KEY"},
 	}
-	c1, err := GetClient(b)
+	c1, err := cs.Get(b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c2, err := GetClient(b)
+	c2, err := cs.Get(b)
 	if err != nil {
 		t.Fatal(err)
 	}

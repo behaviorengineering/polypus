@@ -45,7 +45,8 @@ func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
 	}
 	cfGet := co.cfGet
 	if cfGet == nil {
-		cfGet = cloudflare.GetClient
+		// The gateway passes its own cache; a standalone client builds one.
+		cfGet = new(cloudflare.Clients).Get
 	}
 	account := NewAccount(cfg)
 	var plugins []schemas.LLMPlugin

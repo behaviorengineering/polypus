@@ -154,3 +154,21 @@ func TestDoNeverDialsWithoutDeadline(t *testing.T) {
 		t.Fatal("should not dial")
 	}
 }
+
+func TestBreakersArePerPolicySetAndPerBackend(t *testing.T) {
+	a, b := NewPolicies(), NewPolicies()
+	team := Scoped(DepAnthropic, "claude_team")
+	personal := Scoped(DepAnthropic, "claude_personal")
+	if a.breakerFor(team) == nil || a.breakerFor(team) != a.breakerFor(team) {
+		t.Fatal("a scoped provider dep gets one stable breaker")
+	}
+	if a.breakerFor(team) == a.breakerFor(personal) {
+		t.Fatal("two backends of one provider must not share a breaker")
+	}
+	if a.breakerFor(team) == b.breakerFor(team) {
+		t.Fatal("two policy sets (two gateways, two tests) must not share a breaker")
+	}
+	if a.breakerFor(Scoped(DepSmoke, "x")) != nil {
+		t.Fatal("deps without a breaker stay without one when scoped")
+	}
+}

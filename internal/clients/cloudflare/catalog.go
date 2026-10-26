@@ -47,6 +47,9 @@ type Client struct {
 	ttsModel string
 	sttModel string
 	voice    string
+
+	backendID string             // scopes the outbound breaker to this backend.
+	policies  *outbound.Policies // nil: the process default.
 }
 
 // NewClient builds an uncached Cloudflare extension client from a remote backend
@@ -207,7 +210,7 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := outbound.Do(ctx, outbound.DepCloudflare, c.httpClient, req)
+	resp, err := c.policies.Do(ctx, c.dep(), c.httpClient, req)
 	if err != nil {
 		return nil, 0, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "cloudflare models", "fetch")
 	}

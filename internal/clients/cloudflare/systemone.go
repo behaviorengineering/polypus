@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 // SystemOne calls Workers AI typesafe/jev (or another systemone-capable model).
@@ -73,7 +72,7 @@ func (c *Client) doSystemOne(ctx context.Context, req *http.Request) (*http.Resp
 	if c == nil || c.speechClient == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.doSystemOne", "not configured")
 	}
-	resp, err := outbound.DoOnce(ctx, outbound.DepCloudflare, c.speechClient, req)
+	resp, err := c.policies.DoOnce(ctx, c.dep(), c.speechClient, req)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.doSystemOne", "post")
 	}

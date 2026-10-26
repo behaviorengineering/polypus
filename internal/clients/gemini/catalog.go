@@ -35,6 +35,8 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	cache      *catalog.Cache
+	backendID  string             // scopes the outbound breaker to this backend.
+	policies   *outbound.Policies // nil: the process default.
 }
 
 // NewClient builds a Gemini catalog client from a backend definition.
@@ -109,7 +111,7 @@ func (c *Client) fetch(ctx context.Context) ([]Model, error) {
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := outbound.Do(ctx, outbound.DepGemini, c.httpClient, req)
+	resp, err := c.policies.Do(ctx, outbound.Scoped(outbound.DepGemini, c.backendID), c.httpClient, req)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "gemini models", "fetch")
 	}

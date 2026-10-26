@@ -96,31 +96,66 @@ func validateCtx(ctx context.Context) error {
 	return nil
 }
 
-var (
-	breakerMu sync.Mutex
-	breakers  = map[string]failsafe.Policy[any]{}
-)
+// Policies holds the circuit breakers for a set of outbound dependencies. A gateway
+// builds its own, so tests and gateways never share breaker state; calls without
+// one use the process default.
+type Policies struct {
+	mu       sync.Mutex
+	breakers map[string]failsafe.Policy[any]
+}
 
-func breakerFor(name string) failsafe.Policy[any] {
-	switch name {
+// NewPolicies returns an empty policy set.
+func NewPolicies() *Policies {
+	return &Policies{breakers: map[string]failsafe.Policy[any]{}}
+}
+
+// defaultPolicies serves the package-level Run, Do and DoOnce.
+var defaultPolicies = NewPolicies()
+
+// Scoped names one instance of a dependency, such as one backend of a provider kind,
+// so it gets its own breaker: Scoped(DepAnthropic, "claude_team").
+func Scoped(dep, scope string) string {
+	if strings.TrimSpace(scope) == "" {
+		return dep
+	}
+	return dep + "/" + scope
+}
+
+// depOf is the dependency kind of a name built by Scoped.
+func depOf(name string) string {
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		return name[:i]
+	}
+	return name
+}
+
+func (p *Policies) orDefault() *Policies {
+	if p == nil {
+		return defaultPolicies
+	}
+	return p
+}
+
+func (p *Policies) breakerFor(name string) failsafe.Policy[any] {
+	switch depOf(name) {
 	case DepGitHub, DepGHCR, DepRegistry, DepCloudflare, DepGemini, DepAnthropic, DepOpenRouter:
 	default:
 		return nil
 	}
-	breakerMu.Lock()
-	defer breakerMu.Unlock()
-	if p, ok := breakers[name]; ok {
-		return p
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if b, ok := p.breakers[name]; ok {
+		return b
 	}
-	p := circuitbreaker.NewBuilder[any]().
+	b := circuitbreaker.NewBuilder[any]().
 		HandleIf(func(_ any, err error) bool {
 			return retryableErr(name, err)
 		}).
 		WithFailureThreshold(5).
 		WithDelay(30 * time.Second).
 		Build()
-	breakers[name] = p
-	return p
+	p.breakers[name] = b
+	return b
 }
 
 func retryableErr(name string, err error) bool {
@@ -134,7 +169,7 @@ func retryableErr(name string, err error) bool {
 	if strings.Contains(msg, "http status 429") || strings.Contains(msg, "http status 5") {
 		return true
 	}
-	switch name {
+	switch depOf(name) {
 	case DepRegistry, DepDockerDaemon:
 		return strings.Contains(msg, "timeout") ||
 			strings.Contains(msg, "connection") ||
@@ -177,32 +212,50 @@ func retryPolicyFor(name string) failsafe.Policy[any] {
 		Build()
 }
 
-func policies(name string) []failsafe.Policy[any] {
-	return append(breakerOnly(name), retryPolicyFor(name))
+func (p *Policies) policies(name string) []failsafe.Policy[any] {
+	return append(p.breakerOnly(name), retryPolicyFor(name))
 }
 
 // breakerOnly is the policy set for a request that must not be retried.
-func breakerOnly(name string) []failsafe.Policy[any] {
-	if b := breakerFor(name); b != nil {
+func (p *Policies) breakerOnly(name string) []failsafe.Policy[any] {
+	if b := p.breakerFor(name); b != nil {
 		return []failsafe.Policy[any]{b}
 	}
 	return nil
 }
 
-// Run executes fn under outbound retry (and breaker when name is a shared remote dep).
+// Run executes fn under outbound retry (and breaker when name is a shared remote dep),
+// with the process default policies.
 func Run(ctx context.Context, name string, fn func() error) error {
+	return defaultPolicies.Run(ctx, name, fn)
+}
+
+// Do sends req under the process default policies; see Policies.Do.
+func Do(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
+	return defaultPolicies.Do(ctx, name, client, req)
+}
+
+// DoOnce sends req once under the process default policies; see Policies.DoOnce.
+func DoOnce(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
+	return defaultPolicies.DoOnce(ctx, name, client, req)
+}
+
+// Run executes fn under retry and the breaker for name.
+func (p *Policies) Run(ctx context.Context, name string, fn func() error) error {
 	if err := validateCtx(ctx); err != nil {
 		return err
 	}
-	return failsafe.With(policies(name)...).
+	return failsafe.With(p.orDefault().policies(name)...).
 		WithContext(ctx).
 		Run(fn)
 }
 
-// Do performs one HTTP request under outbound policies. req is cloned per attempt.
-// When every attempt ends in an HTTP status (permanent, or retryable with retries
-// spent), Do returns the last response with a nil error for the caller to map.
-func Do(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
+// Do performs one HTTP request under retry and the breaker for name. req is cloned
+// per attempt. When every attempt ends in an HTTP status (permanent, or retryable
+// with retries spent), Do returns the last response with a nil error for the caller
+// to map.
+func (p *Policies) Do(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
+	p = p.orDefault()
 	if err := validateCtx(ctx); err != nil {
 		return nil, err
 	}
@@ -212,11 +265,11 @@ func Do(ctx context.Context, name string, client *http.Client, req *http.Request
 	if req == nil {
 		return nil, derrors.New(derrors.CodeInvalid, "outbound", "nil request")
 	}
-	pol := policies(name)
+	pol := p.policies(name)
 	if !replayable(req) {
 		// A body without GetBody is consumed by the first attempt; retrying would
 		// send it empty, so this request gets one attempt.
-		pol = breakerOnly(name)
+		pol = p.breakerOnly(name)
 	}
 	var resp *http.Response
 	err := failsafe.With(pol...).
@@ -263,7 +316,8 @@ func Do(ctx context.Context, name string, client *http.Client, req *http.Request
 // DoOnce sends req exactly once under the breaker for name, with no retry. Use it
 // for paid or non-idempotent calls (inference, batch submit), whose upstream status
 // and Retry-After the caller acts on. Like Do, it fails closed without a deadline.
-func DoOnce(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
+func (p *Policies) DoOnce(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
+	p = p.orDefault()
 	if err := validateCtx(ctx); err != nil {
 		return nil, err
 	}
@@ -274,7 +328,7 @@ func DoOnce(ctx context.Context, name string, client *http.Client, req *http.Req
 		return nil, derrors.New(derrors.CodeInvalid, "outbound", "nil request")
 	}
 	var resp *http.Response
-	err := failsafe.With(breakerOnly(name)...).
+	err := failsafe.With(p.breakerOnly(name)...).
 		WithContext(ctx).
 		Run(func() error {
 			r, err := client.Do(req.WithContext(ctx)) //nolint:gosec // G704: targets are operator-configured backend URLs

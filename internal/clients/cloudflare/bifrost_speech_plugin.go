@@ -27,13 +27,13 @@ type runSpeechPlugin struct {
 }
 
 // NewRunSpeechPlugin returns a Bifrost LLMPlugin for CF /run speech.
-// lookup must be non-nil. get defaults to GetClient when nil.
+// lookup must be non-nil. get defaults to a fresh Clients cache when nil.
 func NewRunSpeechPlugin(lookup BackendLookup, get ClientGet) schemas.LLMPlugin {
 	if lookup == nil {
 		panic("cloudflare: NewRunSpeechPlugin(nil BackendLookup)")
 	}
 	if get == nil {
-		get = GetClient
+		get = new(Clients).Get
 	}
 	return &runSpeechPlugin{lookup: lookup, get: get}
 }

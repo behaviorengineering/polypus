@@ -5,16 +5,18 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
-var clients catalog.Registry[Client]
-
-func clientCacheKey(backendID, token, listURL string) string {
-	return backendID + "\x00" + token + "\x00" + listURL
+// Clients caches one catalog client per backend, credential and URL. A gateway owns
+// one; its clients share the gateway's outbound policies.
+type Clients struct {
+	Policies *outbound.Policies
+	reg      catalog.Registry[Client]
 }
 
-// GetClient returns a process-scoped Gemini catalog client for b.
-func GetClient(b config.BackendDef) (*Client, error) {
+// Get returns the cached client for b, building it on first use.
+func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
 	if !b.IsGeminiExtension() {
 		return nil, derrors.Wrap(errNotGeminiExtension, derrors.CodeInvalid, "gemini", "backend").With("backend", b.ID)
 	}
@@ -23,12 +25,14 @@ func GetClient(b config.BackendDef) (*Client, error) {
 		return nil, err
 	}
 	listURL := openAIModelsListURL(b.BaseURL)
-	return clients.Get(clientCacheKey(b.ID, token, listURL), func() (*Client, error) {
-		return newClient(listURL, token)
+	key := b.ID + "\x00" + token + "\x00" + listURL
+	return cs.reg.Get(key, func() (*Client, error) {
+		c, err := newClient(listURL, token)
+		if err != nil {
+			return nil, err
+		}
+		c.backendID = b.ID
+		c.policies = cs.Policies
+		return c, nil
 	})
-}
-
-// resetClientCacheForTest clears the process client cache (tests only).
-func resetClientCacheForTest() {
-	clients.Reset()
 }

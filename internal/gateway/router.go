@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
+	"github.com/behaviorengineering/polypus/internal/outbound"
+
 	"github.com/behaviorengineering/polypus/internal/batch/service"
 	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
@@ -74,6 +77,8 @@ type handlerOptions struct {
 	adminKeysPath string
 	clock         func() time.Time
 	claudeBatches service.ClaudeBatches
+	policies      *outbound.Policies
+	openRouterGet func(config.BackendDef) (*openrouter.Client, error)
 }
 
 // WithRouter injects a Router so tests can avoid bifrost.Init.
@@ -161,14 +166,22 @@ func (o *handlerOptions) fillDefaults() error {
 	if o.clock == nil {
 		o.clock = func() time.Time { return time.Now().UTC() }
 	}
+	// Each gateway owns its client caches and breakers (no process-wide state),
+	// and the router's speech plugin shares the Cloudflare cache.
+	if o.policies == nil {
+		o.policies = outbound.NewPolicies()
+	}
 	if o.cfGet == nil {
-		o.cfGet = cloudflare.GetClient
+		o.cfGet = (&cloudflare.Clients{Policies: o.policies}).Get
 	}
 	if o.geminiGet == nil {
-		o.geminiGet = gemini.GetClient
+		o.geminiGet = (&gemini.Clients{Policies: o.policies}).Get
 	}
 	if o.anthropicGet == nil {
-		o.anthropicGet = anthropic.GetClient
+		o.anthropicGet = (&anthropic.Clients{Policies: o.policies}).Get
+	}
+	if o.openRouterGet == nil {
+		o.openRouterGet = (&openrouter.Clients{Policies: o.policies}).Get
 	}
 	return nil
 }

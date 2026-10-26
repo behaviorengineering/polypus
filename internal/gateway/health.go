@@ -127,7 +127,7 @@ func probeBackend(ctx context.Context, b config.BackendDef, getCF CloudflareClie
 	if b.Remote {
 		if b.IsCloudflareExtension() {
 			if getCF == nil {
-				getCF = cloudflare.GetClient
+				getCF = new(cloudflare.Clients).Get
 			}
 			cf, err := getCF(b)
 			if err != nil {

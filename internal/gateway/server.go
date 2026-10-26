@@ -41,6 +41,7 @@ type shared struct {
 	cfGet         CloudflareClientGet
 	geminiGet     GeminiClientGet
 	anthropicGet  AnthropicClientGet
+	openRouterGet func(config.BackendDef) (*openrouter.Client, error)
 	batchStore    *batch.DiskStore
 	batches       *service.Service
 	claudeBatches service.ClaudeBatches
@@ -63,24 +64,15 @@ type (
 )
 
 func (s *shared) cloudflareClient(b config.BackendDef) (*cloudflare.Client, error) {
-	if s != nil && s.cfGet != nil {
-		return s.cfGet(b)
-	}
-	return cloudflare.GetClient(b)
+	return s.cfGet(b)
 }
 
 func (s *shared) geminiClient(b config.BackendDef) (*gemini.Client, error) {
-	if s != nil && s.geminiGet != nil {
-		return s.geminiGet(b)
-	}
-	return gemini.GetClient(b)
+	return s.geminiGet(b)
 }
 
 func (s *shared) anthropicClient(b config.BackendDef) (*anthropic.Client, error) {
-	if s != nil && s.anthropicGet != nil {
-		return s.anthropicGet(b)
-	}
-	return anthropic.GetClient(b)
+	return s.anthropicGet(b)
 }
 
 // NewHandler returns the public Polypus HTTP handler (*Gateway).
@@ -163,21 +155,22 @@ func newShared(opts config.ServeOptions, ho handlerOptions, rc Router, rcfg conf
 		return nil, err
 	}
 	sh := &shared{
-		opts:         opts,
-		router:       rc,
-		proxy:        proxy,
-		invCache:     newModelsInventoryCache(),
-		timeouts:     timeouts,
-		client:       newChatProxyClient(timeouts.Max),
-		upstreams:    upstream.NewBoard(),
-		cfGet:        ho.cfGet,
-		geminiGet:    ho.geminiGet,
-		anthropicGet: ho.anthropicGet,
-		batchStore:   batchStore,
-		batchNow:     ho.clock,
-		overlayPath:  ho.overlayPath,
-		adminKeys:    adminKeys,
-		uiMounts:     uiMounts,
+		opts:          opts,
+		router:        rc,
+		proxy:         proxy,
+		invCache:      newModelsInventoryCache(),
+		timeouts:      timeouts,
+		client:        newChatProxyClient(timeouts.Max),
+		upstreams:     upstream.NewBoard(),
+		cfGet:         ho.cfGet,
+		geminiGet:     ho.geminiGet,
+		anthropicGet:  ho.anthropicGet,
+		openRouterGet: ho.openRouterGet,
+		batchStore:    batchStore,
+		batchNow:      ho.clock,
+		overlayPath:   ho.overlayPath,
+		adminKeys:     adminKeys,
+		uiMounts:      uiMounts,
 	}
 	sh.claudeBatches = ho.claudeBatches
 	if client, ok := rc.(*router.Client); ok && sh.claudeBatches == nil {
@@ -205,7 +198,7 @@ func (s *shared) batchSubmitter(b config.BackendDef) (service.Submitter, error) 
 		}
 		return service.NewClaudeSubmitter(s.claudeBatches, b), nil
 	case b.IsOpenRouter():
-		return service.NewOpenRouterSubmitter(func() (*openrouter.Client, error) { return openrouter.GetClient(b) }), nil
+		return service.NewOpenRouterSubmitter(func() (*openrouter.Client, error) { return s.openRouterGet(b) }), nil
 	case b.IsCloudflareExtension():
 		return service.NewCloudflareSubmitter(func() (*cloudflare.Client, error) { return s.cloudflareClient(b) }, s.batchNowTime), nil
 	default:

@@ -98,6 +98,8 @@ type Client struct {
 	apiBase    string
 	apiKey     string
 	httpClient *http.Client
+	backendID  string             // scopes the outbound breaker to this backend.
+	policies   *outbound.Policies // nil: the process default.
 }
 
 // NewClient builds a batch client from an OpenRouter backend definition.
@@ -133,17 +135,28 @@ func apiBase(base string) string {
 	return base
 }
 
-var clients catalog.Registry[Client]
+// Clients caches one batch client per backend, credential and URL. A gateway owns
+// one; its clients share the gateway's outbound policies.
+type Clients struct {
+	Policies *outbound.Policies
+	reg      catalog.Registry[Client]
+}
 
-// GetClient returns a process-scoped batch client for b.
-func GetClient(b config.BackendDef) (*Client, error) {
+// Get returns the cached client for b, building it on first use.
+func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {
 		return nil, err
 	}
 	base := apiBase(b.BaseURL)
-	return clients.Get(b.ID+"\x00"+token+"\x00"+base, func() (*Client, error) {
-		return newClient(base, token)
+	return cs.reg.Get(b.ID+"\x00"+token+"\x00"+base, func() (*Client, error) {
+		c, err := newClient(base, token)
+		if err != nil {
+			return nil, err
+		}
+		c.backendID = b.ID
+		c.policies = cs.Policies
+		return c, nil
 	})
 }
 
@@ -222,11 +235,11 @@ func (c *Client) do(ctx context.Context, method, target string, payload []byte) 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	// A create is sent once (never submit a batch twice); a retrieve may retry.
-	send := outbound.Do
+	send := c.policies.Do
 	if method != http.MethodGet {
-		send = outbound.DoOnce
+		send = c.policies.DoOnce
 	}
-	resp, err := send(ctx, outbound.DepOpenRouter, c.httpClient, req)
+	resp, err := send(ctx, outbound.Scoped(outbound.DepOpenRouter, c.backendID), c.httpClient, req)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "openrouter.do", strings.ToLower(method)).
 			With("target", target)

@@ -1,26 +1,23 @@
 package cloudflare
 
 import (
-	"sync"
-
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
-var (
-	clientMu    sync.Mutex
-	clientCache = map[string]*Client{}
-)
-
-func clientCacheKey(backendID, token, apiBase string) string {
-	return backendID + "\x00" + token + "\x00" + apiBase
+// Clients caches one Workers AI client per backend id, resolved bearer token and API
+// base, so a rotated token gets a fresh client. A gateway owns one, shared with its
+// router's speech plugin; its clients share the gateway's outbound policies.
+type Clients struct {
+	Policies *outbound.Policies
+	reg      catalog.Registry[Client]
 }
 
-// GetClient returns a process-scoped Cloudflare extension client for b.
-// Clients are keyed by backend id, resolved bearer token, and API base URL so
-// env token rotation after restart (or different backends) gets a fresh client.
-func GetClient(b config.BackendDef) (*Client, error) {
+// Get returns the cached client for b, building it on first use.
+func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
 	if !b.IsCloudflareExtension() {
 		return nil, derrors.Wrap(errNotCloudflareExtension, derrors.CodeInvalid, "cloudflare", "backend").With("backend", b.ID)
 	}
@@ -32,24 +29,18 @@ func GetClient(b config.BackendDef) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	key := clientCacheKey(b.ID, token, apiBase)
-
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	if c, ok := clientCache[key]; ok {
+	return cs.reg.Get(b.ID+"\x00"+token+"\x00"+apiBase, func() (*Client, error) {
+		c, err := newClient(apiBase, token)
+		if err != nil {
+			return nil, err
+		}
+		c.backendID = b.ID
+		c.policies = cs.Policies
 		return c, nil
-	}
-	c, err := newClient(apiBase, token)
-	if err != nil {
-		return nil, err
-	}
-	clientCache[key] = c
-	return c, nil
+	})
 }
 
-// resetClientCacheForTest clears the process client cache (tests only).
-func resetClientCacheForTest() {
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	clientCache = map[string]*Client{}
+// dep is this client's outbound dependency name, scoped to its backend.
+func (c *Client) dep() string {
+	return outbound.Scoped(outbound.DepCloudflare, c.backendID)
 }

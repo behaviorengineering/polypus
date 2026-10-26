@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 // doSpeech runs /run once over the shared speech client. ctx must carry the
@@ -21,7 +20,7 @@ func (c *Client) doSpeech(ctx context.Context, req *http.Request) (*http.Respons
 	if c == nil || c.speechClient == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.doSpeech", "not configured")
 	}
-	resp, err := outbound.DoOnce(ctx, outbound.DepCloudflare, c.speechClient, req)
+	resp, err := c.policies.DoOnce(ctx, c.dep(), c.speechClient, req)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.doSpeech", "post")
 	}
