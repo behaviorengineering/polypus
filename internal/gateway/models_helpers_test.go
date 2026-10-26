@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/behaviorengineering/polypus/internal/clients/openaicompat"
 	"github.com/behaviorengineering/polypus/internal/config"
 )
 
@@ -375,7 +376,7 @@ func TestOpenAIModelsListURLDeepInfraPin(t *testing.T) {
 
 func TestRewriteBackendModelListDeepInfra(t *testing.T) {
 	raw := []byte(`{"object":"list","data":[{"id":"google/gemma-3-27b-it","object":"model","created":0,"owned_by":"deepinfra","root":"google/gemma-3-27b-it","parent":null,"metadata":{"description":"Gemma","pricing":{"input_tokens":0.1},"tags":["chat","vision"]}}]}`)
-	got := rewriteBackendModelList(raw, "deepinfra")
+	got := publicModels(openaicompat.ParseModels(raw), "deepinfra")
 	if len(got) != 1 {
 		t.Fatalf("len=%d", len(got))
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -17,10 +16,10 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/statefile"
 
+	"github.com/behaviorengineering/polypus/internal/clients/openaicompat"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
-	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 const (
@@ -352,7 +351,7 @@ func (h modelsHandler) inventoryForBackend(r *http.Request, b config.BackendDef)
 	}
 	live := h.fetchBackendModelsProtected(r, b)
 	if isOpenRouterHost(b.BaseURL) {
-		live = mergeOpenRouterDecisionModels(r, b, live)
+		live = h.mergeOpenRouterDecisionModels(r, b, live)
 	}
 	// No catalog and no cache: the configured seeds.
 	return h.liveOrCached(b, live, seedModelsForBackend(h.router.Registry().Config(), b.ID))
@@ -422,7 +421,7 @@ func (h modelsHandler) cloudflareInventory(r *http.Request, b config.BackendDef)
 func (h modelsHandler) fetchBackendModelsProtected(r *http.Request, b config.BackendDef) []openaiModel {
 	var out []openaiModel
 	if execErr := h.upstreams.Execute(b.ID, func() error {
-		models, err := fetchBackendModelsErr(r, b)
+		models, err := h.fetchBackendModelsErr(r, b)
 		if err != nil {
 			return err
 		}
@@ -434,8 +433,8 @@ func (h modelsHandler) fetchBackendModelsProtected(r *http.Request, b config.Bac
 	return out
 }
 
-func mergeOpenRouterDecisionModels(r *http.Request, b config.BackendDef, live []openaiModel) []openaiModel {
-	decisions, err := fetchBackendModelsAtURL(r, b, openRouterModelsListURL(b.BaseURL, "decisions"))
+func (s *shared) mergeOpenRouterDecisionModels(r *http.Request, b config.BackendDef, live []openaiModel) []openaiModel {
+	decisions, err := s.fetchBackendModelsAtURL(r, b, openRouterModelsListURL(b.BaseURL, "decisions"))
 	if err != nil || len(decisions) == 0 {
 		return live
 	}
@@ -466,84 +465,42 @@ func openRouterModelsListURL(base string, modality string) string {
 	return u.String()
 }
 
-func fetchBackendModelsAtURL(r *http.Request, b config.BackendDef, target string) ([]openaiModel, error) {
+func (s *shared) fetchBackendModelsAtURL(r *http.Request, b config.BackendDef, target string) ([]openaiModel, error) {
 	const op = "gateway.fetchBackendModels"
-	// r carries the models pass budget (withModelsBudget); outbound.Do fails closed
-	// without a deadline.
-	ctx := r.Context()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, op, "request").With("backend", b.ID)
-	}
-	req.Header.Set("Accept", "application/json")
 	// A remote backend gets its own credential or nothing: the caller's
 	// Authorization header never leaves for a third-party provider.
 	auth, err := bearerAuthHeader(b)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeNotReady, op, "backend auth").With("backend", b.ID)
 	}
-	if auth != "" {
-		req.Header.Set("Authorization", auth)
-	} else if a := r.Header.Get("Authorization"); a != "" && !b.Remote {
-		req.Header.Set("Authorization", a)
+	if auth == "" && !b.Remote {
+		auth = r.Header.Get("Authorization")
 	}
-	resp, err := outbound.Do(ctx, outbound.DepGateway, tracedProbeClient, req)
+	// r carries the models pass budget (withModelsBudget); the client fails closed
+	// without a deadline.
+	models, err := s.compat.ListModels(r.Context(), target, auth)
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, op, "get").With("backend", b.ID)
+		return nil, gatewayErr(err, op, "list").With("backend", b.ID)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, derrors.New(derrors.CodeUnavailable, op, fmt.Sprintf("models list status %d", resp.StatusCode)).
-			With("backend", b.ID)
-	}
-	raw, err := readUpstream(resp.Body, modelsMaxBody, op)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, op, "read body").With("backend", b.ID)
-	}
-	return rewriteBackendModelList(raw, b.ID), nil
+	return publicModels(models, b.ID), nil
 }
 
-func fetchBackendModelsErr(r *http.Request, b config.BackendDef) ([]openaiModel, error) {
-	return fetchBackendModelsAtURL(r, b, openAIModelsListURL(b.BaseURL))
+func (s *shared) fetchBackendModelsErr(r *http.Request, b config.BackendDef) ([]openaiModel, error) {
+	return s.fetchBackendModelsAtURL(r, b, openAIModelsListURL(b.BaseURL))
 }
 
-func rewriteBackendModelList(raw []byte, backendID string) []openaiModel {
-	var list openaiModelList
-	if err := json.Unmarshal(raw, &list); err == nil && (list.Object == objectList || len(list.Data) > 0) {
-		out := make([]openaiModel, 0, len(list.Data))
-		for _, m := range list.Data {
-			id := strings.TrimSpace(m.ID)
-			if id == "" {
-				continue
-			}
-			out = append(out, openaiModel{
-				ID:      prefixModelID(backendID, id),
-				Object:  keyModel,
-				Created: m.Created,
-				OwnedBy: firstNonEmpty(m.OwnedBy, backendID),
-			})
-		}
-		return out
+// publicModels turns a backend's model list into public ids under the backend.
+func publicModels(models []openaicompat.Model, backendID string) []openaiModel {
+	out := make([]openaiModel, 0, len(models))
+	for _, m := range models {
+		out = append(out, openaiModel{
+			ID:      prefixModelID(backendID, m.ID),
+			Object:  keyModel,
+			Created: m.Created,
+			OwnedBy: firstNonEmpty(m.OwnedBy, backendID),
+		})
 	}
-	var arr []openaiModel
-	if err := json.Unmarshal(raw, &arr); err == nil && len(arr) > 0 {
-		out := make([]openaiModel, 0, len(arr))
-		for _, m := range arr {
-			id := strings.TrimSpace(m.ID)
-			if id == "" {
-				continue
-			}
-			out = append(out, openaiModel{
-				ID:      prefixModelID(backendID, id),
-				Object:  keyModel,
-				Created: m.Created,
-				OwnedBy: firstNonEmpty(m.OwnedBy, backendID),
-			})
-		}
-		return out
-	}
-	return nil
+	return out
 }
 
 // isOpenAICompatAPIRoot reports whether base already ends at the OpenAI API root

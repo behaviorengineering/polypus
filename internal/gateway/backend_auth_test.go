@@ -24,7 +24,7 @@ func TestModelListNeverForwardsCallerAuthToARemote(t *testing.T) {
 	}
 	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	r.Header.Set("Authorization", "Bearer ppk.caller.secret")
-	if _, err := fetchBackendModelsErr(r, b); err == nil {
+	if _, err := testShared.fetchBackendModelsErr(r, b); err == nil {
 		t.Fatal("an unresolved backend credential must fail the fetch")
 	}
 	if got, _ := seen.Load().(string); got != "" {

@@ -287,14 +287,3 @@ func TestProbeCloudflareCredentialsFailsOnGetError(t *testing.T) {
 		t.Fatalf("error %v", err)
 	}
 }
-
-func TestProbeSwitchyardRejectsNon2xx(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	}))
-	t.Cleanup(srv.Close)
-
-	if err := probeSwitchyard(context.Background(), srv.URL); err == nil {
-		t.Fatal("expected error for 404 health")
-	}
-}

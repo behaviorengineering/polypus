@@ -19,13 +19,13 @@ import (
 	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/clients/gemini"
+	"github.com/behaviorengineering/polypus/internal/clients/openaicompat"
 	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
-	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 // shared holds dependencies used by capability handlers.
@@ -50,6 +50,7 @@ type shared struct {
 	adminKeys     *keys.Store
 	uiMounts      []uiProxyMount
 	log           *slog.Logger
+	compat        openaicompat.Client
 }
 
 // Gateway is the Polypus HTTP mux (controller) over capability handlers.
@@ -167,6 +168,7 @@ func newShared(opts config.ServeOptions, ho handlerOptions, rc Router, rcfg conf
 		overlayPath:   ho.overlayPath,
 		adminKeys:     adminKeys,
 		log:           ho.logger,
+		compat:        openaicompat.Client{HTTP: tracedProbeClient, Policies: ho.policies},
 	}
 	if sh.proxy, err = sh.newFallbackProxy(rc.Registry().ProxyBackendURL()); err != nil {
 		return nil, err
@@ -532,26 +534,6 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		h.writeUpstreamDialError(w, err, "polypus: switchyard unavailable: ", upstream.NameSwitchyard, isSwitchyardUnreachable)
 	}
-}
-
-func probeSwitchyard(ctx context.Context, baseURL string) error {
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	// The health handler bounds ctx (backendProbeTimeout); outbound.Do fails closed
-	// without a deadline.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/health", nil)
-	if err != nil {
-		return err
-	}
-	resp, err := outbound.Do(ctx, outbound.DepHealth, tracedProbeClient, req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("status %d", resp.StatusCode)
-	}
-	return nil
 }
 
 func isSwitchyardUnreachable(err error) bool {
