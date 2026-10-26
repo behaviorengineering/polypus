@@ -2,18 +2,16 @@ package batch
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
+// newID returns prefix_ and 26 random lowercase base32 characters. crypto/rand
+// cannot fail since Go 1.24 (it crashes the process instead), so there is no
+// fallback id to collide on.
 func newID(prefix string) string {
-	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return prefix + "_fallback"
-	}
-	return prefix + "_" + hex.EncodeToString(b[:])
+	return prefix + "_" + strings.ToLower(rand.Text())
 }
 
 // checkID trims id and rejects anything but one path segment of letters, digits, '_'

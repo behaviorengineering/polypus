@@ -30,7 +30,7 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		h.writeHandlerError(w, err)
 		return
 	}
-	model, err := extractSystemOneModel(body)
+	model, err := bodyModel("gateway.serveSystemOne", body, false)
 	if err != nil {
 		h.writeHandlerError(w, err)
 		return
@@ -146,7 +146,7 @@ func (h systemOneHandler) proxyCloudflareSystemOne(w http.ResponseWriter, r *htt
 }
 
 func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *http.Request, c systemOneCall) error {
-	rewritten, err := rewriteSystemOneModel(c.body, c.downstream)
+	rewritten, err := withBodyModel("gateway.proxySystemOnePassthrough", c.body, c.downstream)
 	if err != nil {
 		return gatewayErr(err, "gateway.proxySystemOnePassthrough", "rewrite model")
 	}
@@ -227,29 +227,6 @@ func validateSystemOneBody(body []byte) error {
 		return derrors.New(derrors.CodeInvalid, "gateway.validateSystemOneBody", "questions required")
 	}
 	return nil
-}
-
-func extractSystemOneModel(body []byte) (string, error) {
-	var payload struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", derrors.Wrap(err, derrors.CodeInvalid, "gateway.extractSystemOneModel", "invalid json")
-	}
-	return strings.TrimSpace(payload.Model), nil
-}
-
-func rewriteSystemOneModel(body []byte, model string) ([]byte, error) {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteSystemOneModel", "invalid json")
-	}
-	payload[keyModel] = model
-	out, err := json.Marshal(payload)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteSystemOneModel", "marshal")
-	}
-	return out, nil
 }
 
 func rewriteSystemOneResponseModel(body []byte, publicModel string) ([]byte, error) {

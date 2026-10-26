@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/admin/keys"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // accessProtector gates the gateway when the key store has at least one key.
@@ -48,21 +49,21 @@ func (a *accessProtector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.keys != nil {
-		list, err := a.keys.List()
-		if err != nil {
+		// One read of the key file decides both whether the gateway is locked and
+		// whether this request's key opens it. A store that cannot be read fails
+		// closed, even for the liveness probe.
+		open, err := a.keys.Authorize(extractAccessCredential(r))
+		unauthorized := derrors.CodeOf(err) == derrors.CodeUnauthorized
+		switch {
+		case err != nil && !unauthorized:
 			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 			return
-		}
-		if len(list) > 0 && !accessExempt(r) {
-			token := extractAccessCredential(r)
-			if token == "" {
-				a.writeAccessUnauthorized(w)
-				return
-			}
-			if _, err := a.keys.Verify(token); err != nil {
-				a.writeAccessUnauthorized(w)
-				return
-			}
+		case accessExempt(r):
+			// The liveness probe needs no key.
+		case unauthorized:
+			a.writeAccessUnauthorized(w)
+			return
+		case !open:
 			r = r.Clone(r.Context())
 			r.Header.Del("Authorization")
 			r.Header.Del("X-Api-Key")

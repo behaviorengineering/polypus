@@ -20,11 +20,20 @@ import (
 // ErrAbort marks a non-retryable outbound failure.
 var ErrAbort = errors.New("outbound: non-retryable")
 
+// ErrRetry marks a failure worth retrying that the policies cannot recognise by type,
+// such as a docker daemon that is not ready yet.
+var ErrRetry = errors.New("outbound: retryable")
+
+// Retry marks err as worth another attempt.
+func Retry(err error) error {
+	if err == nil {
+		return fmt.Errorf("%w: nil", ErrRetry)
+	}
+	return fmt.Errorf("%w: %w", ErrRetry, err)
+}
+
 // Dependency names for breaker keys.
 const (
-	depGitHub       = "github"
-	depGHCR         = "ghcr"
-	depRegistry     = "registry"
 	DepHealth       = "health"
 	DepDockerDaemon = "docker-daemon"
 	DepCloudflare   = "cloudflare"
@@ -138,7 +147,7 @@ func (p *Policies) orDefault() *Policies {
 
 func (p *Policies) breakerFor(name string) failsafe.Policy[any] {
 	switch depOf(name) {
-	case depGitHub, depGHCR, depRegistry, DepCloudflare, DepGemini, DepAnthropic, DepOpenRouter:
+	case DepCloudflare, DepGemini, DepAnthropic, DepOpenRouter:
 	default:
 		return nil
 	}
@@ -149,7 +158,7 @@ func (p *Policies) breakerFor(name string) failsafe.Policy[any] {
 	}
 	b := circuitbreaker.NewBuilder[any]().
 		HandleIf(func(_ any, err error) bool {
-			return retryableErr(name, err)
+			return retryableErr(err)
 		}).
 		WithFailureThreshold(5).
 		WithDelay(30 * time.Second).
@@ -158,53 +167,28 @@ func (p *Policies) breakerFor(name string) failsafe.Policy[any] {
 	return b
 }
 
-func retryableErr(name string, err error) bool {
+// retryableErr reports a failure worth another attempt: a transport error, an HTTP
+// 429 or 5xx, or one the caller marked with Retry. Abort wins over all of them.
+func retryableErr(err error) bool {
 	if err == nil || errors.Is(err, ErrAbort) {
 		return false
 	}
-	if transportRetryable(err) {
+	if errors.Is(err, ErrRetry) || transportRetryable(err) {
 		return true
 	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "http status 429") || strings.Contains(msg, "http status 5") {
-		return true
-	}
-	switch depOf(name) {
-	case depRegistry, DepDockerDaemon:
-		return strings.Contains(msg, "timeout") ||
-			strings.Contains(msg, "connection") ||
-			strings.Contains(msg, "429") ||
-			strings.Contains(msg, "temporarily") ||
-			strings.Contains(msg, "daemon")
-	case depGitHub:
-		return strings.Contains(msg, "github releases: http 429") ||
-			strings.Contains(msg, "github releases: http 5") ||
-			strings.Contains(msg, "github actions: http 429") ||
-			strings.Contains(msg, "github actions: http 5") ||
-			strings.Contains(msg, "github: tag ref http 5") ||
-			strings.Contains(msg, "registry http 429") ||
-			strings.Contains(msg, "registry http 5")
-	case depGHCR:
-		return strings.Contains(msg, "registry http 429") ||
-			strings.Contains(msg, "registry http 5")
-	case DepCloudflare:
-		return strings.Contains(msg, "cloudflare models: status 429") ||
-			strings.Contains(msg, "cloudflare models: status 5")
-	case DepGemini:
-		return strings.Contains(msg, "gemini models: status 429") ||
-			strings.Contains(msg, "gemini models: status 5")
-	case DepAnthropic:
-		return strings.Contains(msg, "anthropic models: status 429") ||
-			strings.Contains(msg, "anthropic models: status 5")
-	default:
-		return false
-	}
+	var se *statusError
+	return errors.As(err, &se) && httpStatusRetryable(se.code)
 }
+
+// statusError is an HTTP answer the policies judge by its code.
+type statusError struct{ code int }
+
+func (e *statusError) Error() string { return fmt.Sprintf("http status %d", e.code) }
 
 func retryPolicyFor(name string) failsafe.Policy[any] {
 	return retrypolicy.NewBuilder[any]().
 		HandleIf(func(_ any, err error) bool {
-			return retryableErr(name, err)
+			return retryableErr(err)
 		}).
 		WithMaxRetries(3).
 		WithBackoff(1*time.Second, 8*time.Second).
@@ -291,14 +275,14 @@ func (p *Policies) Do(ctx context.Context, name string, client *http.Client, req
 			if retryStatus {
 				if HTTPStatusPermanent(r.StatusCode) {
 					resp = r
-					return Abort(fmt.Errorf("http status %d", r.StatusCode))
+					return Abort(&statusError{code: r.StatusCode})
 				}
 				if httpStatusRetryable(r.StatusCode) {
 					// Kept until the next attempt closes it, so the caller still gets
 					// the last upstream answer (status, body, Retry-After) when
 					// retries run out.
 					resp = r
-					return fmt.Errorf("http status %d", r.StatusCode)
+					return &statusError{code: r.StatusCode}
 				}
 			}
 			resp = r

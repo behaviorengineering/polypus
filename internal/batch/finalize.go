@@ -19,17 +19,6 @@ type FinalizePatch struct {
 	CancelledAt   int64
 }
 
-func isTerminalBatchStatus(st Status) bool {
-	switch st {
-	case StatusCompleted, StatusFailed, StatusCancelled, StatusExpired:
-		return true
-	case StatusValidating, StatusInProgress, StatusCancelling:
-		return false
-	default:
-		return false
-	}
-}
-
 func statusAllowsFinalize(st Status) bool {
 	return st == StatusValidating || st == StatusInProgress || st == StatusCancelling
 }
@@ -53,9 +42,6 @@ func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (Meta, bool
 			return Meta{}, false, derrors.New(derrors.CodeNotFound, "batch.TryFinalizeBatch", "batch not found")
 		}
 		return Meta{}, false, derrors.Wrap(err, derrors.CodeInternal, "batch.TryFinalizeBatch", "read")
-	}
-	if isTerminalBatchStatus(meta.Status) {
-		return meta, false, nil
 	}
 	if !statusAllowsFinalize(meta.Status) {
 		return meta, false, nil

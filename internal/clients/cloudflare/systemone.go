@@ -152,9 +152,6 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 		}
 		break
 	}
-	if looksLikeTypeSafeResult(cur) {
-		return cur, nil
-	}
 	return cur, nil
 }
 

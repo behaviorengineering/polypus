@@ -62,7 +62,7 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, str
 	if model == "" {
 		model = c.ttsModel
 	}
-	speaker := firstNonEmpty(strings.TrimSpace(req.Voice), c.voice, "luna")
+	speaker := firstNonEmpty(strings.TrimSpace(req.Voice), c.voice) // c.voice is never empty (defaultVoice).
 	encoding := firstNonEmpty(strings.TrimSpace(req.ResponseFormat), "mp3")
 
 	body := map[string]string{

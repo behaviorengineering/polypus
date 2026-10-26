@@ -533,7 +533,7 @@ func hyperdxClickhouseDocker(ctx context.Context, container, traceID string) (in
 		b, err := cmd.CombinedOutput()
 		if err != nil {
 			if dockerExecRetryable(err) {
-				return fmt.Errorf("clickhouse exec: %w: %s", err, strings.TrimSpace(string(b)))
+				return outbound.Retry(fmt.Errorf("clickhouse exec: %w: %s", err, strings.TrimSpace(string(b))))
 			}
 			return outbound.Abort(fmt.Errorf("clickhouse exec: %w: %s", err, strings.TrimSpace(string(b))))
 		}

@@ -429,7 +429,7 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 	model := req.model
 	reg := h.router.Registry()
 	cfg := reg.Config()
-	nr, ok := lookupRouter(cfg, routerName)
+	nr, ok := cfg.LookupNamedRouter(routerName)
 	if !ok {
 		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unknown router").
 			With(keyModel, model).
@@ -587,7 +587,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "read body"))
 		return
 	}
-	model, err := extractEmbedModel(body)
+	model, err := bodyModel("gateway.serveEmbeddings", body, true)
 	if err != nil {
 		h.writeHandlerError(w, err)
 		return
@@ -614,7 +614,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	backendURL := t.url
-	rewritten, err := rewriteEmbedModel(body, downstream)
+	rewritten, err := withBodyModel("gateway.serveEmbeddings", body, downstream)
 	if err != nil {
 		h.writeHandlerError(w, err)
 		return

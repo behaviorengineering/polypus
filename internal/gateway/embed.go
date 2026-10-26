@@ -3,7 +3,6 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -16,33 +15,6 @@ import (
 )
 
 const embedMaxBody = 8 << 20
-
-func extractEmbedModel(body []byte) (string, error) {
-	var payload struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", derrors.Wrap(err, derrors.CodeInvalid, "gateway.extractEmbedModel", "invalid json")
-	}
-	model := strings.TrimSpace(payload.Model)
-	if model == "" {
-		return "", derrors.New(derrors.CodeInvalid, "gateway.extractEmbedModel", "model required")
-	}
-	return model, nil
-}
-
-func rewriteEmbedModel(body []byte, model string) ([]byte, error) {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.rewriteEmbedModel", "invalid json")
-	}
-	payload[keyModel] = model
-	out, err := json.Marshal(payload)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteEmbedModel", "marshal")
-	}
-	return out, nil
-}
 
 func (h chatHandler) proxyEmbeddings(w http.ResponseWriter, r *http.Request, t backendTarget, body []byte, hopTimeout time.Duration) error {
 	client, backendAuth := h.client, t.auth
@@ -79,19 +51,8 @@ func (h chatHandler) proxyEmbeddings(w http.ResponseWriter, r *http.Request, t b
 		return err
 	}
 
-	for k, vals := range resp.Header {
-		if len(vals) == 0 {
-			continue
-		}
-		switch strings.ToLower(k) {
-		case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-			"te", "trailers", "transfer-encoding", "upgrade", "content-length":
-			continue
-		}
-		for _, v := range vals {
-			w.Header().Add(k, v)
-		}
-	}
+	copyChatResponseHeaders(w, resp.Header)
+
 	w.WriteHeader(resp.StatusCode)
 	if _, err := w.Write(raw); err != nil {
 		return afterHeaders(r.Context(), err, true, "gateway.proxyEmbeddings", "write response")

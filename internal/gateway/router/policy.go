@@ -70,11 +70,6 @@ func validateAnthropicBackendURL(raw string) error {
 	return nil
 }
 
-// validateBackendURL rejects cloud or non-loopback hosts for local routing (case-mode default).
-func validateBackendURL(raw string) error {
-	return validateLocalBackendURL(raw, true)
-}
-
 func validateRemoteBackendURL(raw string) error {
 	u, err := parseBackendURL(raw)
 	if err != nil {

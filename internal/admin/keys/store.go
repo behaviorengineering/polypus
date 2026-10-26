@@ -196,13 +196,32 @@ func (s *Store) List() ([]Record, error) {
 
 // Verify checks a bearer token against the on-disk store (re-reads each call).
 func (s *Store) Verify(token string) (Record, error) {
-	id, secret, ok := parseToken(token)
-	if !ok {
-		return Record{}, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
-	}
 	file, err := s.readFresh()
 	if err != nil {
 		return Record{}, err
+	}
+	return verifyIn(file, token)
+}
+
+// Authorize reads the store once for a request: open is true when no keys exist
+// (the gateway is unlocked); otherwise token must verify, and a bad or missing
+// token is CodeUnauthorized.
+func (s *Store) Authorize(token string) (open bool, err error) {
+	file, err := s.readFresh()
+	if err != nil {
+		return false, err
+	}
+	if len(file.Keys) == 0 {
+		return true, nil
+	}
+	_, err = verifyIn(file, token)
+	return false, err
+}
+
+func verifyIn(file filePayload, token string) (Record, error) {
+	id, secret, ok := parseToken(token)
+	if !ok {
+		return Record{}, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
 	}
 	for _, k := range file.Keys {
 		if k.ID != id {

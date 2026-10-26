@@ -453,15 +453,7 @@ func (s *shared) mergeOpenRouterDecisionModels(ctx context.Context, inboundAuth 
 }
 
 func openRouterModelsListURL(base string, modality string) string {
-	target := openAIModelsListURL(base)
-	u, err := url.Parse(target)
-	if err != nil {
-		return target
-	}
-	q := u.Query()
-	q.Set("output_modalities", modality)
-	u.RawQuery = q.Encode()
-	return u.String()
+	return withOutputModalities(openAIModelsURL(base), modality)
 }
 
 func (s *shared) fetchBackendModelsAtURL(ctx context.Context, inboundAuth string, b config.BackendDef, target string) ([]openaiModel, error) {
@@ -581,15 +573,18 @@ func openAIModelsListURL(base string) string {
 	if !isOpenRouterHost(base) {
 		return target
 	}
+	return withOutputModalities(target, "all")
+}
+
+// withOutputModalities sets OpenRouter's output_modalities query on a models URL.
+func withOutputModalities(target, modality string) string {
 	u, err := url.Parse(target)
 	if err != nil {
 		return target
 	}
 	q := u.Query()
-	if q.Get("output_modalities") == "" {
-		q.Set("output_modalities", "all")
-		u.RawQuery = q.Encode()
-	}
+	q.Set("output_modalities", modality)
+	u.RawQuery = q.Encode()
 	return u.String()
 }
 

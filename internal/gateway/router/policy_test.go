@@ -7,19 +7,19 @@ import (
 )
 
 func TestValidateBackendURLLoopback(t *testing.T) {
-	if err := validateBackendURL("http://127.0.0.1:1322"); err != nil {
+	if err := validateLocalBackendURL("http://127.0.0.1:1322", true); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestValidateBackendURLRejectsOpenAI(t *testing.T) {
-	if err := validateBackendURL("https://api.openai.com/v1"); err == nil {
+	if err := validateLocalBackendURL("https://api.openai.com/v1", true); err == nil {
 		t.Fatal("expected cloud host rejection")
 	}
 }
 
 func TestValidateBackendURLRejectsPrivateLAN(t *testing.T) {
-	if err := validateBackendURL("http://192.168.1.50:8000"); err == nil {
+	if err := validateLocalBackendURL("http://192.168.1.50:8000", true); err == nil {
 		t.Fatal("expected private LAN host rejection")
 	}
 }

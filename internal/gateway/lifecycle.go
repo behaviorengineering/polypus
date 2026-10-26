@@ -82,7 +82,7 @@ func prepare(ctx, refreshCtx context.Context, g *gatewayHandler, opts config.Ser
 		cfg := g.router.Registry().Config()
 		warmCtx, warmCancel := context.WithTimeout(ctx, modelsWarmupTimeout(cfg))
 		defer warmCancel()
-		modelsHandler{g.shared}.warmModelsInventory(warmCtx)
+		modelsHandler{g.shared}.warmInventory(warmCtx, false)
 		modelsHandler{g.shared}.startModelsRefreshLoop(refreshCtx, cfg)
 	}
 	return nil

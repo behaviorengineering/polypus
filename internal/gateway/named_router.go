@@ -18,7 +18,3 @@ func parseNamedRouterModel(model string) (name string, ok bool) {
 	}
 	return name, true
 }
-
-func lookupRouter(cfg config.RouterConfig, name string) (config.NamedRouter, bool) {
-	return cfg.LookupNamedRouter(name)
-}
