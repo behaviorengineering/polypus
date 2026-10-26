@@ -125,6 +125,12 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		writeHandlerError(w, err)
 		return
 	}
+	if backend.IsOpenRouter() {
+		if err := rejectInlineMedia(parsed.Lines); err != nil {
+			writeHandlerError(w, err)
+			return
+		}
+	}
 	now := h.batchNowTime().Unix()
 	expiresAt, err := batch.ExpiresAtUnix(now, req.CompletionWindow)
 	if err != nil {
@@ -262,6 +268,9 @@ func (h batchesHandler) refreshBatch(r *http.Request, meta batch.BatchMeta) (bat
 	if backend.IsAnthropicExtension() {
 		return h.refreshClaudeBatch(ctx, meta, hop)
 	}
+	if backend.IsOpenRouter() {
+		return h.refreshOpenRouterBatch(ctx, backend, meta)
+	}
 	return h.refreshBatchFromCloudflare(ctx, backend, meta)
 }
 
@@ -374,7 +383,7 @@ func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request,
 	}
 	backend, ok := h.router.Registry().Backend(meta.BackendID)
 	if !ok || !backend.IsAnthropicExtension() {
-		writeHandlerError(w, derrors.New(derrors.CodeUnimplemented, "gateway.serveBatchCancel", "batch cancel is not currently supported for cloudflare workers ai"))
+		writeHandlerError(w, derrors.New(derrors.CodeUnimplemented, "gateway.serveBatchCancel", "batch cancel is not supported for this backend (cloudflare workers ai and openrouter have no cancel)"))
 		return
 	}
 	meta, err = h.cancelClaudeBatch(r, meta)

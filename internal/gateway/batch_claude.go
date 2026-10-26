@@ -9,13 +9,15 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
+	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
 
 // validateBatchBackend checks that backend can run a batch of endpoint requests for downstream.
-// Cloudflare runs chat and embeddings on its batch models; Claude runs chat only.
+// Cloudflare runs chat and embeddings on its batch models, OpenRouter runs chat and
+// embeddings, and Claude runs chat only.
 func validateBatchBackend(backend config.BackendDef, endpoint, downstream string) error {
 	switch {
 	case backend.IsAnthropicExtension():
@@ -23,9 +25,9 @@ func validateBatchBackend(backend config.BackendDef, endpoint, downstream string
 			return derrors.New(derrors.CodeInvalid, "gateway.validateBatchBackend", "claude batches support /v1/chat/completions only").
 				With("endpoint", endpoint)
 		}
-	case backend.IsCloudflareExtension():
+	case backend.IsCloudflareExtension(), backend.IsOpenRouter():
 	default:
-		return derrors.New(derrors.CodeFailedPrecondition, "gateway.validateBatchBackend", "batch only supported for cloudflare and anthropic extension backends")
+		return derrors.New(derrors.CodeFailedPrecondition, "gateway.validateBatchBackend", "batch only supported for cloudflare, openrouter and anthropic backends")
 	}
 	if !backend.HasCapability(config.CapBatch) {
 		return derrors.New(derrors.CodeFailedPrecondition, "gateway.validateBatchBackend", "backend lacks batch capability")
@@ -41,6 +43,13 @@ func validateBatchBackend(backend config.BackendDef, endpoint, downstream string
 func (h batchesHandler) submitBatch(ctx context.Context, backend config.BackendDef, downstream, endpoint string, lines []batch.InputLine, hop time.Duration) (string, error) {
 	if backend.IsAnthropicExtension() {
 		return h.router.ClaudeBatchCreate(ctx, backend.ID, downstream, lines, hop)
+	}
+	if backend.IsOpenRouter() {
+		client, err := openrouter.GetClient(backend)
+		if err != nil {
+			return "", err
+		}
+		return client.SubmitBatch(ctx, downstream, endpoint, lines)
 	}
 	client, err := h.cloudflareClient(backend)
 	if err != nil {
@@ -76,12 +85,12 @@ func (h batchesHandler) refreshClaudeBatch(ctx context.Context, meta batch.Batch
 	}); err != nil {
 		return meta, err
 	}
-	okJSONL, errJSONL, completed, failed := buildClaudeBatchOutput(results)
+	okJSONL, errJSONL, completed, failed := buildBatchLineOutput(results)
 	return h.finalizeBatchOutput(meta, okJSONL, errJSONL, completed, failed)
 }
 
-// buildClaudeBatchOutput writes OpenAI batch output and error JSONL from translated Claude lines.
-func buildClaudeBatchOutput(results []router.BatchLineResult) (okJSONL, errJSONL []byte, completed, failed int) {
+// buildBatchLineOutput writes OpenAI batch output and error JSONL from translated lines.
+func buildBatchLineOutput(results []router.BatchLineResult) (okJSONL, errJSONL []byte, completed, failed int) {
 	var okLines, errLines []string
 	for _, item := range results {
 		customID := strings.TrimSpace(item.CustomID)

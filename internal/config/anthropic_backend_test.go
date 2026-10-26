@@ -57,3 +57,19 @@ func TestAutoPromptCacheOnlyForAnthropic(t *testing.T) {
 		t.Fatal("automatic caching applies to anthropic backends only")
 	}
 }
+
+func TestIsOpenRouter(t *testing.T) {
+	for _, tc := range []struct {
+		b    BackendDef
+		want bool
+	}{
+		{BackendDef{ID: "openrouter"}, true},
+		{BackendDef{ID: "work_or", BaseURL: "https://openrouter.ai/api/v1"}, true},
+		{BackendDef{ID: "deepinfra", BaseURL: "https://api.deepinfra.com/v1/openai"}, false},
+		{BackendDef{ID: "evil", BaseURL: "https://openrouter.ai.example.com/v1"}, false},
+	} {
+		if got := tc.b.IsOpenRouter(); got != tc.want {
+			t.Fatalf("%+v: got %v want %v", tc.b, got, tc.want)
+		}
+	}
+}
