@@ -31,7 +31,9 @@ func TestAccessEmptyStoreOpen(t *testing.T) {
 	}
 }
 
-func TestAccessKeysPresentRequiresCredential(t *testing.T) {
+// newKeyedTestGateway builds a gateway whose key store holds one key, and returns that key.
+func newKeyedTestGateway(t *testing.T) (http.Handler, string) {
+	t.Helper()
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
 	reg, err := router.NewRegistry(gatedAdminBackendConfig("http://127.0.0.1:9/v1"))
 	if err != nil {
@@ -50,7 +52,11 @@ func TestAccessKeysPresentRequiresCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
+	return newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir)), key
+}
+
+func TestAccessKeysPresentRequiresCredential(t *testing.T) {
+	h, key := newKeyedTestGateway(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -60,7 +66,7 @@ func TestAccessKeysPresentRequiresCredential(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer "+gen.Key)
+	req.Header.Set("Authorization", "Bearer "+key)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -68,7 +74,7 @@ func TestAccessKeysPresentRequiresCredential(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/", nil)
-	basic := base64.StdEncoding.EncodeToString([]byte("user:" + gen.Key))
+	basic := base64.StdEncoding.EncodeToString([]byte("user:" + key))
 	req.Header.Set("Authorization", "Basic "+basic)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -77,7 +83,7 @@ func TestAccessKeysPresentRequiresCredential(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Api-Key", gen.Key)
+	req.Header.Set("X-Api-Key", key)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -86,25 +92,7 @@ func TestAccessKeysPresentRequiresCredential(t *testing.T) {
 }
 
 func TestAccessOnlyLivenessExemptWhenGated(t *testing.T) {
-	t.Setenv("POLYPUS_SWITCHYARD", "0")
-	reg, err := router.NewRegistry(gatedAdminBackendConfig("http://127.0.0.1:9/v1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fr := &fakeRouter{reg: reg}
-	dir := t.TempDir()
-	store, err := keys.Config{
-		Path:  filepath.Join(dir, "admin-api-keys.json"),
-		Clock: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
-	}.CreateStore()
-	if err != nil {
-		t.Fatal(err)
-	}
-	gen, err := store.Generate("ops")
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
+	h, key := newKeyedTestGateway(t)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		rec := httptest.NewRecorder()
@@ -120,7 +108,7 @@ func TestAccessOnlyLivenessExemptWhenGated(t *testing.T) {
 			t.Fatalf("%s without a key: status %d, want 401", path, rec.Code)
 		}
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Header.Set("Authorization", "Bearer "+gen.Key)
+		req.Header.Set("Authorization", "Bearer "+key)
 		rec = httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code == http.StatusUnauthorized {
