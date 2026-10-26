@@ -184,7 +184,7 @@ func classifyNamedRouterRoute(routeType string) namedRouterDispatch {
 	switch routeType {
 	case config.RoutePassthrough:
 		return dispatchPassthrough
-	case config.RouteStageRouter, config.RouteLLMClassifier:
+	case config.RouteStageRouter, config.RouteLLMClassifier, config.RouteFallback:
 		return dispatchSwitchyard
 	default:
 		return dispatchUnknown

@@ -12,12 +12,16 @@ import (
 )
 
 // Render builds Switchyard routes.toml from Polypus router config.
-// Passthrough routers are omitted; composed stage_router and llm_classifier entries are emitted.
+// Passthrough routers are omitted; composed stage_router, llm_classifier and fallback entries are emitted.
 func Render(cfg config.RouterConfig, polypusBaseURL string) ([]byte, error) {
 	polypusBaseURL = normalizePolypusBaseURL(polypusBaseURL)
 	var b strings.Builder
 	b.WriteString("schema_version = 1\n\n")
 	fmt.Fprintf(&b, "[llm_clients.polypus]\nformat = \"openai_chat\"\nbase_url = %q\n\n", polypusBaseURL)
+	if hasFallbackRouter(cfg) {
+		// Fallback routes try the next target at once, so retrying a refused target only stalls.
+		fmt.Fprintf(&b, "[llm_clients.%s]\nformat = \"openai_chat\"\nbase_url = %q\nmax_retries = 0\n\n", fallbackClient, polypusBaseURL)
+	}
 
 	names := make([]string, 0, len(cfg.Routers))
 	for name, router := range cfg.Routers {
@@ -38,11 +42,48 @@ func Render(cfg config.RouterConfig, polypusBaseURL string) ([]byte, error) {
 			if err := renderLLMClassifier(&b, name, router); err != nil {
 				return nil, err
 			}
+		case config.RouteFallback:
+			renderFallback(&b, name, router)
 		default:
 			return nil, fmt.Errorf("switchyard render: routers.%s: unsupported composed type %q", name, router.Route.Type)
 		}
 	}
 	return []byte(b.String()), nil
+}
+
+// fallbackClient is the Switchyard llm client fallback targets use (no retries).
+const fallbackClient = "polypus_fallback"
+
+func hasFallbackRouter(cfg config.RouterConfig) bool {
+	for _, r := range cfg.Routers {
+		if r.Route.Type == config.RouteFallback {
+			return true
+		}
+	}
+	return false
+}
+
+// renderFallback emits a random route weighted 1 on the first target and 0 on the rest:
+// Switchyard always picks the first and keeps the others for request-local fallback.
+func renderFallback(b *strings.Builder, name string, router config.NamedRouter) {
+	leaves := router.Route.FallbackTargets
+	names := make([]string, 0, len(leaves))
+	weights := make([]string, 0, len(leaves))
+	for i, leaf := range leaves {
+		target := config.FallbackTargetName(name, i)
+		fmt.Fprintf(b, "[targets.%s]\nid = %q\nllm_client = %q\n\n", target, leaf, fallbackClient)
+		names = append(names, target)
+		weight := "0"
+		if i == 0 {
+			weight = "1"
+		}
+		weights = append(weights, weight)
+	}
+	fmt.Fprintf(b, "[routes.%s]\n", name)
+	fmt.Fprintf(b, "id = %q\n", config.RouterPublicID(name))
+	b.WriteString("type = \"random\"\n")
+	fmt.Fprintf(b, "targets = [%s]\n", joinQuoted(names))
+	fmt.Fprintf(b, "weights = [%s]\n\n", strings.Join(weights, ", "))
 }
 
 func renderStageRouter(b *strings.Builder, name string, router config.NamedRouter) error {

@@ -90,3 +90,32 @@ func TestStatusFailure(t *testing.T) {
 		t.Fatalf("502: %v", err)
 	}
 }
+
+func TestBoardCallerErrorsDoNotTrip(t *testing.T) {
+	b := NewBoard()
+	for _, code := range []derrors.Code{derrors.CodeInvalid, derrors.CodeUnauthorized, derrors.CodeNotFound, derrors.CodeConflict} {
+		fail := derrors.New(code, "router.anthropic", "caller error")
+		for i := uint32(0); i < ConsecutiveFailuresTrip+1; i++ {
+			_ = b.Execute("claude_team", func() error { return fail })
+		}
+	}
+	called := false
+	if err := b.Execute("claude_team", func() error {
+		called = true
+		return nil
+	}); err != nil || !called {
+		t.Fatalf("caller errors must not open the breaker: err=%v called=%v", err, called)
+	}
+}
+
+func TestBoardNotReadyTrips(t *testing.T) {
+	b := NewBoard()
+	fail := derrors.New(derrors.CodeNotReady, "router.anthropic", "out of credit")
+	for i := uint32(0); i < ConsecutiveFailuresTrip; i++ {
+		_ = b.Execute("claude_team", func() error { return fail })
+	}
+	err := b.Execute("claude_team", func() error { return nil })
+	if !Unavailable(err) {
+		t.Fatalf("out-of-credit refusals must open the breaker, got %v", err)
+	}
+}
