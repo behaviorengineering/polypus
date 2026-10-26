@@ -197,14 +197,14 @@ func (h modelsHandler) serveModelsListForSurface(surface ModelSurface, w http.Re
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	h.encodeJSON(w, openaiModelList{
+	h.writeJSON(w, http.StatusOK, openaiModelList{
 		Object: objectList,
 		Data:   models,
 	})
 }
 
 func (s *shared) writeAPINotConfigured(w http.ResponseWriter) {
-	s.writeOpenAIJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
+	s.writeJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
 		Message: "SystemOne API is not configured on this gateway",
 		Type:    errTypeInvalidRequest,
 		Code:    "api_not_configured",
@@ -242,11 +242,10 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface ModelSurface, pathPr
 		if surface == surfaceOpenAI {
 			setOpenAIModelsCanonicalLink(w)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		h.encodeJSON(w, m)
+		h.writeJSON(w, http.StatusOK, m)
 		return
 	}
-	h.writeOpenAIJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
+	h.writeJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
 		Message: fmt.Sprintf("The model `%s` does not exist", id),
 		Type:    errTypeInvalidRequest,
 		Param:   keyModel,
@@ -672,7 +671,7 @@ func firstNonEmpty(vals ...string) string {
 }
 
 func (s *shared) writeModelNotAllowed(w http.ResponseWriter, model string) {
-	s.writeOpenAIJSON(w, http.StatusBadRequest, openaiErrorBody{Error: openaiError{
+	s.writeJSON(w, http.StatusBadRequest, openaiErrorBody{Error: openaiError{
 		Message: fmt.Sprintf("The model `%s` is not enabled on this gateway (models.allow)", model),
 		Type:    errTypeInvalidRequest,
 		Param:   keyModel,

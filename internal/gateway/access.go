@@ -56,11 +56,11 @@ func (a *accessProtector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if len(list) > 0 && !accessExempt(r) {
 			token := extractAccessCredential(r)
 			if token == "" {
-				writeAccessUnauthorized(w)
+				a.writeAccessUnauthorized(w)
 				return
 			}
 			if _, err := a.keys.Verify(token); err != nil {
-				writeAccessUnauthorized(w)
+				a.writeAccessUnauthorized(w)
 				return
 			}
 			r = r.Clone(r.Context())
@@ -120,9 +120,9 @@ func bearerOrBasicToken(header string) string {
 	return ""
 }
 
-func writeAccessUnauthorized(w http.ResponseWriter) {
+func (a *accessProtector) writeAccessUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Bearer realm="polypus", Basic realm="polypus"`)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = w.Write([]byte(`{"error":{"message":"gateway access key required","type":"invalid_request_error","code":"unauthorized"}}`))
+	a.gw.writeOpenAIError(w, http.StatusUnauthorized, openaiError{
+		Message: "gateway access key required", Type: errTypeInvalidRequest, Code: "unauthorized",
+	})
 }

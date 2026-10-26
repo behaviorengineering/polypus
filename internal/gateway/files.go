@@ -130,9 +130,3 @@ func (h filesHandler) serveFileDelete(w http.ResponseWriter, r *http.Request, id
 	deleted.Deleted = true
 	h.writeJSON(w, http.StatusOK, deleted)
 }
-
-func (s *shared) writeJSON(w http.ResponseWriter, code int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	s.encodeJSON(w, v)
-}

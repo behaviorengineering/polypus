@@ -45,16 +45,12 @@ func (h healthHandler) serveUpstreamHealth(w http.ResponseWriter, _ *http.Reques
 		Status:    "ok",
 		Upstreams: h.upstreams.Snapshot(),
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	h.encodeJSON(w, resp)
+	h.writeJSON(w, http.StatusOK, resp)
 }
 
 // serveHealth reports gateway liveness only (no upstream probes).
 func (h healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	h.encodeJSON(w, healthResponse{Status: "ok"})
+	h.writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
 }
 
 // serveBackendHealth probes configured upstream backends (manual / stack-doctor use).
@@ -97,9 +93,7 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 		status = "degraded"
 		code = http.StatusServiceUnavailable
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	h.encodeJSON(w, backendHealthResponse{
+	h.writeJSON(w, code, backendHealthResponse{
 		Status:   status,
 		Router:   "bifrost",
 		Backends: backends,

@@ -42,5 +42,5 @@ func (s *shared) writeUnavailableError(w http.ResponseWriter, err error, message
 	if cls.BreakerState != "" {
 		body.Polypus.CircuitBreaker = &polypusBreakerMeta{State: cls.BreakerState}
 	}
-	s.writeOpenAIJSON(w, http.StatusServiceUnavailable, body)
+	s.writeJSON(w, http.StatusServiceUnavailable, body)
 }

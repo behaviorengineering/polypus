@@ -526,7 +526,7 @@ func (s *shared) writeErrorJSON(w http.ResponseWriter, status int, err error, pr
 	if status >= http.StatusInternalServerError {
 		s.log.Warn("polypus: request failed", "status", status, "err", err)
 	}
-	s.writeOpenAIJSON(w, status, openaiErrorBody{Error: openaiError{
+	s.writeJSON(w, status, openaiErrorBody{Error: openaiError{
 		Message: prefix + derrors.PublicMessage(err),
 		Type:    openaiErrorType(status),
 		Code:    string(derrors.CodeOf(err)),

@@ -44,7 +44,7 @@ func (s *shared) writeRateLimitError(w http.ResponseWriter, err error) bool {
 		w.Header().Set("Cf-Ray", ray)
 	}
 	setRateLimitExtraHeaders(w, err)
-	s.writeOpenAIJSON(w, http.StatusTooManyRequests, openaiErrorBody{Error: openaiRateLimitError(err)})
+	s.writeJSON(w, http.StatusTooManyRequests, openaiErrorBody{Error: openaiRateLimitError(err)})
 	return true
 }
 
