@@ -15,10 +15,39 @@ import (
 )
 
 func runServeWithOpts(ctx context.Context, host string, port int, backend string) int {
-	opts, err := config.LoadServeOptions()
+	opts, err := resolveServeOptions(host, port, backend)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: %v\n", err)
 		return 2
+	}
+	// The service logs its startup and runtime through one structured logger.
+	logger := slog.Default()
+	logger.Info("polypus gateway", "url", "http://"+opts.ListenAddr()+"/")
+	rcfg, err := config.LoadRouterConfig(opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "polypus serve: router config: %v\n", err)
+		return 1
+	}
+	logStartup(logger, rcfg)
+	return withObservability(logger, func(otelCfg observability.Config) int {
+		// SIGINT and SIGTERM end ctx, and Serve then drains and shuts down.
+		ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		if err := polypus.Serve(ctx, opts, polypus.WithLogger(logger),
+			polypus.WithObservability(otelCfg.ActiveDumpDir(), otelCfg.SkipPaths)); err != nil {
+			fmt.Fprintf(os.Stderr, "polypus serve: %v\n", err)
+			return 1
+		}
+		return 0
+	})
+}
+
+// resolveServeOptions reads the serve options from the environment and applies the
+// command's flags over them.
+func resolveServeOptions(host string, port int, backend string) (config.ServeOptions, error) {
+	opts, err := config.LoadServeOptions()
+	if err != nil {
+		return config.ServeOptions{}, err
 	}
 	if host != "" {
 		opts.Host = host
@@ -29,16 +58,12 @@ func runServeWithOpts(ctx context.Context, host string, port int, backend string
 	if backend != "" {
 		opts.BackendURL = backend
 	}
+	return opts, nil
+}
 
-	// The service logs its startup and runtime through one structured logger.
-	logger := slog.Default()
-	logger.Info("polypus gateway", "url", "http://"+opts.ListenAddr()+"/")
-	rcfg, err := config.LoadRouterConfig(opts)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "polypus serve: router config: %v\n", err)
-		return 1
-	}
-	logStartup(logger, rcfg)
+// withObservability starts tracing for run and flushes it when run returns. It
+// returns run's exit code, or its own when tracing cannot start.
+func withObservability(logger *slog.Logger, run func(observability.Config) int) int {
 	otelCfg, err := observability.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: otel config: %v\n", err)
@@ -61,15 +86,7 @@ func runServeWithOpts(ctx context.Context, host string, port int, backend string
 			logger.Warn("otel shutdown", "err", err)
 		}
 	}()
-	// SIGINT and SIGTERM end ctx, and Serve then drains and shuts down.
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	if err := polypus.Serve(ctx, opts, polypus.WithLogger(logger),
-		polypus.WithObservability(otelCfg.ActiveDumpDir(), otelCfg.SkipPaths)); err != nil {
-		fmt.Fprintf(os.Stderr, "polypus serve: %v\n", err)
-		return 1
-	}
-	return 0
+	return run(otelCfg)
 }
 
 // logStartup logs each capability's default backend, the backends and the routers.

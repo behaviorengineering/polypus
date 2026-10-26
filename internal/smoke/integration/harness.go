@@ -5,8 +5,8 @@ package integration
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -53,6 +53,8 @@ type Harness struct {
 	tmpRoot string
 	logBuf  bytes.Buffer
 	logMu   sync.Mutex
+	// exited closes when the gateway process ends; one goroutine owns Wait.
+	exited chan struct{}
 }
 
 var (
@@ -127,13 +129,6 @@ func startHarness(opts Options) (*Harness, error) {
 		return nil, fmt.Errorf("integration: unknown mode %d", opts.Mode)
 	}
 
-	port, err := freePort()
-	if err != nil {
-		h.Stop()
-		return nil, err
-	}
-	h.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
-
 	bin := filepath.Join(tmpRoot, "polypus")
 	if err := buildGateway(root, bin); err != nil {
 		h.Stop()
@@ -141,19 +136,40 @@ func startHarness(opts Options) (*Harness, error) {
 	}
 	h.binPath = bin
 
-	if err := h.startServe(port); err != nil {
-		h.Stop()
-		return nil, err
-	}
 	deadline := 30 * time.Second
 	if opts.Live {
 		deadline = 120 * time.Second
 	}
-	if err := waitHealth(h.BaseURL, deadline); err != nil {
+	if err := h.startHealthy(deadline); err != nil {
 		h.Stop()
 		return nil, fmt.Errorf("%w\n--- gateway log ---\n%s", err, h.gatewayLog())
 	}
 	return h, nil
+}
+
+// startHealthy starts the gateway on a free port and waits for /health. The port
+// probe can race another process for the port, so a gateway that exits during
+// start is retried on a fresh port.
+func (h *Harness) startHealthy(timeout time.Duration) error {
+	const attempts = 3
+	var err error
+	for range attempts {
+		port, perr := freePort()
+		if perr != nil {
+			return perr
+		}
+		h.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+		if err = h.startServe(port); err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		err = waitHealth(ctx, h.BaseURL, h.exited)
+		cancel()
+		if !errors.Is(err, errGatewayExited) {
+			return err
+		}
+	}
+	return err
 }
 
 // setupCloudflare prepares the shared Cloudflare harness: live Workers AI, or the mock.
@@ -286,38 +302,33 @@ func envOr(key, def string) string {
 func (h *Harness) startServe(port int) error {
 	h.cmd = exec.Command(h.binPath, "serve", "--host", "127.0.0.1", "--port", fmt.Sprintf("%d", port)) //nolint:gosec // G204: the binary this harness just built.
 	h.cmd.Env = h.childEnv
-	stdout, err := h.cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	stderr, err := h.cmd.StderrPipe()
-	if err != nil {
-		return err
-	}
-	go h.copyLog(stdout)
-	go h.copyLog(stderr)
+	// A writer rather than pipes: Wait closes pipes before readers finish, which
+	// would lose the last log lines, the ones a failed start prints.
+	h.cmd.Stdout = logWriter{h}
+	h.cmd.Stderr = logWriter{h}
 	if runtime.GOOS != "windows" {
 		h.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 	if err := h.cmd.Start(); err != nil {
 		return fmt.Errorf("start serve: %w", err)
 	}
+	exited := make(chan struct{})
+	h.exited = exited
+	cmd := h.cmd
+	go func() {
+		_ = cmd.Wait() // the exit is what matters; the log says why.
+		close(exited)
+	}()
 	return nil
 }
 
-func (h *Harness) copyLog(r io.Reader) {
-	buf := make([]byte, 4096)
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			h.logMu.Lock()
-			h.logBuf.Write(buf[:n])
-			h.logMu.Unlock()
-		}
-		if err != nil {
-			return
-		}
-	}
+// logWriter appends the gateway's output to the harness log.
+type logWriter struct{ h *Harness }
+
+func (w logWriter) Write(p []byte) (int, error) {
+	w.h.logMu.Lock()
+	defer w.h.logMu.Unlock()
+	return w.h.logBuf.Write(p)
 }
 
 func (h *Harness) gatewayLog() string {
@@ -342,13 +353,11 @@ func (h *Harness) Stop() {
 		} else {
 			_ = h.cmd.Process.Signal(os.Interrupt)
 		}
-		done := make(chan error, 1)
-		go func() { done <- h.cmd.Wait() }()
 		select {
-		case <-done:
+		case <-h.exited:
 		case <-time.After(10 * time.Second):
 			_ = h.cmd.Process.Kill()
-			<-done
+			<-h.exited
 		}
 	}
 	if h.mockCF != nil {
@@ -443,24 +452,33 @@ func buildGateway(moduleRoot, outPath string) error {
 	return nil
 }
 
-func waitHealth(baseURL string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+// errGatewayExited is a gateway that stopped before it was healthy.
+var errGatewayExited = errors.New("integration: gateway exited before it was healthy")
+
+// waitHealth polls /health until it answers 2xx, ctx ends, or the gateway exits.
+func waitHealth(ctx context.Context, baseURL string, exited <-chan struct{}) error {
 	client := &http.Client{Timeout: 2 * time.Second}
 	healthURL := strings.TrimRight(baseURL, "/") + "/health"
-	for time.Now().Before(deadline) {
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, healthURL, nil)
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 		if err != nil {
 			return err
 		}
-		resp, err := client.Do(req)
-		if err == nil {
+		if resp, err := client.Do(req); err == nil {
 			code := resp.StatusCode
-			_ = resp.Body.Close()
+			_ = resp.Body.Close() // only the status matters.
 			if code >= 200 && code < 300 {
 				return nil
 			}
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("integration: gateway not healthy: %w", ctx.Err())
+		case <-exited:
+			return errGatewayExited
+		case <-tick.C:
+		}
 	}
-	return fmt.Errorf("integration: gateway not healthy within %s", timeout)
 }
