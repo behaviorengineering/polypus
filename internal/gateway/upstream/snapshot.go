@@ -48,6 +48,6 @@ func breakerStateString(state gobreaker.State) string {
 	case gobreaker.StateHalfOpen:
 		return "half-open"
 	default:
-		return "unknown"
+		return unknownUpstream
 	}
 }

@@ -83,7 +83,7 @@ func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtr
 		return body, action, true
 	}
 
-	hasUsage := len(root["usage"]) > 0 && string(root["usage"]) != "null"
+	hasUsage := !isJSONNull(root["usage"])
 
 	for _, ch := range choices {
 		idx := streamChoiceIndex(ch)
@@ -156,7 +156,7 @@ func openAIStreamJSONEqual(a, b []byte) bool {
 }
 
 func isTerminalStreamFinishReason(raw json.RawMessage) bool {
-	if len(raw) == 0 || string(raw) == "null" {
+	if isJSONNull(raw) {
 		return false
 	}
 	var s string
@@ -180,7 +180,7 @@ func ensureStreamChoiceFinishReasonFromRoot(root map[string]json.RawMessage) (ma
 		if _, has := choices[i]["finish_reason"]; has {
 			continue
 		}
-		choices[i]["finish_reason"] = json.RawMessage("null")
+		choices[i]["finish_reason"] = json.RawMessage(jsonNull)
 		changed = true
 	}
 	if !changed {

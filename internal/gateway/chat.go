@@ -291,11 +291,15 @@ func stripCloudflareThinkingFields(root map[string]any) bool {
 	return changed
 }
 
+// reasoningEffortMinimal is the lowest OpenAI reasoning effort; Polypus treats it as
+// thinking off.
+const reasoningEffortMinimal = "minimal"
+
 func applyGeminiThinkingEmit(root map[string]any, model string, wants bool) bool {
 	changed := false
 	switch {
 	case strings.Contains(model, "gemma-4"):
-		effort := "minimal"
+		effort := reasoningEffortMinimal
 		if wants {
 			effort = "high"
 		}
@@ -309,7 +313,7 @@ func applyGeminiThinkingEmit(root map[string]any, model string, wants bool) bool
 		changed = setNestedReasoningMaxTokens(root, tokens) || changed
 		changed = deleteNestedReasoningField(root, "effort") || changed
 	case strings.Contains(model, "gemini-3"):
-		effort := "minimal"
+		effort := reasoningEffortMinimal
 		if wants {
 			effort = strings.ToLower(strings.TrimSpace(chatMapReasoningEffort(root)))
 			if effort == "" || chatReasoningEffortIsOff(effort) {
@@ -483,10 +487,7 @@ func mergeReasoningIntoContent(body []byte) ([]byte, bool) {
 }
 
 func jsonStringField(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	if string(raw) == "null" {
+	if isJSONNull(raw) {
 		return ""
 	}
 	var s string
@@ -513,7 +514,7 @@ func chatMapReasoningEffort(root map[string]any) string {
 
 func chatReasoningEffortIsOff(effort string) bool {
 	switch strings.ToLower(strings.TrimSpace(effort)) {
-	case "", "<nil>", "nil", "none", "off", "false", "0", "minimal":
+	case "", "<nil>", "nil", "none", "off", "false", "0", reasoningEffortMinimal:
 		return true
 	default:
 		return false

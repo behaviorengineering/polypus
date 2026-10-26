@@ -59,11 +59,14 @@ func buildAPICatalog(cfg config.RouterConfig) apiCatalog {
 	}
 }
 
+// apiFlavorOpenAI names the OpenAI-compatible API in the catalog.
+const apiFlavorOpenAI = "openai"
+
 func openAICatalogEntry() apiCatalogEntry {
 	return apiCatalogEntry{
-		ID:     "openai",
+		ID:     apiFlavorOpenAI,
 		Title:  "OpenAI-compatible",
-		Flavor: "openai",
+		Flavor: apiFlavorOpenAI,
 		Models: pathOpenAIModels,
 		Schema: "/v1/apis/openai/openapi.yaml",
 		Operations: map[string]apiOperation{

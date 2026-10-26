@@ -98,9 +98,12 @@ func (b *Board) breaker(name string) *gobreaker.CircuitBreaker {
 	return c
 }
 
+// unknownUpstream names an upstream the error did not identify.
+const unknownUpstream = "unknown"
+
 func normalizeName(name string) string {
 	if name == "" {
-		return "unknown"
+		return unknownUpstream
 	}
 	return name
 }

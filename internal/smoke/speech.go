@@ -22,7 +22,7 @@ func runTTS(ctx context.Context, opts Options) ([]Result, error) {
 		}
 		return fmt.Sprintf("%d bytes", len(audio)), nil
 	})
-	if row.Status == "fail" {
+	if row.Status == StatusFail {
 		return []Result{row}, fmt.Errorf("tts smoke failed")
 	}
 	return []Result{row}, nil
@@ -41,7 +41,7 @@ func runSTT(ctx context.Context, opts Options) ([]Result, error) {
 		}
 		return fmt.Sprintf("%d bytes", len(audio)), nil
 	})
-	if prep.Status == "fail" {
+	if prep.Status == StatusFail {
 		return []Result{prep}, fmt.Errorf("stt smoke failed (tts prep)")
 	}
 	transcribe := timed(ChannelSTT, "transcribe", opts.STTModel, func() (string, error) {
@@ -59,7 +59,7 @@ func runSTT(ctx context.Context, opts Options) ([]Result, error) {
 		return d, nil
 	})
 	out := []Result{prep, transcribe}
-	if transcribe.Status == "fail" {
+	if transcribe.Status == StatusFail {
 		return out, fmt.Errorf("stt smoke failed")
 	}
 	return out, nil

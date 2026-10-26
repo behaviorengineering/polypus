@@ -28,6 +28,9 @@ const (
 	CapBatch     Capability = "batch"
 )
 
+// mlxLocalID is the default local MLX audio backend's id.
+const mlxLocalID = "mlx_local"
+
 // Valid reports whether c is one of the known capabilities.
 func (c Capability) Valid() bool {
 	switch c {
@@ -378,14 +381,14 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 func defaultRouterFromEnv(opts ServeOptions) RouterConfig {
 	backend := strings.TrimRight(strings.TrimSpace(opts.BackendURL), "/")
 	return RouterConfig{
-		TTS:      CapabilityBackend{Enabled: true, Default: "mlx_local"},
-		STT:      CapabilityBackend{Enabled: true, Default: "mlx_local"},
-		Proxy:    CapabilityBackend{Enabled: true, Default: "mlx_local"},
+		TTS:      CapabilityBackend{Enabled: true, Default: mlxLocalID},
+		STT:      CapabilityBackend{Enabled: true, Default: mlxLocalID},
+		Proxy:    CapabilityBackend{Enabled: true, Default: mlxLocalID},
 		Policy:   DefaultRouterPolicy(),
 		Timeouts: DefaultTimeouts(),
 		Backends: map[string]BackendDef{
-			"mlx_local": {
-				ID:           "mlx_local",
+			mlxLocalID: {
+				ID:           mlxLocalID,
 				BaseURL:      backend,
 				Capabilities: []Capability{CapTTS, CapSTT, CapVoices},
 			},
@@ -431,9 +434,9 @@ func applyRouterEnvOverrides(cfg *RouterConfig, opts ServeOptions) {
 	}
 	// CLI --backend overrides mlx_local URL when present.
 	if opts.BackendURL != "" {
-		if b, ok := cfg.Backends["mlx_local"]; ok {
+		if b, ok := cfg.Backends[mlxLocalID]; ok {
 			b.BaseURL = strings.TrimRight(strings.TrimSpace(opts.BackendURL), "/")
-			cfg.Backends["mlx_local"] = b
+			cfg.Backends[mlxLocalID] = b
 		}
 	}
 }
@@ -449,16 +452,7 @@ func applySwitchyardEnvOverrides(cfg *RouterConfig) {
 
 // SwitchyardEnabled reports whether the stack expects a Switchyard process (POLYPUS_SWITCHYARD, default on).
 func SwitchyardEnabled() bool {
-	v := strings.TrimSpace(os.Getenv("POLYPUS_SWITCHYARD"))
-	if v == "" {
-		return true
-	}
-	switch strings.ToLower(v) {
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return true
-	}
+	return EnvBool("POLYPUS_SWITCHYARD", true)
 }
 
 // fillDefaultBatchBackend turns Cloudflare batch on when YAML omitted batch_backend.
@@ -520,8 +514,8 @@ func normalizeCapabilityBackend(cfg *RouterConfig, cap *CapabilityBackend, field
 	}
 	if cap.Default == "" {
 		if allowMLXFill {
-			if _, ok := cfg.Backends["mlx_local"]; ok {
-				cap.Default = "mlx_local"
+			if _, ok := cfg.Backends[mlxLocalID]; ok {
+				cap.Default = mlxLocalID
 				return nil
 			}
 		}

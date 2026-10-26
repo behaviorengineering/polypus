@@ -213,10 +213,10 @@ func validateSystemOneBody(body []byte) error {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return derrors.Wrap(err, derrors.CodeInvalid, "gateway.validateSystemOneBody", "invalid json")
 	}
-	if len(bytes.TrimSpace(payload.State)) == 0 || string(bytes.TrimSpace(payload.State)) == "null" {
+	if isJSONNull(payload.State) {
 		return derrors.New(derrors.CodeInvalid, "gateway.validateSystemOneBody", "state required")
 	}
-	if len(bytes.TrimSpace(payload.Questions)) == 0 || string(bytes.TrimSpace(payload.Questions)) == "null" {
+	if isJSONNull(payload.Questions) {
 		return derrors.New(derrors.CodeInvalid, "gateway.validateSystemOneBody", "questions required")
 	}
 	var q map[string]json.RawMessage

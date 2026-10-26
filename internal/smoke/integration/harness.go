@@ -34,7 +34,7 @@ type Options struct {
 type childEnvConfig struct {
 	disableSwitchyard bool
 	switchyardBaseURL string
-	polypusBackendURL string // POLYPUS_BACKEND_URL (overrides mlx_local when CLI env is set)
+	polypusBackendURL string // POLYPUS_BACKEND_URL (overrides mlx_local when CLI env is set).
 }
 
 // Harness is a running polypus gateway for integration smoke.
@@ -117,16 +117,14 @@ func startHarness(opts Options) (*Harness, error) {
 			h.Stop()
 			return nil, err
 		}
-	default:
-		if opts.Live {
-			if err := h.setupLive(); err != nil {
-				h.Stop()
-				return nil, err
-			}
-		} else if err := h.setupHermetic(); err != nil {
+	case ModeCloudflare:
+		if err := h.setupCloudflare(opts.Live); err != nil {
 			h.Stop()
 			return nil, err
 		}
+	default:
+		h.Stop()
+		return nil, fmt.Errorf("integration: unknown mode %d", opts.Mode)
 	}
 
 	port, err := freePort()
@@ -158,6 +156,14 @@ func startHarness(opts Options) (*Harness, error) {
 	return h, nil
 }
 
+// setupCloudflare prepares the shared Cloudflare harness: live Workers AI, or the mock.
+func (h *Harness) setupCloudflare(live bool) error {
+	if live {
+		return h.setupLive()
+	}
+	return h.setupHermetic()
+}
+
 func (h *Harness) setupHermetic() error {
 	h.mockCF = startMockCloudflare()
 	cfV1 := strings.TrimRight(h.mockCF.URL, "/") + "/client/v4/accounts/test/ai/v1"
@@ -186,7 +192,7 @@ func (h *Harness) setupRouter() error {
 	h.mockMLX = startMockMLX()
 	cfV1 := strings.TrimRight(h.mockCF.URL, "/") + "/client/v4/accounts/test/ai/v1"
 	syDir := filepath.Join(h.tmpRoot, "switchyard")
-	if err := os.MkdirAll(syDir, 0o755); err != nil {
+	if err := os.MkdirAll(syDir, 0o750); err != nil {
 		return fmt.Errorf("switchyard dir: %w", err)
 	}
 	configPath := filepath.Join(h.tmpRoot, "config.yaml")
@@ -216,11 +222,11 @@ func (h *Harness) setupLive() error {
 func (h *Harness) prepareChildEnv(configPath string) error {
 	home := filepath.Join(h.tmpRoot, "home")
 	for _, sub := range []string{"batch"} {
-		if err := os.MkdirAll(filepath.Join(h.tmpRoot, sub), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(h.tmpRoot, sub), 0o750); err != nil {
 			return err
 		}
 	}
-	if err := os.MkdirAll(home, 0o755); err != nil {
+	if err := os.MkdirAll(home, 0o750); err != nil {
 		return err
 	}
 	h.childEnv = childEnv(configPath, h.tmpRoot, home, h.envCfg)
@@ -278,7 +284,7 @@ func envOr(key, def string) string {
 }
 
 func (h *Harness) startServe(port int) error {
-	h.cmd = exec.Command(h.binPath, "serve", "--host", "127.0.0.1", "--port", fmt.Sprintf("%d", port))
+	h.cmd = exec.Command(h.binPath, "serve", "--host", "127.0.0.1", "--port", fmt.Sprintf("%d", port)) //nolint:gosec // G204: the binary this harness just built.
 	h.cmd.Env = h.childEnv
 	stdout, err := h.cmd.StdoutPipe()
 	if err != nil {
@@ -397,7 +403,7 @@ func moduleRoot() (string, error) {
 	}
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+			data, err := os.ReadFile(filepath.Join(dir, "go.mod")) //nolint:gosec // G304: go.mod found walking up from the working directory.
 			if err != nil {
 				return "", err
 			}
@@ -428,7 +434,7 @@ func freePort() (int, error) {
 }
 
 func buildGateway(moduleRoot, outPath string) error {
-	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", outPath, "./cmd/polypus")
+	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", outPath, "./cmd/polypus") //nolint:gosec // G204: outPath is the harness temp dir.
 	cmd.Dir = moduleRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {

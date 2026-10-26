@@ -72,6 +72,15 @@ func loadProcessFlags() (ProcessFlags, error) {
 	return ProcessFlags{MLX: file.Processes.MLX}, nil
 }
 
+// EnvBool reads a boolean env var with ParseBoolishEnv, returning fallback when it is
+// unset or not a recognised word.
+func EnvBool(key string, fallback bool) bool {
+	if v, ok := ParseBoolishEnv(os.Getenv(key)); ok {
+		return v
+	}
+	return fallback
+}
+
 // ParseBoolishEnv maps common truthy/falsey env values. Empty returns ok=false.
 func ParseBoolishEnv(raw string) (value bool, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {

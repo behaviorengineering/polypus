@@ -29,7 +29,7 @@ type FailureClass struct {
 // ResolveUpstreamName returns hint when set, else the name from mapExecuteErr wraps.
 func ResolveUpstreamName(err error, hint string) string {
 	hint = strings.TrimSpace(hint)
-	if hint != "" && hint != "unknown" {
+	if hint != "" && hint != unknownUpstream {
 		return normalizeName(hint)
 	}
 	if name := upstreamNameFromUnavailable(err); name != "" {

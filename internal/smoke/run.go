@@ -56,12 +56,22 @@ type Options struct {
 }
 
 // Result is one probe outcome (JSONL-friendly).
+// Status is a probe outcome.
+type Status string
+
+// Probe outcomes.
+const (
+	StatusPass Status = "pass"
+	StatusFail Status = "fail"
+	StatusSkip Status = "skip"
+)
+
 type Result struct {
 	Channel       string `json:"channel"`
 	Model         string `json:"model,omitempty"`
 	SelectedModel string `json:"selected_model,omitempty"`
 	Probe         string `json:"probe"`
-	Status        string `json:"status"` // pass | fail | skip.
+	Status        Status `json:"status"`
 	Ms            int64  `json:"ms"`
 	Detail        string `json:"detail"`
 }
@@ -138,7 +148,7 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 			continue
 		}
 		for _, r := range results {
-			if r.Status == "fail" {
+			if r.Status == StatusFail {
 				errs = append(errs, fmt.Errorf("channel %s: probe %s: %s", ch, r.Probe, r.Detail))
 			}
 		}
@@ -168,7 +178,7 @@ func runChannel(ctx context.Context, ch string, opts Options) ([]Result, error) 
 	case ChannelBatch:
 		results, err = runBatch(ctx, opts)
 	default:
-		results = []Result{{Channel: ch, Probe: "unknown", Status: "fail", Detail: "unknown channel"}}
+		results = []Result{{Channel: ch, Probe: "unknown", Status: StatusFail, Detail: "unknown channel"}}
 		err = fmt.Errorf("unknown channel %q", ch)
 	}
 	if err != nil {
@@ -187,11 +197,11 @@ func envOr(key, def string) string {
 
 func timed(channel, probe, model string, fn func() (string, error)) Result {
 	start := time.Now()
-	row := Result{Channel: channel, Probe: probe, Model: model, Status: "pass"}
+	row := Result{Channel: channel, Probe: probe, Model: model, Status: StatusPass}
 	detail, err := fn()
 	row.Ms = time.Since(start).Milliseconds()
 	if err != nil {
-		row.Status = "fail"
+		row.Status = StatusFail
 		row.Detail = err.Error()
 		return row
 	}

@@ -4,8 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"os"
 	"strings"
+
+	"github.com/behaviorengineering/polypus/internal/config"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -53,12 +54,7 @@ func RecordChatStreamChunk(ctx context.Context, c StreamChunk) {
 }
 
 func debugStreamChunks() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("POLYPUS_STREAM_CHUNK_DEBUG"))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
+	return config.EnvBool("POLYPUS_STREAM_CHUNK_DEBUG", false)
 }
 
 func sha256Hex(b []byte) string {

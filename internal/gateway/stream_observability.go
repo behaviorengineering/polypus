@@ -116,7 +116,7 @@ func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProvide
 	name := fmt.Sprintf("stream-chunk-%s-%d-%d.json", traceID, idx, time.Now().UnixNano())
 	path := filepath.Join(dir, name)
 	payload := map[string]json.RawMessage{
-		"openai": openaiJSON,
+		apiFlavorOpenAI: openaiJSON,
 	}
 	if len(rawProviderJSON) > 0 {
 		payload["raw_provider"] = rawProviderJSON

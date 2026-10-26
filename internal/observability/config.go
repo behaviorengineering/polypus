@@ -6,6 +6,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/behaviorengineering/polypus/internal/config"
 )
 
 const (
@@ -35,7 +37,7 @@ type Config struct {
 // Tracing is on by default so gateway spans join client traces in Phoenix.
 func LoadConfig() Config {
 	cfg := Config{
-		Enabled:      envTruthy("POLYPUS_OTEL", true),
+		Enabled:      config.EnvBool("POLYPUS_OTEL", true),
 		ServiceName:  envOr("POLYPUS_SERVICE_NAME", defaultServiceName),
 		OTLPEndpoint: strings.TrimSpace(os.Getenv("POLYPUS_OTLP_ENDPOINT")),
 		DumpDir:      envOr("POLYPUS_FAILURE_DUMP_DIR", defaultDumpDir),
@@ -48,11 +50,11 @@ func LoadConfig() Config {
 	if cfg.OTLPEndpoint == "" {
 		cfg.OTLPEndpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	}
-	if cfg.OTLPEndpoint == "" && envTruthy("POLYPUS_PHOENIX", true) {
+	if cfg.OTLPEndpoint == "" && config.EnvBool("POLYPUS_PHOENIX", true) {
 		cfg.OTLPEndpoint = defaultOTLPEndpoint
 	}
 	if v := strings.TrimSpace(os.Getenv("POLYPUS_OTEL_ENABLED")); v != "" {
-		cfg.Enabled = envTruthy("POLYPUS_OTEL_ENABLED", cfg.Enabled)
+		cfg.Enabled = config.EnvBool("POLYPUS_OTEL_ENABLED", cfg.Enabled)
 	}
 	return cfg
 }
@@ -62,19 +64,6 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func envTruthy(key string, fallback bool) bool {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	switch strings.ToLower(raw) {
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return true
-	}
 }
 
 func parseSkipPaths(raw string) []string {

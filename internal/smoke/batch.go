@@ -9,12 +9,13 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/batch"
 )
 
 const (
 	batchSmokeCustomID    = "smoke-batch-1"
 	batchSmokePollEvery   = 2 * time.Second
-	batchEndpointChat     = "/v1/chat/completions"
 	batchCompletionWindow = "24h"
 )
 
@@ -30,7 +31,7 @@ func runBatch(ctx context.Context, opts Options) ([]Result, error) {
 	})
 	out := []Result{ping, lifecycle}
 	var err error
-	if ping.Status == "fail" || lifecycle.Status == "fail" {
+	if ping.Status == StatusFail || lifecycle.Status == StatusFail {
 		err = fmt.Errorf("batch smoke failed")
 	}
 	return out, err
@@ -53,7 +54,7 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 		Method   string      `json:"method"`
 		URL      string      `json:"url"`
 		Body     pingRequest `json:"body"`
-	}{batchSmokeCustomID, http.MethodPost, batchEndpointChat, newPingRequest(model, opts)})
+	}{batchSmokeCustomID, http.MethodPost, batch.EndpointChatCompletions, newPingRequest(model, opts)})
 	if err != nil {
 		return "", err
 	}
@@ -72,10 +73,12 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 		return "", err
 	}
 	switch meta.Status {
-	case "completed":
+	case batch.BatchStatusCompleted:
 		// continue.
-	case "failed", "expired", "cancelled":
+	case batch.BatchStatusFailed, batch.BatchStatusExpired, batch.BatchStatusCancelled:
 		return "", fmt.Errorf("batch terminal status %s", meta.Status)
+	case batch.BatchStatusValidating, batch.BatchStatusInProgress, batch.BatchStatusCancelling:
+		return "", fmt.Errorf("batch not finished: %s", meta.Status)
 	default:
 		return "", fmt.Errorf("unexpected batch status %s", meta.Status)
 	}
@@ -146,7 +149,7 @@ func uploadBatchJSONL(ctx context.Context, baseURL, content string) (string, err
 func createBatch(ctx context.Context, baseURL, inputFileID string) (string, error) {
 	body, err := json.Marshal(map[string]string{
 		"input_file_id":     inputFileID,
-		"endpoint":          batchEndpointChat,
+		"endpoint":          batch.EndpointChatCompletions,
 		"completion_window": batchCompletionWindow,
 	})
 	if err != nil {
@@ -169,8 +172,8 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 		return "", fmt.Errorf("batches create status %d: %s", resp.StatusCode, string(raw))
 	}
 	var parsed struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
+		ID     string            `json:"id"`
+		Status batch.BatchStatus `json:"status"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return "", err
@@ -179,9 +182,9 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 		return "", fmt.Errorf("batches create: empty id")
 	}
 	switch parsed.Status {
-	case "validating", "in_progress", "completed":
+	case batch.BatchStatusValidating, batch.BatchStatusInProgress, batch.BatchStatusCompleted:
 		return parsed.ID, nil
-	case "failed", "expired", "cancelled":
+	case batch.BatchStatusFailed, batch.BatchStatusExpired, batch.BatchStatusCancelling, batch.BatchStatusCancelled:
 		return "", fmt.Errorf("batches create terminal status %s", parsed.Status)
 	default:
 		return "", fmt.Errorf("batches create unexpected status %s", parsed.Status)
@@ -189,9 +192,9 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 }
 
 type batchMetaSmoke struct {
-	ID           string `json:"id"`
-	Status       string `json:"status"`
-	OutputFileID string `json:"output_file_id"`
+	ID           string            `json:"id"`
+	Status       batch.BatchStatus `json:"status"`
+	OutputFileID string            `json:"output_file_id"`
 }
 
 func pollBatchTerminal(ctx context.Context, baseURL, batchID string) (batchMetaSmoke, error) {
@@ -206,9 +209,9 @@ func pollBatchTerminal(ctx context.Context, baseURL, batchID string) (batchMetaS
 		}
 		last = meta
 		switch meta.Status {
-		case "completed", "failed", "expired", "cancelled":
+		case batch.BatchStatusCompleted, batch.BatchStatusFailed, batch.BatchStatusExpired, batch.BatchStatusCancelled:
 			return meta, nil
-		case "validating", "in_progress":
+		case batch.BatchStatusValidating, batch.BatchStatusInProgress, batch.BatchStatusCancelling:
 			// keep polling.
 		default:
 			return meta, fmt.Errorf("batch poll unexpected status %s", meta.Status)

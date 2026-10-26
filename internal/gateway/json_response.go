@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 )
@@ -11,6 +12,15 @@ const keyModel = "model"
 
 // objectList is the OpenAI "object" value of a list response.
 const objectList = "list"
+
+// jsonNull is the JSON null literal.
+const jsonNull = "null"
+
+// isJSONNull reports whether raw is absent or the JSON null.
+func isJSONNull(raw []byte) bool {
+	t := bytes.TrimSpace(raw)
+	return len(t) == 0 || string(t) == jsonNull
+}
 
 // writeJSON is the gateway's one JSON response writer. It marshals before writing,
 // so a value that cannot be encoded still gets a 500, and it logs a failed write.

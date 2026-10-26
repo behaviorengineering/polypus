@@ -47,7 +47,7 @@ func runChat(ctx context.Context, opts Options) ([]Result, error) {
 		}))
 	}
 	for _, r := range out {
-		if r.Status == "fail" {
+		if r.Status == StatusFail {
 			return out, fmt.Errorf("chat smoke failed")
 		}
 	}
@@ -82,11 +82,11 @@ func selectedModelAllowed(selected string, allowed []string) bool {
 
 func timedSelected(channel, probe, model string, fn func() (string, string, error)) Result {
 	start := time.Now()
-	row := Result{Channel: channel, Probe: probe, Model: model, Status: "pass"}
+	row := Result{Channel: channel, Probe: probe, Model: model, Status: StatusPass}
 	detail, selected, err := fn()
 	row.Ms = time.Since(start).Milliseconds()
 	if err != nil {
-		row.Status = "fail"
+		row.Status = StatusFail
 		row.Detail = err.Error()
 		return row
 	}

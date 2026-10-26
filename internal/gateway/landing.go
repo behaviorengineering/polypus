@@ -212,22 +212,28 @@ func landingOTLPNote(r *http.Request) string {
 		"http: " + httpURL
 }
 
+// URL schemes a request can arrive on.
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 func requestScheme(r *http.Request) string {
 	if r == nil {
-		return "http"
+		return schemeHTTP
 	}
 	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
 		if i := strings.Index(proto, ","); i >= 0 {
 			proto = strings.TrimSpace(proto[:i])
 		}
-		if proto == "https" || proto == "http" {
+		if proto == schemeHTTPS || proto == schemeHTTP {
 			return proto
 		}
 	}
 	if r.TLS != nil {
-		return "https"
+		return schemeHTTPS
 	}
-	return "http"
+	return schemeHTTP
 }
 
 func requestHostname(r *http.Request) string {
