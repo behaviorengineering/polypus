@@ -59,7 +59,7 @@ func TestGeminiGemmaLive(t *testing.T) {
 	}
 
 	streamBody := []byte(`{"messages":[{"role":"user","content":"Reply with exactly: ok"}],"model":"` + model + `","stream":true}`)
-	chunks, errCh, err := client.ChatCompletionStreamRaw(ctx, "gemini_studio", model, streamBody, timeout)
+	chunks, errCh, err := client.ChatCompletionStreamRaw(ctx, "gemini_studio", model, streamBody)
 	if err != nil {
 		t.Fatalf("ChatCompletionStreamRaw: %v", err)
 	}

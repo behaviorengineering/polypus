@@ -269,7 +269,7 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, backendID, model string,
 // ChatCompletionStreamRaw streams OpenAI-shaped chat via Bifrost.
 // Each channel value is one JSON chat.completion.chunk object (not SSE-framed).
 // The channel is closed when the stream ends; streamErr receives at most one terminal error.
-func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) (<-chan ChatStreamChunk, <-chan error, error) {
+func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model string, body []byte) (<-chan ChatStreamChunk, <-chan error, error) {
 	if c == nil || c.bf == nil {
 		return nil, nil, derrors.New(derrors.CodeFailedPrecondition, "router.ChatCompletionStreamRaw", "bifrost not configured")
 	}
@@ -283,8 +283,7 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, backendID, model s
 		return nil, nil, derrors.New(derrors.CodeInvalid, "router.ChatCompletionStreamRaw", "messages required")
 	}
 	// Streams use client cancel only (no Bifrost wall-clock deadline), matching hop
-	// timeout rules on the HTTP proxy path. The timeout arg is reserved for API symmetry.
-	_ = timeout
+	// timeout rules on the HTTP proxy path; the gateway's idle limit bounds a stall.
 	useRaw := c.bifrostUseRawChatBody(backendID)
 	bctx := c.bifrostContext(ctx, 0, useRaw)
 	chatReq, err := bifrostChatRequest(backendID, model, envelope.Messages, body, useRaw)

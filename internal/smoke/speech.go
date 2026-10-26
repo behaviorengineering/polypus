@@ -103,7 +103,9 @@ func synthesize(ctx context.Context, opts Options) ([]byte, error) {
 func transcribeAudio(ctx context.Context, opts Options, audio []byte) (string, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	_ = w.WriteField("model", opts.STTModel)
+	if err := w.WriteField("model", opts.STTModel); err != nil {
+		return "", err
+	}
 	part, err := w.CreateFormFile("file", "smoke.mp3")
 	if err != nil {
 		return "", err

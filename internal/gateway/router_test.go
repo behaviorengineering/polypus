@@ -34,7 +34,7 @@ func (f *fakeRouter) ChatCompletionRaw(context.Context, string, string, []byte, 
 	return nil, fmt.Errorf("fakeRouter: ChatCompletionRaw not used when UsesBifrost is false")
 }
 
-func (f *fakeRouter) ChatCompletionStreamRaw(context.Context, string, string, []byte, time.Duration) (<-chan router.ChatStreamChunk, <-chan error, error) {
+func (f *fakeRouter) ChatCompletionStreamRaw(context.Context, string, string, []byte) (<-chan router.ChatStreamChunk, <-chan error, error) {
 	return nil, nil, fmt.Errorf("fakeRouter: ChatCompletionStreamRaw not used when UsesBifrost is false")
 }
 
@@ -88,7 +88,7 @@ func (r *recordingRouter) ChatCompletionRaw(_ context.Context, backendID, model 
 	return []byte(`{"choices":[{"message":{"content":"via-bifrost"}}]}`), nil
 }
 
-func (r *recordingRouter) ChatCompletionStreamRaw(_ context.Context, backendID, model string, _ []byte, _ time.Duration) (<-chan router.ChatStreamChunk, <-chan error, error) {
+func (r *recordingRouter) ChatCompletionStreamRaw(_ context.Context, backendID, model string, _ []byte) (<-chan router.ChatStreamChunk, <-chan error, error) {
 	r.streamProviders = append(r.streamProviders, backendID+":"+model)
 	chunks := make(chan router.ChatStreamChunk, 1)
 	errCh := make(chan error)

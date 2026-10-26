@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -50,14 +49,14 @@ func (h healthHandler) serveUpstreamHealth(w http.ResponseWriter, _ *http.Reques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	encodeJSON(w, resp)
 }
 
 // serveHealth reports gateway liveness only (no upstream probes).
 func (healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok"})
+	encodeJSON(w, healthResponse{Status: "ok"})
 }
 
 // serveBackendHealth probes configured upstream backends (manual / stack-doctor use).
@@ -102,7 +101,7 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(backendHealthResponse{
+	encodeJSON(w, backendHealthResponse{
 		Status:   status,
 		Router:   "bifrost",
 		Backends: backends,

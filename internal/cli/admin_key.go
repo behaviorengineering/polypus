@@ -37,7 +37,9 @@ func newAdminKeyCmd() *cobra.Command {
 		Short: "Gateway access keys (optional lock)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			_ = cmd.Help()
+			if err := cmd.Help(); err != nil {
+				return err
+			}
 			return exitStatus(2)
 		},
 	}

@@ -26,7 +26,7 @@ type RegistryProvider interface {
 type ChatRouter interface {
 	UsesBifrost(backendID string) bool
 	ChatCompletionRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) ([]byte, error)
-	ChatCompletionStreamRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) (<-chan router.ChatStreamChunk, <-chan error, error)
+	ChatCompletionStreamRaw(ctx context.Context, backendID, model string, body []byte) (<-chan router.ChatStreamChunk, <-chan error, error)
 	EmbeddingRaw(ctx context.Context, backendID, model string, body []byte, timeout time.Duration) ([]byte, error)
 }
 

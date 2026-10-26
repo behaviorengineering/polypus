@@ -42,7 +42,7 @@ func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, 
 // bifrostChatResponse dials chat through Bifrost (stream or non-stream).
 func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request, backendID, model string, body []byte, hop time.Duration) error {
 	if chatBodyIsStream(body) {
-		chunks, errCh, err := h.router.ChatCompletionStreamRaw(r.Context(), backendID, model, body, hop)
+		chunks, errCh, err := h.router.ChatCompletionStreamRaw(r.Context(), backendID, model, body)
 		if err != nil {
 			return gatewayErr(err, "gateway.bifrostChatResponse", "stream").With("backend", backendID)
 		}

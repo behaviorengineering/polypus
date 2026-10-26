@@ -26,7 +26,9 @@ func newSecretCmd() *cobra.Command {
 		Short: "Store secrets in the OS keyring",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			_ = cmd.Help()
+			if err := cmd.Help(); err != nil {
+				return err
+			}
 			return exitStatus(2)
 		},
 	}

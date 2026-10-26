@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -135,5 +134,5 @@ func (h filesHandler) serveFileDelete(w http.ResponseWriter, r *http.Request, id
 func writeJSON(w http.ResponseWriter, code int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	encodeJSON(w, v)
 }

@@ -68,7 +68,9 @@ func runServeWithOpts(host string, port int, backend string) int {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if shutdownOTEL != nil {
-			_ = shutdownOTEL(ctx)
+			if err := shutdownOTEL(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "polypus serve: otel shutdown: %v\n", err)
+			}
 		}
 	}()
 	if err := polypus.Serve(opts); err != nil {
