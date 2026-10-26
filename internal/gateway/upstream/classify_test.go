@@ -2,7 +2,6 @@ package upstream
 
 import (
 	"errors"
-	"fmt"
 	"testing"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -10,7 +9,7 @@ import (
 )
 
 func TestResolveUpstreamNameFromBreakerWrap(t *testing.T) {
-	err := fmt.Errorf("upstream edge_cf unavailable: %w", gobreaker.ErrOpenState)
+	err := UnavailableError("edge_cf", gobreaker.ErrOpenState)
 	got := ResolveUpstreamName(err, "")
 	if got != "edge_cf" {
 		t.Fatalf("got %q", got)
@@ -18,7 +17,7 @@ func TestResolveUpstreamNameFromBreakerWrap(t *testing.T) {
 }
 
 func TestResolveUpstreamNameHintWins(t *testing.T) {
-	err := fmt.Errorf("upstream other unavailable: %w", gobreaker.ErrOpenState)
+	err := UnavailableError("other", gobreaker.ErrOpenState)
 	got := ResolveUpstreamName(err, "hint_backend")
 	if got != "hint_backend" {
 		t.Fatalf("got %q", got)
@@ -51,7 +50,7 @@ func TestClassifyDialFailureBifrostLeafStatus(t *testing.T) {
 }
 
 func TestClassifyDialFailureBreakerUpstreamParsed(t *testing.T) {
-	err := fmt.Errorf("upstream cf_local unavailable: %w", gobreaker.ErrOpenState)
+	err := UnavailableError("cf_local", gobreaker.ErrOpenState)
 	cls := ClassifyDialFailure(err, "")
 	if cls.Upstream != "cf_local" {
 		t.Fatalf("upstream=%q", cls.Upstream)

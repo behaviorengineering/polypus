@@ -110,10 +110,20 @@ func mapExecuteErr(name string, err error) error {
 		return nil
 	}
 	if Unavailable(err) {
-		return fmt.Errorf("upstream %s unavailable: %w", name, err)
+		return UnavailableError(name, err)
 	}
 	return err
 }
+
+// UnavailableError is the error for a call the breaker for name refused; err is the
+// breaker's (gobreaker.ErrOpenState or ErrTooManyRequests).
+func UnavailableError(name string, err error) error {
+	return derrors.Wrap(err, derrors.CodeUnavailable, "upstream.Execute", "upstream "+name+" unavailable").
+		With(FieldUpstream, name)
+}
+
+// FieldUpstream is the error field naming the upstream whose breaker refused a call.
+const FieldUpstream = "upstream"
 
 // callerVisible reports codes that describe the request, not the upstream's health.
 // CodeCanceled is the caller going away (closed stream, cancelled request), so it

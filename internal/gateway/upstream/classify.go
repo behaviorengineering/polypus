@@ -108,44 +108,16 @@ func hasCloudflareOp(err error) bool {
 	return false
 }
 
+// upstreamNameFromUnavailable is the upstream a breaker refusal names, if any.
 func upstreamNameFromUnavailable(err error) string {
-	const suffix = " unavailable:"
-	for e := err; e != nil; {
-		msg := e.Error()
-		const prefix = "upstream "
-		if i := strings.Index(msg, prefix); i >= 0 {
-			rest := msg[i+len(prefix):]
-			if j := strings.Index(rest, suffix); j > 0 {
-				return normalizeName(strings.TrimSpace(rest[:j]))
-			}
-		}
-		e = errors.Unwrap(e)
-	}
-	return ""
+	return strings.TrimSpace(derrors.Field(err, FieldUpstream))
 }
 
+// bifrostStatus is the upstream HTTP status the error chain records, or 0.
 func bifrostStatus(err error) int {
-	var de *derrors.Error
-	for e := err; e != nil; {
-		if errors.As(e, &de) && de != nil {
-			if fields := de.Fields(); fields != nil {
-				if raw, ok := fields["status"]; ok {
-					if n, convErr := strconv.Atoi(strings.TrimSpace(raw)); convErr == nil {
-						return n
-					}
-				}
-			}
-		}
-		e = errors.Unwrap(e)
+	n, convErr := strconv.Atoi(strings.TrimSpace(derrors.Field(err, ratelimit.FieldStatus)))
+	if convErr != nil {
+		return 0
 	}
-	msg := strings.ToLower(err.Error())
-	if idx := strings.Index(msg, "status "); idx >= 0 {
-		rest := strings.TrimSpace(msg[idx+len("status "):])
-		if f := strings.Fields(rest); len(f) > 0 {
-			if n, convErr := strconv.Atoi(f[0]); convErr == nil {
-				return n
-			}
-		}
-	}
-	return 0
+	return n
 }
