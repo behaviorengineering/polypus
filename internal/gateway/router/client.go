@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -172,35 +173,27 @@ func bifrostChatRequest(backendID, model string, messages []schemas.ChatMessage,
 	return req, nil
 }
 
+// chatParamsFromOpenAIBody reads every chat parameter Bifrost models (tools,
+// tool_choice, sampling, stop, response_format, stream_options, top-level
+// cache_control and reasoning) so native providers such as Gemini receive them.
+// Legacy max_tokens maps to MaxCompletionTokens when max_completion_tokens is absent.
+// Returns nil when the body sets no parameters.
 func chatParamsFromOpenAIBody(body []byte) (*schemas.ChatParameters, error) {
-	var root struct {
-		MaxTokens int `json:"max_tokens"`
-		Reasoning struct {
-			Effort    string `json:"effort"`
-			MaxTokens *int   `json:"max_tokens"`
-		} `json:"reasoning"`
-	}
-	if err := json.Unmarshal(body, &root); err != nil {
+	params := &schemas.ChatParameters{}
+	if err := json.Unmarshal(body, params); err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "router.chatParamsFromOpenAIBody", "parse chat params")
 	}
-	params := &schemas.ChatParameters{}
-	set := false
-	if root.MaxTokens > 0 {
-		n := root.MaxTokens
+	var legacy struct {
+		MaxTokens int `json:"max_tokens"`
+	}
+	if err := json.Unmarshal(body, &legacy); err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "router.chatParamsFromOpenAIBody", "parse max_tokens")
+	}
+	if params.MaxCompletionTokens == nil && legacy.MaxTokens > 0 {
+		n := legacy.MaxTokens
 		params.MaxCompletionTokens = &n
-		set = true
 	}
-	if root.Reasoning.Effort != "" || root.Reasoning.MaxTokens != nil {
-		reasoning := &schemas.ChatReasoning{}
-		if root.Reasoning.Effort != "" {
-			effort := root.Reasoning.Effort
-			reasoning.Effort = &effort
-		}
-		reasoning.MaxTokens = root.Reasoning.MaxTokens
-		params.Reasoning = reasoning
-		set = true
-	}
-	if !set {
+	if reflect.DeepEqual(*params, schemas.ChatParameters{}) {
 		return nil, nil
 	}
 	return params, nil
