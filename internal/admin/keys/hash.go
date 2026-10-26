@@ -37,7 +37,7 @@ func hashSecret(secret []byte) (string, error) {
 // a corrupt or hostile row must fail verification instead.
 const (
 	maxArgonTime   = 10
-	maxArgonMemory = 1 << 20 // KiB (1 GiB)
+	maxArgonMemory = 1 << 20 // KiB (1 GiB).
 	maxArgonKeyLen = 64
 )
 
