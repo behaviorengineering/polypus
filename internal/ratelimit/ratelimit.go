@@ -51,19 +51,30 @@ type workersErrorEnvelope struct {
 
 // Classify returns a CodeRateLimited error when the status is 429, or the JSON body
 // or hints carry a Cloudflare throttle code. It returns nil when the response is not
-// a rate limit. op names the caller (and so the backend) that saw the response.
+// a rate limit. op names the caller (and so the backend) that saw the response. Use
+// it for Cloudflare and for paths that may relay Cloudflare (Switchyard, proxies).
 func Classify(op string, status int, header http.Header, body []byte, hints ...string) *derrors.Error {
-	if strings.TrimSpace(op) == "" {
-		op = "ratelimit.Classify"
-	}
 	blob := strings.Join(hints, "\n")
 	if len(body) > 0 {
 		blob += "\n" + string(body)
 	}
-
 	cfCode := workersCodeFromEnvelope(body)
 	if cfCode == "" {
 		cfCode = workersCodeFromText(blob)
+	}
+	return classify(op, status, header, body, cfCode, hints, true)
+}
+
+// ClassifyStatus is Classify for a backend that is not Cloudflare: only a 429 is a
+// rate limit, Cloudflare codes in the body mean nothing, and the error carries none
+// of the Cloudflare fields (limit_kind, cf_ray) that mark a failure as Cloudflare's.
+func ClassifyStatus(op string, status int, header http.Header, body []byte, hints ...string) *derrors.Error {
+	return classify(op, status, header, body, "", hints, false)
+}
+
+func classify(op string, status int, header http.Header, body []byte, cfCode string, hints []string, cloudflare bool) *derrors.Error {
+	if strings.TrimSpace(op) == "" {
+		op = "ratelimit.Classify"
 	}
 
 	if status != http.StatusTooManyRequests && cfCode == "" {
@@ -92,8 +103,10 @@ func Classify(op string, status int, header http.Header, body []byte, hints ...s
 	}
 
 	err := derrors.New(derrors.CodeRateLimited, op, msg).
-		With(FieldStatus, strconv.Itoa(status)).
-		With(FieldKind, kind)
+		With(FieldStatus, strconv.Itoa(status))
+	if cloudflare {
+		err = err.With(FieldKind, kind)
+	}
 	if cfCode != "" {
 		err = err.With(FieldCFCode, cfCode)
 	}
@@ -104,7 +117,7 @@ func Classify(op string, status int, header http.Header, body []byte, hints ...s
 		if v := firstHeader(header, "Ratelimit", "RateLimit", "Rate-Limit"); v != "" {
 			err = err.With(FieldRateLimit, v)
 		}
-		if v := strings.TrimSpace(header.Get("Cf-Ray")); v != "" {
+		if v := strings.TrimSpace(header.Get("Cf-Ray")); v != "" && cloudflare {
 			err = err.With(FieldCFRay, v)
 		}
 		for name, vals := range header {

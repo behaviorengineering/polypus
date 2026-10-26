@@ -23,7 +23,7 @@ func TestBifrostErrRateLimitFromStatusAndBody(t *testing.T) {
 			RawResponse: json.RawMessage(`{"success":false,"errors":[{"code":3040,"message":"Capacity temporarily exceeded, please try again."}]}`),
 		},
 	}
-	err := bifrostErr(berr, nil)
+	err := bifrostErr(berr, nil, true)
 	if !errors.Is(err, derrors.ErrRateLimited) {
 		t.Fatalf("got %v", err)
 	}
@@ -40,7 +40,7 @@ func TestBifrostErrUnavailableOtherwise(t *testing.T) {
 	err := bifrostErr(&schemas.BifrostError{
 		StatusCode: &status,
 		Error:      &schemas.ErrorField{Message: "provider call"},
-	}, nil)
+	}, nil, false)
 	if !errors.Is(err, derrors.ErrUnavailable) {
 		t.Fatalf("got %v", err)
 	}
@@ -90,7 +90,7 @@ func TestBifrostErrProductionShaped429(t *testing.T) {
 
 func assertProduction429(t *testing.T, berr *schemas.BifrostError, hdr http.Header) {
 	t.Helper()
-	err := bifrostErr(berr, hdr)
+	err := bifrostErr(berr, hdr, true)
 	if !errors.Is(err, derrors.ErrRateLimited) {
 		t.Fatalf("got %v", err)
 	}
@@ -133,8 +133,25 @@ func TestBifrostErrRateLimitNamesTheProvider(t *testing.T) {
 			RoutingInfo: schemas.RoutingInfo{Provider: "openrouter"},
 		},
 	}
-	err := bifrostErr(berr, nil)
+	err := bifrostErr(berr, http.Header{"Cf-Ray": {"abc"}}, false)
 	if derrors.Field(err, "provider") != "openrouter" {
 		t.Fatalf("an OpenRouter 429 must name OpenRouter, not Cloudflare: %v", err)
+	}
+	if derrors.Field(err, ratelimit.FieldKind) != "" || derrors.Field(err, ratelimit.FieldCFRay) != "" {
+		t.Fatalf("a non-Cloudflare 429 must carry no Cloudflare markers: %v", err)
+	}
+}
+
+func TestBifrostErrIgnoresCloudflareCodesForOtherBackends(t *testing.T) {
+	status := http.StatusBadGateway
+	berr := &schemas.BifrostError{
+		StatusCode: &status,
+		Error:      &schemas.ErrorField{Message: "upstream said 3040 things"},
+	}
+	if err := bifrostErr(berr, nil, false); errors.Is(err, derrors.ErrRateLimited) {
+		t.Fatalf("a 502 from a non-Cloudflare backend is not a rate limit: %v", err)
+	}
+	if err := bifrostErr(berr, nil, true); !errors.Is(err, derrors.ErrRateLimited) {
+		t.Fatalf("Cloudflare's 3040 is a capacity limit: %v", err)
 	}
 }

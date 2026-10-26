@@ -145,7 +145,7 @@ func addFallback(file *routesFile, name string, router config.NamedRouter) {
 }
 
 func addStageRouter(file *routesFile, name string, router config.NamedRouter) {
-	capable, efficient := name+"_capable", name+"_efficient"
+	capable, efficient := config.StageTargetNames(name)
 	file.Targets[capable] = target{ID: router.Route.Capable, LLMClient: polypusClient}
 	file.Targets[efficient] = target{ID: router.Route.Efficient, LLMClient: polypusClient}
 	threshold := router.Route.ConfidenceThreshold

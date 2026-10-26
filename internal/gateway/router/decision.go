@@ -34,7 +34,7 @@ func (c *Client) SystemOneDecisionRaw(ctx context.Context, backendID, downstream
 	}
 	resp, berr := c.bf.DecisionRequest(bctx, bfReq)
 	if berr != nil {
-		return nil, bifrostErr(berr, bifrostProviderHeader(bctx))
+		return nil, c.mapBifrostErr(backendID, berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.SystemOneDecisionRaw", "empty decision response from backend").
@@ -44,7 +44,7 @@ func (c *Client) SystemOneDecisionRaw(ctx context.Context, backendID, downstream
 	if len(resp.NativeResponse) > 0 {
 		return resp.NativeResponse, nil
 	}
-	raw, err := coerceDecisionRawResponse(resp.ExtraFields.RawResponse)
+	raw, err := rawProviderJSON(resp.ExtraFields.RawResponse)
 	if err != nil {
 		return nil, err
 	}
@@ -54,22 +54,4 @@ func (c *Client) SystemOneDecisionRaw(ctx context.Context, backendID, downstream
 	return nil, derrors.New(derrors.CodeUnavailable, "router.SystemOneDecisionRaw", "decision response missing provider body").
 		With("backend", backendID).
 		With("model", downstream)
-}
-
-func coerceDecisionRawResponse(raw interface{}) ([]byte, error) {
-	if raw == nil {
-		return nil, nil
-	}
-	switch v := raw.(type) {
-	case []byte:
-		return v, nil
-	case string:
-		return []byte(v), nil
-	default:
-		out, err := json.Marshal(v)
-		if err != nil {
-			return nil, derrors.Wrap(err, derrors.CodeInternal, "router.coerceDecisionRawResponse", "marshal raw response")
-		}
-		return out, nil
-	}
 }

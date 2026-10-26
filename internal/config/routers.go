@@ -80,6 +80,13 @@ func FallbackTargetName(routerName string, index int) string {
 	return fmt.Sprintf("%s_%d", strings.TrimSpace(routerName), index)
 }
 
+// StageTargetNames returns the Switchyard target names of a stage_router's capable and
+// efficient leaves.
+func StageTargetNames(routerName string) (capable, efficient string) {
+	n := strings.TrimSpace(routerName)
+	return n + "_capable", n + "_efficient"
+}
+
 // ClassifierTargetName returns the Switchyard target table name for the route judge.
 func ClassifierTargetName(routerName string) string {
 	return strings.TrimSpace(routerName) + "_classifier"
@@ -525,9 +532,10 @@ func routeLeaves(name string, route RouterRoute) ([]routeLeaf, error) {
 	case RoutePassthrough:
 		return []routeLeaf{{field: field("target"), leaf: route.Target}}, nil
 	case RouteStageRouter:
+		capable, efficient := StageTargetNames(name)
 		return []routeLeaf{
-			{field: field("capable"), leaf: route.Capable, target: name + "_capable"},
-			{field: field("efficient"), leaf: route.Efficient, target: name + "_efficient"},
+			{field: field("capable"), leaf: route.Capable, target: capable},
+			{field: field("efficient"), leaf: route.Efficient, target: efficient},
 		}, nil
 	case RouteLLMClassifier:
 		out := []routeLeaf{{field: field("classifier"), leaf: route.Classifier, target: ClassifierTargetName(name)}}

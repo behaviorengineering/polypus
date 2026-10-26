@@ -96,3 +96,19 @@ func TestClassifyNotThrottle(t *testing.T) {
 		t.Fatalf("unexpected %v", err)
 	}
 }
+
+func TestClassifyStatusOnlyReads429AndAddsNoCloudflareMarkers(t *testing.T) {
+	if err := ClassifyStatus("gemini", http.StatusBadGateway, nil, []byte(`{"errors":[{"code":3036}]}`)); err != nil {
+		t.Fatalf("a non-429 is not a rate limit for a non-Cloudflare backend: %v", err)
+	}
+	header := http.Header{}
+	header.Set("Retry-After", "7")
+	header.Set("Cf-Ray", "ray")
+	err := ClassifyStatus("gemini", http.StatusTooManyRequests, header, nil, "slow down")
+	if err == nil || err.Fields()[FieldRetryAfter] != "7" {
+		t.Fatalf("a 429 keeps Retry-After: %v", err)
+	}
+	if err.Fields()[FieldKind] != "" || err.Fields()[FieldCFRay] != "" {
+		t.Fatalf("no Cloudflare markers: %v", err.Fields())
+	}
+}

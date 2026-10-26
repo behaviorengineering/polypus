@@ -345,7 +345,7 @@ func (c *Client) EmbeddingRaw(ctx context.Context, backendID, model string, body
 		RawRequestBody: body,
 	})
 	if berr != nil {
-		return nil, bifrostErr(berr, bifrostProviderHeader(bctx))
+		return nil, c.mapBifrostErr(backendID, berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.EmbeddingRaw", "empty embedding response from backend").
@@ -455,7 +455,7 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 		Params:   params,
 	})
 	if berr != nil {
-		return nil, bifrostErr(berr, bifrostProviderHeader(bctx))
+		return nil, c.mapBifrostErr("", berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil || len(resp.Audio) == 0 {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.Synthesize", "empty speech audio from backend")
@@ -513,7 +513,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 		Params: params,
 	})
 	if berr != nil {
-		return nil, "", bifrostErr(berr, bifrostProviderHeader(bctx))
+		return nil, "", c.mapBifrostErr("", berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil {
 		return nil, "", derrors.New(derrors.CodeUnavailable, "router.Transcribe", "empty transcription from backend")
@@ -567,7 +567,7 @@ func (c *Client) chatBifrostErr(backendID string, berr *schemas.BifrostError, he
 			}
 		}
 	}
-	return bifrostErr(berr, header)
+	return c.mapBifrostErr(backendID, berr, header)
 }
 
 // anthropicChatErr classifies Claude refusals for fallback routes. Out of credit and
@@ -632,7 +632,25 @@ func clientErrorCode(status int) derrors.Code {
 	}
 }
 
-func bifrostErr(berr *schemas.BifrostError, header http.Header) error {
+// mapBifrostErr maps a Bifrost error for backendID, or for the provider the error
+// names when backendID is empty (Polypus registers each backend as its own provider).
+// Cloudflare throttle codes are read only for a Cloudflare backend.
+func (c *Client) mapBifrostErr(backendID string, berr *schemas.BifrostError, header http.Header) error {
+	if backendID == "" && berr != nil {
+		backendID = string(berr.ExtraFields.RoutingInfo.Provider)
+	}
+	cloudflare := false
+	if c != nil && c.reg != nil {
+		if b, ok := c.reg.Backend(backendID); ok {
+			cloudflare = b.IsCloudflareExtension()
+		}
+	}
+	return bifrostErr(berr, header, cloudflare)
+}
+
+// bifrostErr maps a Bifrost error to a domain error. cloudflare says whether the
+// backend is Cloudflare, whose throttle codes can arrive without a 429.
+func bifrostErr(berr *schemas.BifrostError, header http.Header, cloudflare bool) error {
 	if berr == nil {
 		return derrors.New(derrors.CodeInternal, "router.bifrost", "bifrost error")
 	}
@@ -649,7 +667,11 @@ func bifrostErr(berr *schemas.BifrostError, header http.Header) error {
 		hints = append(hints, strings.TrimSpace(*berr.Error.Code))
 	}
 	provider := string(berr.ExtraFields.RoutingInfo.Provider)
-	if rl := ratelimit.Classify("router.bifrost", status, header, bifrostRawBody(berr), hints...); rl != nil {
+	classify := ratelimit.ClassifyStatus
+	if cloudflare {
+		classify = ratelimit.Classify
+	}
+	if rl := classify("router.bifrost", status, header, bifrostRawBody(berr), hints...); rl != nil {
 		return derrors.Wrap(rl, derrors.CodeRateLimited, "router.bifrost", "provider rate limited").With("provider", provider)
 	}
 	if berr.Error != nil && berr.Error.Error != nil {
@@ -668,26 +690,41 @@ func bifrostErr(berr *schemas.BifrostError, header http.Header) error {
 	return out
 }
 
+// bifrostRawBody is the provider's raw error body, for rate-limit hints. A body that
+// cannot be encoded gives no hints.
 func bifrostRawBody(berr *schemas.BifrostError) []byte {
 	if berr == nil {
 		return nil
 	}
-	raw := berr.ExtraFields.RawResponse
-	if raw == nil {
+	raw, err := rawProviderJSON(berr.ExtraFields.RawResponse)
+	if err != nil {
 		return nil
 	}
+	return raw
+}
+
+// rawProviderJSON is the one coercion of a Bifrost RawResponse (bytes, a string or a
+// decoded value) to JSON bytes. An absent or empty response is nil.
+func rawProviderJSON(raw any) ([]byte, error) {
+	var out []byte
 	switch v := raw.(type) {
+	case nil:
+		return nil, nil
 	case []byte:
-		return v
-	case string:
-		return []byte(v)
+		out = v
 	case json.RawMessage:
-		return v
+		out = v
+	case string:
+		out = []byte(v)
 	default:
 		b, err := json.Marshal(v)
 		if err != nil {
-			return nil
+			return nil, derrors.Wrap(err, derrors.CodeInternal, "router.rawProviderJSON", "marshal raw response")
 		}
-		return b
+		out = b
 	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }

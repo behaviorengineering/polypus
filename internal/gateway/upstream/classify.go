@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 	"github.com/sony/gobreaker"
 )
 
@@ -86,7 +87,7 @@ func isCloudflareDialFailure(err error) bool {
 }
 
 func hasCloudflareMetadata(err error) bool {
-	for _, key := range []string{"cf_code", "cf_ray", "limit_kind"} {
+	for _, key := range []string{ratelimit.FieldCFCode, ratelimit.FieldCFRay, ratelimit.FieldKind} {
 		if derrors.Field(err, key) != "" {
 			return true
 		}
