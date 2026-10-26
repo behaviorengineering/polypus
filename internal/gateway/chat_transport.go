@@ -44,14 +44,14 @@ func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request,
 	if chatBodyIsStream(body) {
 		chunks, errCh, err := h.router.ChatCompletionStreamRaw(r.Context(), backendID, model, body, hop)
 		if err != nil {
-			return err
+			return gatewayErr(err, "gateway.bifrostChatResponse", "stream").With("backend", backendID)
 		}
 		ctx := withStreamChunkCounter(r.Context())
 		return writeBifrostChatSSE(ctx, w, chunks, errCh)
 	}
 	raw, err := h.router.ChatCompletionRaw(r.Context(), backendID, model, body, hop)
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.bifrostChatResponse", "chat").With("backend", backendID)
 	}
 	if fixed, changed := mergeReasoningIntoContent(raw); changed {
 		raw = fixed
@@ -112,7 +112,7 @@ func writeBifrostChatSSE(ctx context.Context, w http.ResponseWriter, chunks <-ch
 	}
 	if err, ok := <-errCh; ok && err != nil {
 		if !started {
-			return err
+			return gatewayErr(err, "gateway.writeBifrostChatSSE", "stream setup")
 		}
 		return afterHeaders(ctx, err, false, "gateway.writeBifrostChatSSE", "stream error after headers")
 	}
@@ -137,4 +137,11 @@ func afterHeaders(ctx context.Context, err error, clientWrite bool, op, msg stri
 		code = derrors.CodeCanceled
 	}
 	return fmt.Errorf("%w: %w", derrors.Wrap(err, code, op, msg), upstream.ErrResponseWritten)
+}
+
+// gatewayErr wraps err with a gateway op, keeping any domain code already in the
+// chain (so the breaker, rate-limit and response-written checks still see it);
+// an untyped cause counts as the upstream failing.
+func gatewayErr(err error, op, msg string) *derrors.Error {
+	return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, msg)
 }

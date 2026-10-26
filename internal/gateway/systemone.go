@@ -101,11 +101,11 @@ func (h systemOneHandler) proxyBifrostSystemOne(w http.ResponseWriter, r *http.R
 	}
 	raw, err := h.router.SystemOneDecisionRaw(r.Context(), backendID, downstream, body, hop)
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.proxyBifrostSystemOne", "decision").With("backend", backendID)
 	}
 	raw, err = rewriteSystemOneResponseModel(raw, publicModel)
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.proxyBifrostSystemOne", "rewrite model")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -123,11 +123,11 @@ func (h systemOneHandler) proxyCloudflareSystemOne(w http.ResponseWriter, r *htt
 	}
 	out, err := client.SystemOne(r.Context(), downstream, body)
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.proxyCloudflareSystemOne", "decision").With("backend", backend.ID)
 	}
 	out, err = rewriteSystemOneResponseModel(out, publicModel)
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.proxyCloudflareSystemOne", "rewrite model")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -141,11 +141,11 @@ func (h systemOneHandler) proxyCloudflareSystemOne(w http.ResponseWriter, r *htt
 func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *http.Request, backend config.BackendDef, backendURL, downstream string, body []byte) error {
 	rewritten, err := rewriteSystemOneModel(body, downstream)
 	if err != nil {
-		return err
+		return gatewayErr(err, "gateway.proxySystemOnePassthrough", "rewrite model")
 	}
 	auth, authErr := mustBackendAuth(backend)
 	if authErr != nil {
-		return authErr
+		return gatewayErr(authErr, "gateway.proxySystemOnePassthrough", "backend auth").With("backend", backend.ID)
 	}
 	target := systemOneURL(backendURL)
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(rewritten))

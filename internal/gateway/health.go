@@ -11,7 +11,9 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 const backendProbeTimeout = 5 * time.Second
@@ -129,12 +131,15 @@ func probeBackend(ctx context.Context, b config.BackendDef, getCF CloudflareClie
 			}
 			cf, err := getCF(b)
 			if err != nil {
-				return err
+				return gatewayErr(err, "gateway.probeBackend", "cloudflare client").With("backend", b.ID)
 			}
-			return cf.Ping(ctx)
+			if err := cf.Ping(ctx); err != nil {
+				return gatewayErr(err, "gateway.probeBackend", "ping").With("backend", b.ID)
+			}
+			return nil
 		}
 		if _, err := b.Auth.ResolveBearerToken(); err != nil {
-			return err
+			return derrors.Wrap(err, derrors.CodeNotReady, "gateway.probeBackend", "backend credential").With("backend", b.ID)
 		}
 		return nil
 	}
@@ -142,19 +147,19 @@ func probeBackend(ctx context.Context, b config.BackendDef, getCF CloudflareClie
 }
 
 func pingBackendURL(ctx context.Context, backendURL string) error {
+	const op = "gateway.pingBackendURL"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(backendURL, "/")+"/", nil)
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeInvalid, op, "request")
 	}
-	client := &http.Client{Timeout: backendProbeTimeout}
-	resp, err := client.Do(req)
+	resp, err := outbound.Do(ctx, outbound.DepHealth, tracedProbeClient, req)
 	if err != nil {
-		return err
+		return gatewayErr(err, op, "get")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode >= 500 {
-		return fmt.Errorf("status %d", resp.StatusCode)
+		return derrors.New(derrors.CodeUnavailable, op, fmt.Sprintf("status %d", resp.StatusCode))
 	}
 	return nil
 }
