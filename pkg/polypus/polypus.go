@@ -50,14 +50,16 @@ func LoadServeOptions() (ServeOptions, error) {
 	return config.LoadServeOptions()
 }
 
-// Serve starts the Polypus gateway (blocks until the server exits).
-func Serve(opts ServeOptions, options ...HandlerOption) error {
-	return gateway.ListenAndServe(opts, options...)
+// Serve starts the Polypus gateway and blocks until ctx is done (then shuts down
+// gracefully) or the server fails. The host owns signals: pass a ctx from
+// signal.NotifyContext to stop on SIGINT or SIGTERM.
+func Serve(ctx context.Context, opts ServeOptions, options ...HandlerOption) error {
+	return gateway.ListenAndServe(ctx, opts, options...)
 }
 
 // ListenAndServe is an alias for Serve.
-func ListenAndServe(opts ServeOptions, options ...HandlerOption) error {
-	return Serve(opts, options...)
+func ListenAndServe(ctx context.Context, opts ServeOptions, options ...HandlerOption) error {
+	return Serve(ctx, opts, options...)
 }
 
 // NewHandler builds the public HTTP handler without listening.

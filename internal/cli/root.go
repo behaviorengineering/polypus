@@ -84,7 +84,7 @@ POLYPUS_OTEL_SKIP_PATHS (comma list; default /health; "none" traces all paths)
 config processes.mlx (bool) drives whether go tool task serve starts the MLX process.
 POLYPUS_ENABLE_MLX still overrides when set.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return exitStatus(runServeWithOpts(host, port, backend))
+			return exitStatus(runServeWithOpts(cmd.Context(), host, port, backend))
 		},
 	}
 	cmd.Flags().StringVar(&host, "host", "", "gateway listen host (default POLYPUS_HOST or 127.0.0.1)")

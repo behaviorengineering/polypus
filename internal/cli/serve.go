@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -12,7 +14,7 @@ import (
 	"github.com/behaviorengineering/polypus/pkg/polypus"
 )
 
-func runServeWithOpts(host string, port int, backend string) int {
+func runServeWithOpts(ctx context.Context, host string, port int, backend string) int {
 	opts, err := config.LoadServeOptions()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: %v\n", err)
@@ -55,7 +57,10 @@ func runServeWithOpts(host string, port int, backend string) int {
 			logger.Warn("otel shutdown", "err", err)
 		}
 	}()
-	if err := polypus.Serve(opts, polypus.WithLogger(logger)); err != nil {
+	// SIGINT and SIGTERM end ctx, and Serve then drains and shuts down.
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := polypus.Serve(ctx, opts, polypus.WithLogger(logger)); err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: %v\n", err)
 		return 1
 	}
