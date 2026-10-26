@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/config"
+
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"go.opentelemetry.io/otel/codes"
@@ -90,7 +92,7 @@ func (o *Options) Normalize() {
 	}
 	o.BaseURL = strings.TrimRight(strings.TrimSpace(o.BaseURL), "/")
 	if o.BaseURL == "" {
-		o.BaseURL = envOr("POLYPUS_BASE_URL", "http://127.0.0.1:1320")
+		o.BaseURL = envOr("POLYPUS_BASE_URL", config.DefaultGatewayURL)
 	}
 	if len(o.Channels) == 0 {
 		o.Channels = AllChannels()

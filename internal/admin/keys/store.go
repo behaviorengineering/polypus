@@ -100,7 +100,7 @@ func (s *Store) Generate(name string) (GenerateResult, error) {
 		if err != nil {
 			return err
 		}
-		hash, err := hashSecret([]byte(secret))
+		hash, err := hashSecret(s.rand, []byte(secret))
 		if err != nil {
 			return derrors.Wrap(err, derrors.CodeInternal, "keys.Generate", "hash")
 		}
@@ -140,12 +140,11 @@ func (s *Store) Rotate(name string) (GenerateResult, error) {
 		if idx < 0 {
 			return derrors.New(derrors.CodeNotFound, "keys.Rotate", "key not found")
 		}
-		secret, err := s.newSecretBytes()
+		secret, token, err := s.secretForID(file.Keys[idx].ID)
 		if err != nil {
 			return err
 		}
-		token := tokenPrefix + file.Keys[idx].ID + "." + secret
-		hash, err := hashSecret([]byte(secret))
+		hash, err := hashSecret(s.rand, []byte(secret))
 		if err != nil {
 			return derrors.Wrap(err, derrors.CodeInternal, "keys.Rotate", "hash")
 		}
@@ -187,7 +186,7 @@ func (s *Store) Delete(name string) error {
 
 // List returns metadata for all keys.
 func (s *Store) List() ([]Record, error) {
-	file, err := s.readFresh()
+	file, err := s.read()
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +195,7 @@ func (s *Store) List() ([]Record, error) {
 
 // Verify checks a bearer token against the on-disk store (re-reads each call).
 func (s *Store) Verify(token string) (Record, error) {
-	file, err := s.readFresh()
+	file, err := s.read()
 	if err != nil {
 		return Record{}, err
 	}
@@ -207,7 +206,7 @@ func (s *Store) Verify(token string) (Record, error) {
 // (the gateway is unlocked); otherwise token must verify, and a bad or missing
 // token is CodeUnauthorized.
 func (s *Store) Authorize(token string) (open bool, err error) {
-	file, err := s.readFresh()
+	file, err := s.read()
 	if err != nil {
 		return false, err
 	}
@@ -233,10 +232,6 @@ func verifyIn(file filePayload, token string) (Record, error) {
 		return Record{}, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
 	}
 	return Record{}, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
-}
-
-func (s *Store) readFresh() (filePayload, error) {
-	return s.read()
 }
 
 func (s *Store) read() (filePayload, error) {
@@ -274,14 +269,6 @@ func (s *Store) newToken() (id string, secret string, token string, err error) {
 	id = hex.EncodeToString(idBytes)
 	secret, token, err = s.secretForID(id)
 	return id, secret, token, err
-}
-
-func (s *Store) newSecretBytes() (secret string, err error) {
-	secretBytes := make([]byte, 32)
-	if _, err := io.ReadFull(s.rand, secretBytes); err != nil {
-		return "", derrors.Wrap(err, derrors.CodeInternal, "keys.newSecretBytes", "secret rand")
-	}
-	return base64.RawURLEncoding.EncodeToString(secretBytes), nil
 }
 
 func (s *Store) secretForID(id string) (secret string, token string, err error) {

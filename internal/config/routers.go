@@ -219,7 +219,7 @@ func defaultSwitchyardConfig() SwitchyardConfig {
 		path = ""
 	}
 	return SwitchyardConfig{
-		BaseURL:    "http://127.0.0.1:4000",
+		BaseURL:    DefaultSwitchyardBaseURL,
 		ConfigPath: path,
 	}
 }
@@ -679,19 +679,11 @@ func rejectClassifierRouteExtras(name string, file routerRouteFile) error {
 	if strings.TrimSpace(file.Target) != "" {
 		return fmt.Errorf("router: routers.%s.route.target not allowed for llm_classifier", name)
 	}
-	if strings.TrimSpace(file.Capable) != "" {
-		return fmt.Errorf("router: routers.%s.route.capable not allowed for llm_classifier", name)
-	}
-	if strings.TrimSpace(file.Efficient) != "" {
-		return fmt.Errorf("router: routers.%s.route.efficient not allowed for llm_classifier", name)
-	}
-	if strings.TrimSpace(file.Picker) != "" {
-		return fmt.Errorf("router: routers.%s.route.picker not allowed for llm_classifier", name)
-	}
-	if file.ConfidenceThreshold != nil {
-		return fmt.Errorf("router: routers.%s.route.confidence_threshold not allowed for llm_classifier", name)
-	}
-	return nil
+	// llm_classifier shares recent_turn_window with stage_router; every other
+	// stage-only field is refused.
+	stageOnly := file
+	stageOnly.RecentTurnWindow = nil
+	return rejectStageOnlyFields(name, RouteLLMClassifier, stageOnly)
 }
 
 func rejectClassifierOnlyFields(name string, routeType RouteType, file routerRouteFile) error {

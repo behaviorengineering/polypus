@@ -54,6 +54,10 @@ type shared struct {
 	log           *slog.Logger
 	compat        openaicompat.Client
 	models        config.ModelsInventory
+	// dumpDir receives failure dumps the debug route serves; empty turns them off.
+	dumpDir string
+	// traceSkipPaths are HTTP paths that get no SERVER span.
+	traceSkipPaths []string
 }
 
 // gatewayHandler is the Polypus HTTP mux (controller) over capability handlers.
@@ -160,23 +164,25 @@ func newShared(opts config.ServeOptions, ho handlerOptions, rc gatewayRouter, rc
 		return nil, fmt.Errorf("gateway: %w", err)
 	}
 	sh := &shared{
-		models:        models,
-		opts:          opts,
-		router:        rc,
-		invCache:      newModelsInventoryCache(ho.logger, models.CacheTTL),
-		timeouts:      timeouts,
-		client:        newChatProxyClient(timeouts.Max),
-		upstreams:     upstream.NewBoard(),
-		cfGet:         ho.cfGet,
-		geminiGet:     ho.geminiGet,
-		anthropicGet:  ho.anthropicGet,
-		openRouterGet: ho.openRouterGet,
-		batchStore:    batchStore,
-		batchNow:      ho.clock,
-		overlayPath:   ho.overlayPath,
-		adminKeys:     adminKeys,
-		log:           ho.logger,
-		compat:        openaicompat.Client{HTTP: tracedProbeClient, Policies: ho.policies},
+		models:         models,
+		opts:           opts,
+		router:         rc,
+		invCache:       newModelsInventoryCache(ho.logger, models.CacheTTL),
+		timeouts:       timeouts,
+		client:         newChatProxyClient(timeouts.Max),
+		upstreams:      upstream.NewBoard(),
+		cfGet:          ho.cfGet,
+		geminiGet:      ho.geminiGet,
+		anthropicGet:   ho.anthropicGet,
+		openRouterGet:  ho.openRouterGet,
+		batchStore:     batchStore,
+		batchNow:       ho.clock,
+		overlayPath:    ho.overlayPath,
+		adminKeys:      adminKeys,
+		log:            ho.logger,
+		dumpDir:        ho.dumpDir,
+		traceSkipPaths: ho.traceSkipPaths,
+		compat:         openaicompat.Client{HTTP: tracedProbeClient, Policies: ho.policies},
 	}
 	if sh.proxy, err = sh.newFallbackProxy(rc.Registry().ProxyBackendURL()); err != nil {
 		return nil, err
@@ -503,6 +509,7 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 			stream:                    req.stream,
 			recordRouterSelectedModel: true,
 			log:                       h.log,
+			dumpDir:                   h.dumpDir,
 		})
 	})
 	if err != nil {

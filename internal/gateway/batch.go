@@ -146,7 +146,7 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 // batchHopContext bounds one batch call to the provider by the chat hop budget.
 // timeoutHeader is the caller's requested timeout, if any.
 func (h batchesHandler) batchHopContext(ctx context.Context, timeoutHeader, backendID string) (context.Context, context.CancelFunc) {
-	hop := h.timeouts.ResolveChat(timeoutHeader, backendID, false, false)
+	hop := h.timeouts.ResolveChat(timeoutHeader, backendID, config.ChatPlain)
 	return context.WithTimeout(ctx, hopBudget(hop, config.DefaultTimeouts().Chat))
 }
 

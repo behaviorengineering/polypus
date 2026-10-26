@@ -190,29 +190,59 @@ func (t Timeouts) Clamp(d time.Duration) time.Duration {
 }
 
 // ResolveChat picks a hop timeout: optional header, else vision / thinking / backend chat / chat.
-func (t Timeouts) ResolveChat(header, backendID string, vision, thinking bool) time.Duration {
+func (t Timeouts) ResolveChat(header, backendID string, kind ChatKind) time.Duration {
+	be := t.Backends[strings.TrimSpace(backendID)]
+	switch kind {
+	case ChatVision:
+		return t.headerOr(header, firstPositive(be.Vision, t.Vision))
+	case ChatThinking:
+		return t.headerOr(header, firstPositive(be.ChatThinking, t.ChatThinking))
+	case ChatPlain:
+		return t.headerOr(header, firstPositive(be.Chat, t.Chat))
+	default:
+		return t.headerOr(header, firstPositive(be.Chat, t.Chat))
+	}
+}
+
+// ChatKind picks which chat budget a request gets.
+type ChatKind int
+
+// Chat budgets.
+const (
+	ChatPlain ChatKind = iota
+	ChatVision
+	ChatThinking
+)
+
+// ChatKindOf is the budget for a chat request; vision wins over thinking.
+func ChatKindOf(vision, thinking bool) ChatKind {
+	switch {
+	case vision:
+		return ChatVision
+	case thinking:
+		return ChatThinking
+	default:
+		return ChatPlain
+	}
+}
+
+// headerOr is the caller's timeout header when it parses, else fallback, clamped.
+func (t Timeouts) headerOr(header string, fallback time.Duration) time.Duration {
 	if raw := strings.TrimSpace(header); raw != "" {
 		if d, err := ParseTimeoutValue(raw); err == nil {
 			return t.Clamp(d)
 		}
 	}
-	be := t.Backends[strings.TrimSpace(backendID)]
-	switch {
-	case vision:
-		if be.Vision > 0 {
-			return t.Clamp(be.Vision)
+	return t.Clamp(fallback)
+}
+
+func firstPositive(ds ...time.Duration) time.Duration {
+	for _, d := range ds {
+		if d > 0 {
+			return d
 		}
-		return t.Clamp(t.Vision)
-	case thinking:
-		if be.ChatThinking > 0 {
-			return t.Clamp(be.ChatThinking)
-		}
-		return t.Clamp(t.ChatThinking)
 	}
-	if be.Chat > 0 {
-		return t.Clamp(be.Chat)
-	}
-	return t.Clamp(t.Chat)
+	return 0
 }
 
 // ResolveStreamIdle returns the longest gap allowed between chunks of a chat stream
@@ -229,46 +259,28 @@ func (t Timeouts) ResolveStreamIdle(backendID string) time.Duration {
 
 // ResolveEmbed returns the embeddings hop timeout (header or embed bucket).
 func (t Timeouts) ResolveEmbed(header string) time.Duration {
-	if raw := strings.TrimSpace(header); raw != "" {
-		if d, err := ParseTimeoutValue(raw); err == nil {
-			return t.Clamp(d)
-		}
-	}
-	return t.Clamp(t.Embed)
+	return t.headerOr(header, t.Embed)
 }
 
 // ResolveSpeech returns the TTS/STT hop timeout (header or speech bucket).
 func (t Timeouts) ResolveSpeech(header string) time.Duration {
-	if raw := strings.TrimSpace(header); raw != "" {
-		if d, err := ParseTimeoutValue(raw); err == nil {
-			return t.Clamp(d)
-		}
-	}
-	return t.Clamp(t.Speech)
+	return t.headerOr(header, t.Speech)
 }
 
 // SpeechSeconds is the Bifrost per-provider request timeout for speech-only configs.
 func (t Timeouts) SpeechSeconds() int {
-	d := t.Speech
-	if d <= 0 {
-		d = defaultTimeoutSpeech
-	}
-	sec := int(t.Clamp(d).Seconds())
-	if sec < 1 {
-		return 1
-	}
-	return sec
+	return t.seconds(t.Speech, defaultTimeoutSpeech)
 }
 
 // ProviderSeconds is the Bifrost network timeout covering chat/embed/speech hops.
 func (t Timeouts) ProviderSeconds() int {
-	d := t.Max
+	return t.seconds(t.Max, defaultTimeoutMax)
+}
+
+// seconds is d (or def when d is unset), clamped, in whole seconds of at least one.
+func (t Timeouts) seconds(d, def time.Duration) int {
 	if d <= 0 {
-		d = defaultTimeoutMax
+		d = def
 	}
-	sec := int(t.Clamp(d).Seconds())
-	if sec < 1 {
-		return 1
-	}
-	return sec
+	return max(1, int(t.Clamp(d).Seconds()))
 }

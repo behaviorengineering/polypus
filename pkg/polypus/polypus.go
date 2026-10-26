@@ -25,6 +25,12 @@ type HandlerOption = gateway.HandlerOption
 // (slog.Default otherwise). Panics if l is nil.
 func WithLogger(l *slog.Logger) HandlerOption { return gateway.WithLogger(l) }
 
+// WithObservability sets where failure dumps land (empty turns them off) and the
+// HTTP paths that get no SERVER span (nil keeps the default /health probes).
+func WithObservability(dumpDir string, traceSkipPaths []string) HandlerOption {
+	return gateway.WithObservability(dumpDir, traceSkipPaths)
+}
+
 // WithAdminStateDir keeps the models allow overlay and the admin key store under dir
 // instead of the XDG state directory. Panics if dir is empty.
 func WithAdminStateDir(dir string) HandlerOption { return gateway.WithAdminStateDir(dir) }

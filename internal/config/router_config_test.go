@@ -169,8 +169,8 @@ backends:
 	if cfg.Timeouts.Chat != 90*time.Second {
 		t.Fatalf("chat: %s", cfg.Timeouts.Chat)
 	}
-	if cfg.Timeouts.ResolveChat("", "cf_local", false, false) != 30*time.Second {
-		t.Fatalf("cf chat: %s", cfg.Timeouts.ResolveChat("", "cf_local", false, false))
+	if cfg.Timeouts.ResolveChat("", "cf_local", ChatKindOf(false, false)) != 30*time.Second {
+		t.Fatalf("cf chat: %s", cfg.Timeouts.ResolveChat("", "cf_local", ChatKindOf(false, false)))
 	}
 }
 

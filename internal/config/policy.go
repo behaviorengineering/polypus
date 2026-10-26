@@ -23,8 +23,3 @@ func (f routerPolicyFile) merge() RouterPolicy {
 	}
 	return p
 }
-
-// RejectNonLoopback reports whether local backends must bind loopback hosts.
-func (p RouterPolicy) RejectNonLoopback() bool {
-	return p.RejectNonLoopbackBackends
-}

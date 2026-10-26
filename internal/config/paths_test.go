@@ -6,28 +6,28 @@ import (
 	"testing"
 )
 
-func TestDefaultConfigPathUsesXDG(t *testing.T) {
+func TestXDGDirUsesTheVariable(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	got, err := DefaultConfigPath()
+	got, err := xdgDir("XDG_CONFIG_HOME", ".config")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(dir, "polypus", "config.yaml")
+	want := filepath.Join(dir, "polypus")
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
 }
 
-func TestDefaultConfigPathUsesHomeDotConfig(t *testing.T) {
+func TestXDGDirFallsBackToHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
-	got, err := DefaultConfigPath()
+	got, err := xdgDir("XDG_CONFIG_HOME", ".config")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, ".config", "polypus", "config.yaml")
+	want := filepath.Join(home, ".config", "polypus")
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}

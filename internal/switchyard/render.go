@@ -231,7 +231,7 @@ func writeConfig(cfg config.RouterConfig, polypusBaseURL string) (string, error)
 func normalizePolypusBaseURL(raw string) string {
 	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	if raw == "" {
-		raw = "http://127.0.0.1:1320"
+		raw = config.DefaultGatewayURL
 	}
 	if !strings.HasSuffix(raw, "/v1") {
 		raw += "/v1"

@@ -28,7 +28,7 @@ func (h chatHandler) dialChat(w http.ResponseWriter, r *http.Request, req chatRe
 	})
 	defer func() { observability.EndDialSpan(span, err, t.id) }()
 	r = r.WithContext(ctx)
-	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), t.id, vision, req.thinking)
+	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), t.id, config.ChatKindOf(vision, req.thinking))
 	if err = h.proxyOrBifrostChat(w, r, chatCall{target: t, body: body, stream: req.stream, hop: hop}); err != nil {
 		h.writeUpstreamDialError(w, err, "", t.id, nil)
 	}
@@ -56,6 +56,7 @@ func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, 
 				stream:      c.stream,
 				backendAuth: t.auth,
 				log:         h.log,
+				dumpDir:     h.dumpDir,
 			})
 		}
 		return h.bifrostChatResponse(w, r, c)
@@ -70,7 +71,7 @@ func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request,
 		if err != nil {
 			return gatewayErr(err, "gateway.bifrostChatResponse", "stream").With("backend", backendID)
 		}
-		ctx := withStreamChunkCounter(r.Context(), h.log)
+		ctx := withStreamChunkCounter(r.Context(), h.log, h.dumpDir)
 		return writeBifrostChatSSE(ctx, w, chunks, errCh)
 	}
 	raw, err := h.router.ChatCompletionRaw(r.Context(), router.Call{BackendID: backendID, Model: model, Body: body, Timeout: hop})

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -23,24 +22,11 @@ import (
 
 const instrumentationName = "github.com/behaviorengineering/polypus"
 
-// skipHTTPPaths holds the active SERVER skip list (set by Init; read by WrapHandler).
-var skipHTTPPaths atomic.Value // []string.
-
-func init() {
-	skipHTTPPaths.Store(append([]string(nil), defaultSkipPaths...))
-}
-
 // Init installs the global tracer provider, W3C propagator, and optional dump processor via olly.
 func Init(cfg Config) (func(context.Context) error, error) {
 	if cfg.Logger == nil {
 		return nil, derrors.New(derrors.CodeInvalid, "observability.Init", "logger is required")
 	}
-	skip := cfg.SkipPaths
-	if skip == nil {
-		skip = defaultSkipPaths
-	}
-	skipHTTPPaths.Store(append([]string(nil), skip...))
-
 	serviceName := cfg.ServiceName
 	if serviceName == "" {
 		serviceName = defaultServiceName
@@ -62,13 +48,10 @@ func Init(cfg Config) (func(context.Context) error, error) {
 			Diagnostics:      logDiag{log: cfg.Logger},
 		},
 	}
-	dumpDir := cfg.DumpDir
 	if !cfg.Enabled {
 		ollyCfg.OTLPEndpoint = ""
 		ollyCfg.Dump.Dir = ""
-		dumpDir = ""
 	}
-	SetFailureDumpDir(dumpDir)
 
 	shutdown, err := olly.Init(ollyCfg)
 	if err != nil {
@@ -102,10 +85,9 @@ func Tracer() trace.Tracer {
 }
 
 // WrapHandler extracts incoming W3C context and creates SERVER spans for each request.
-// Paths in SkipPaths (default /health) are not traced.
-func WrapHandler(h http.Handler) http.Handler {
-	skip, ok := skipHTTPPaths.Load().([]string)
-	if !ok || skip == nil {
+// Paths in skip are not traced; nil means the default (/health and its probes).
+func WrapHandler(h http.Handler, skip []string) http.Handler {
+	if skip == nil {
 		skip = defaultSkipPaths
 	}
 	return wrapHandler(h, append([]string(nil), skip...))

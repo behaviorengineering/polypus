@@ -1,12 +1,13 @@
 package keys
 
 import (
+	"crypto/rand"
 	"strings"
 	"testing"
 )
 
 func TestVerifyHashRoundTrip(t *testing.T) {
-	enc, err := hashSecret([]byte("s3cret"))
+	enc, err := hashSecret(rand.Reader, []byte("s3cret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -16,7 +17,7 @@ func TestVerifyHashRoundTrip(t *testing.T) {
 }
 
 func TestVerifyHashRejectsBadCostSettings(t *testing.T) {
-	enc, err := hashSecret([]byte("s3cret"))
+	enc, err := hashSecret(rand.Reader, []byte("s3cret"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -249,8 +249,6 @@ func openInferenceKind(kind schemas.SpanKind) string {
 	switch kind {
 	case schemas.SpanKindLLMCall:
 		return "LLM"
-	case schemas.SpanKindPlugin:
-		return "CHAIN"
 	default:
 		return "CHAIN"
 	}

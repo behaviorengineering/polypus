@@ -91,11 +91,7 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 		return "", err
 	}
 	if !strings.Contains(string(raw), batchSmokeCustomID) {
-		detail := strings.TrimSpace(string(raw))
-		if len(detail) > 80 {
-			detail = detail[:77] + "..."
-		}
-		return "", fmt.Errorf("output missing custom_id %q: %s", batchSmokeCustomID, detail)
+		return "", fmt.Errorf("output missing custom_id %q: %s", batchSmokeCustomID, truncate(string(raw), 80))
 	}
 	return fmt.Sprintf("batch %s completed", batchID), nil
 }

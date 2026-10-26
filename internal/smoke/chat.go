@@ -28,10 +28,7 @@ func runChat(ctx context.Context, opts Options) ([]Result, error) {
 		if d == "" {
 			return "", fmt.Errorf("empty content")
 		}
-		if len(d) > 60 {
-			d = d[:57] + "..."
-		}
-		return d, nil
+		return truncate(d, 60), nil
 	})
 	out := []Result{ping, content}
 	if opts.RequireSelectedModel || len(opts.AllowedSelectedModels) > 0 {

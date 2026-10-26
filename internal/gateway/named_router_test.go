@@ -302,7 +302,7 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := observability.WrapHandler(inner)
+	handler := observability.WrapHandler(inner, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"router/investigator","messages":[{"role":"user","content":"hi"}]}`,

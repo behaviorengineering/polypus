@@ -15,7 +15,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const modelsAllowOverlayFile = "models-allow-overlay.yaml"
+// ModelsAllowOverlayFile is the allow overlay's file name under the state directory.
+const ModelsAllowOverlayFile = "models-allow-overlay.yaml"
 
 // AllowOverlayFile is the on-disk shape for runtime model allow extras.
 type AllowOverlayFile struct {
@@ -46,7 +47,7 @@ func resolveModelsAllowOverlayPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("models allow overlay path: %w", err)
 	}
-	return filepath.Join(dir, modelsAllowOverlayFile), nil
+	return filepath.Join(dir, ModelsAllowOverlayFile), nil
 }
 
 // LoadAllowOverlay reads overlay YAML. Missing file returns empty overlay, not an error.
@@ -228,28 +229,4 @@ func overlayRemove(path, backendID, downstream string) error {
 		}
 		return statefile.WriteAtomic(path, raw, 0o600)
 	})
-}
-
-// CloneBackendAllowMap returns a copy of YAML allow lists per backend (after load, before overlay).
-func CloneBackendAllowMap(rcfg RouterConfig) map[string][]string {
-	out := make(map[string][]string)
-	for id, b := range rcfg.Backends {
-		if b.Models == nil || !b.Models.HasAllowGate() {
-			continue
-		}
-		out[id] = append([]string(nil), b.Models.Allow...)
-	}
-	return out
-}
-
-// OverlayOnlyAllow returns allow entries present in current but not in yamlBaseline.
-func OverlayOnlyAllow(yamlBaseline map[string][]string, backendID string, current []string) []string {
-	base := yamlBaseline[backendID]
-	var extras []string
-	for _, c := range current {
-		if !ModelInAllowList(backendID, c, base) {
-			extras = append(extras, NormalizeDownstream(backendID, c))
-		}
-	}
-	return extras
 }

@@ -23,20 +23,22 @@ type streamChunkCounter struct {
 	dumped int  // dropped-chunk dumps written for this stream.
 	warned bool // a dump write failure was already logged for this stream.
 	log    *slog.Logger
+	// dumpDir receives dropped-chunk dumps; empty turns them off.
+	dumpDir string
 }
 
 // maxChunkDumpsPerStream caps dropped-chunk dumps for one stream: an upstream that
 // keeps streaming after finish_reason would otherwise write a file per chunk.
 const maxChunkDumpsPerStream = 5
 
-func withStreamChunkCounter(ctx context.Context, log *slog.Logger) context.Context {
+func withStreamChunkCounter(ctx context.Context, log *slog.Logger, dumpDir string) context.Context {
 	if ctx == nil {
 		return ctx
 	}
 	if _, ok := ctx.Value(streamChunkCounterKey{}).(*streamChunkCounter); ok {
 		return ctx
 	}
-	return context.WithValue(ctx, streamChunkCounterKey{}, &streamChunkCounter{log: log})
+	return context.WithValue(ctx, streamChunkCounterKey{}, &streamChunkCounter{log: log, dumpDir: dumpDir})
 }
 
 func nextStreamChunkIndex(ctx context.Context) int {
@@ -100,14 +102,11 @@ func warnChunkDumpOnce(c *streamChunkCounter, path, traceID string, err error) {
 }
 
 func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProviderJSON []byte) {
-	dir := observability.FailureDumpDir()
-	if dir == "" {
-		return
-	}
 	counter := streamCounter(ctx)
-	if !claimChunkDump(counter) {
+	if counter == nil || counter.dumpDir == "" || !claimChunkDump(counter) {
 		return
 	}
+	dir := counter.dumpDir
 	traceID := "unknown"
 	sc := trace.SpanFromContext(ctx).SpanContext()
 	if sc.HasTraceID() {

@@ -96,6 +96,8 @@ type chatDial struct {
 	// recordRouterSelectedModel tags the span with the model a router picked.
 	recordRouterSelectedModel bool
 	log                       *slog.Logger
+	// dumpDir receives dropped stream chunks; empty turns the dumps off.
+	dumpDir string
 }
 
 func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) error {
@@ -230,7 +232,7 @@ func (d chatDial) writeStreamResponse(w http.ResponseWriter, r *http.Request, re
 	}
 	copyChatResponseHeaders(w, resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	n, err := copyOpenAIChatStream(withStreamChunkCounter(r.Context(), log), w, io.LimitReader(resp.Body, chatMaxBody), false)
+	n, err := copyOpenAIChatStream(withStreamChunkCounter(r.Context(), log, d.dumpDir), w, io.LimitReader(resp.Body, chatMaxBody), false)
 	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, int(n))
 	if err != nil {
 		return afterHeaders(r.Context(), err, false, "gateway.proxyChat", "copy stream")

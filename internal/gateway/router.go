@@ -70,17 +70,19 @@ type anthropicClientGet func(config.BackendDef) (*anthropic.Client, error)
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
-	router        gatewayRouter
-	cfGet         cloudflareClientGet
-	geminiGet     geminiClientGet
-	anthropicGet  anthropicClientGet
-	overlayPath   string
-	adminKeysPath string
-	clock         func() time.Time
-	claudeBatches service.ClaudeBatches
-	policies      *outbound.Policies
-	openRouterGet func(config.BackendDef) (*openrouter.Client, error)
-	logger        *slog.Logger
+	router         gatewayRouter
+	cfGet          cloudflareClientGet
+	geminiGet      geminiClientGet
+	anthropicGet   anthropicClientGet
+	overlayPath    string
+	adminKeysPath  string
+	clock          func() time.Time
+	claudeBatches  service.ClaudeBatches
+	policies       *outbound.Policies
+	openRouterGet  func(config.BackendDef) (*openrouter.Client, error)
+	logger         *slog.Logger
+	dumpDir        string
+	traceSkipPaths []string
 }
 
 // withRouter injects a gatewayRouter so tests can avoid bifrost.Init.
@@ -114,7 +116,7 @@ func WithAdminStateDir(dir string) HandlerOption {
 		panic("gateway: WithAdminStateDir(empty)")
 	}
 	return func(o *handlerOptions) {
-		o.overlayPath = filepath.Join(dir, "models-allow-overlay.yaml")
+		o.overlayPath = filepath.Join(dir, config.ModelsAllowOverlayFile)
 		o.adminKeysPath = filepath.Join(dir, "admin-api-keys.json")
 	}
 }
@@ -138,6 +140,15 @@ func WithLogger(l *slog.Logger) HandlerOption {
 	}
 	return func(o *handlerOptions) {
 		o.logger = l
+	}
+}
+
+// WithObservability sets where failure dumps land (empty turns them off) and the HTTP
+// paths that get no SERVER span (nil keeps the default /health probes).
+func WithObservability(dumpDir string, traceSkipPaths []string) HandlerOption {
+	return func(o *handlerOptions) {
+		o.dumpDir = dumpDir
+		o.traceSkipPaths = append([]string(nil), traceSkipPaths...)
 	}
 }
 

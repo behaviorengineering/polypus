@@ -9,8 +9,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 func TestModelsCacheFlushesOncePerPass(t *testing.T) {
@@ -57,10 +55,7 @@ func TestModelsCacheConcurrentPutAndFlush(t *testing.T) {
 
 func TestStreamChunkDumpsAreCappedPerStream(t *testing.T) {
 	dir := t.TempDir()
-	prev := observability.FailureDumpDir()
-	observability.SetFailureDumpDir(dir)
-	t.Cleanup(func() { observability.SetFailureDumpDir(prev) })
-	ctx := withStreamChunkCounter(context.Background(), testShared.log)
+	ctx := withStreamChunkCounter(context.Background(), testShared.log, dir)
 	for i := range maxChunkDumpsPerStream + 5 {
 		dumpIllegalStreamChunk(ctx, i, []byte(`{"x":1}`), nil)
 	}

@@ -39,17 +39,12 @@ func newSwitchyardRenderCmd() *cobra.Command {
 }
 
 func runSwitchyardRender(o switchyardRenderOpts) int {
-	if o.configPath != "" {
-		if err := os.Setenv("POLYPUS_CONFIG", o.configPath); err != nil {
-			fmt.Fprintf(os.Stderr, "polypus switchyard-render: set POLYPUS_CONFIG: %v\n", err)
-			return 1
-		}
-	}
 	opts, err := config.LoadServeOptions()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus switchyard-render: %v\n", err)
 		return 2
 	}
+	opts.ConfigPath = o.configPath
 	rcfg, err := config.LoadRouterConfig(opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "polypus switchyard-render: %v\n", err)

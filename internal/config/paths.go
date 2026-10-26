@@ -11,21 +11,6 @@ import (
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
-// defaultConfigDir returns the machine-wide Polypus config directory.
-// Honors XDG_CONFIG_HOME when set; otherwise ~/.config/polypus.
-func defaultConfigDir() (string, error) {
-	return xdgDir("XDG_CONFIG_HOME", ".config")
-}
-
-// DefaultConfigPath returns ~/.config/polypus/config.yaml (or $XDG_CONFIG_HOME/polypus/config.yaml).
-func DefaultConfigPath() (string, error) {
-	dir, err := defaultConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "config.yaml"), nil
-}
-
 // DefaultCacheDir returns ~/.cache/polypus (or $XDG_CACHE_HOME/polypus).
 func DefaultCacheDir() (string, error) {
 	return xdgDir("XDG_CACHE_HOME", ".cache")
@@ -69,14 +54,7 @@ func resolveModelsInventoryCachePath() (string, error) {
 
 // DefaultStateDir returns ~/.local/state/polypus (or $XDG_STATE_HOME/polypus).
 func DefaultStateDir() (string, error) {
-	if xdg := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); xdg != "" {
-		return filepath.Join(xdg, "polypus"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".local", "state", "polypus"), nil
+	return xdgDir("XDG_STATE_HOME", filepath.Join(".local", "state"))
 }
 
 // defaultBatchDir returns ~/.local/state/polypus/batch (or $XDG_STATE_HOME/polypus/batch).
@@ -132,6 +110,7 @@ func resolveConfigPathWithError() (string, error) {
 	return operatorconfig.ResolveConfigPath(operatorConfigOptions())
 }
 
+// xdgDir is $envName/polypus when the XDG variable is set, else ~/homeSubdir/polypus.
 func xdgDir(envName, homeSubdir string) (string, error) {
 	if xdg := strings.TrimSpace(os.Getenv(envName)); xdg != "" {
 		return filepath.Join(xdg, "polypus"), nil

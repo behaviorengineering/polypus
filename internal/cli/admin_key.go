@@ -13,15 +13,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// adminKeyNow stamps key metadata; tests may replace.
-var adminKeyNow = func() time.Time { return time.Now().UTC() }
-
 func openAdminKeyStore() (*keys.Store, error) {
 	path, err := config.ResolveAdminKeysPath()
 	if err != nil {
 		return nil, err
 	}
-	return keys.Config{Path: path, Clock: adminKeyNow}.CreateStore()
+	return keys.Config{Path: path, Clock: func() time.Time { return time.Now().UTC() }}.CreateStore()
 }
 
 type adminKeyOpts struct {
@@ -183,7 +180,7 @@ func runAdminKeyMutate(verb string, o adminKeyOpts, fn adminKeyMutateFn) int {
 	name := o.name
 	if strings.TrimSpace(name) == "" {
 		if !stdinTTY() {
-			fmt.Fprintln(os.Stderr, "polypus admin-key "+verb+": cannot prompt when stdin is not a TTY; use --name and --yes")
+			fmt.Fprintln(os.Stderr, "polypus admin-key "+verb+": "+noTTYMessage)
 			return 2
 		}
 		prompted, err := promptLine("Key name: ")
@@ -235,10 +232,13 @@ func requireAdminKeyName(name string, yes bool) error {
 		return fmt.Errorf("polypus admin-key: name required")
 	}
 	if !stdinTTY() && !yes {
-		return fmt.Errorf("polypus admin-key: cannot prompt when stdin is not a TTY; use --name and --yes")
+		return fmt.Errorf("polypus admin-key: %s", noTTYMessage)
 	}
 	return nil
 }
+
+// noTTYMessage says why a prompt cannot run and how to skip it.
+const noTTYMessage = "cannot prompt when stdin is not a TTY; use --name and --yes"
 
 func stdinTTY() bool {
 	f, err := os.Stdin.Stat()

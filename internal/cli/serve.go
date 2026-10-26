@@ -64,7 +64,8 @@ func runServeWithOpts(ctx context.Context, host string, port int, backend string
 	// SIGINT and SIGTERM end ctx, and Serve then drains and shuts down.
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := polypus.Serve(ctx, opts, polypus.WithLogger(logger)); err != nil {
+	if err := polypus.Serve(ctx, opts, polypus.WithLogger(logger),
+		polypus.WithObservability(otelCfg.ActiveDumpDir(), otelCfg.SkipPaths)); err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: %v\n", err)
 		return 1
 	}

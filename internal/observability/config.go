@@ -88,6 +88,15 @@ func LoadConfig() (Config, error) {
 	return cfg, nil
 }
 
+// ActiveDumpDir is where failure dumps go: DumpDir when tracing is on, else "" (no
+// dumps).
+func (c Config) ActiveDumpDir() string {
+	if !c.Enabled {
+		return ""
+	}
+	return c.DumpDir
+}
+
 func envOr(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v

@@ -1,10 +1,10 @@
 package keys
 
 import (
-	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -19,9 +19,11 @@ const (
 	saltLen      = 16
 )
 
-func hashSecret(secret []byte) (string, error) {
+// hashSecret hashes secret with argon2id under a salt drawn from r (the store's
+// injected source, so tests can make the stored hash deterministic).
+func hashSecret(r io.Reader, secret []byte) (string, error) {
 	salt := make([]byte, saltLen)
-	if _, err := rand.Read(salt); err != nil {
+	if _, err := io.ReadFull(r, salt); err != nil {
 		return "", err
 	}
 	dk := argon2.IDKey(secret, salt, argonTime, argonMemory, argonThreads, argonKeyLen)

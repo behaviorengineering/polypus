@@ -45,7 +45,7 @@ func ListenAndServe(ctx context.Context, opts config.ServeOptions, options ...Ha
 	// budget and the stream idle limit bound them instead.
 	return serve(ctx, &http.Server{
 		Addr:              opts.ListenAddr(),
-		Handler:           observability.WrapHandler(handler),
+		Handler:           observability.WrapHandler(handler, g.traceSkipPaths),
 		ReadHeaderTimeout: 30 * time.Second,
 		ReadTimeout:       serverReadTimeout,
 		IdleTimeout:       serverIdleTimeout,

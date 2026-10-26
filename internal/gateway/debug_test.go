@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 func TestServeFailureDump(t *testing.T) {
@@ -17,9 +15,9 @@ func TestServeFailureDump(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, traceID+".json"), body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	observability.SetFailureDumpDir(dir)
-
-	h := healthHandler{shared: testShared}
+	sh := *testShared
+	sh.dumpDir = dir
+	h := healthHandler{shared: &sh}
 	req := httptest.NewRequest(http.MethodGet, "/debug/failures/"+traceID, nil)
 	rec := httptest.NewRecorder()
 	h.serveFailureDump(rec, req)

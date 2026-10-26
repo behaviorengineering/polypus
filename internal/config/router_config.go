@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -54,16 +55,16 @@ const (
 
 // BackendDef is one OpenAI-compatible inference worker.
 type BackendDef struct {
-	ID           string            `yaml:"-"`
-	Remote       bool              `yaml:"remote"`
-	Extension    string            `yaml:"extension"`
-	BaseURL      string            `yaml:"base_url"`
-	Auth         BackendAuth       `yaml:"auth"`
-	ExtraHeaders map[string]string `yaml:"extra_headers"`
-	Capabilities []Capability      `yaml:"capabilities"`
-	Models       *BackendModels    `yaml:"models"`
+	ID           string
+	Remote       bool
+	Extension    string
+	BaseURL      string
+	Auth         BackendAuth
+	ExtraHeaders map[string]string
+	Capabilities []Capability
+	Models       *BackendModels
 	// PromptCache turns automatic prompt caching off when false (Anthropic extension only; default on).
-	PromptCache *bool `yaml:"prompt_cache"`
+	PromptCache *bool
 }
 
 // HasExtension reports whether the backend uses a named extension module.
@@ -122,17 +123,17 @@ type CapabilityBackend struct {
 
 // RouterConfig holds multi-backend routing for the Polypus gateway.
 type RouterConfig struct {
-	Chat       CapabilityBackend     `yaml:"-"`
-	Vision     CapabilityBackend     `yaml:"-"`
-	Embed      CapabilityBackend     `yaml:"-"`
-	TTS        CapabilityBackend     `yaml:"-"`
-	STT        CapabilityBackend     `yaml:"-"`
-	Proxy      CapabilityBackend     `yaml:"-"`
-	SystemOne  CapabilityBackend     `yaml:"-"`
-	Batch      CapabilityBackend     `yaml:"-"`
-	Timeouts   Timeouts              `yaml:"-"`
-	Policy     RouterPolicy          `yaml:"policy"`
-	Backends   map[string]BackendDef `yaml:"backends"`
+	Chat       CapabilityBackend
+	Vision     CapabilityBackend
+	Embed      CapabilityBackend
+	TTS        CapabilityBackend
+	STT        CapabilityBackend
+	Proxy      CapabilityBackend
+	SystemOne  CapabilityBackend
+	Batch      CapabilityBackend
+	Timeouts   Timeouts
+	Policy     RouterPolicy
+	Backends   map[string]BackendDef
 	Routers    map[string]NamedRouter
 	Switchyard SwitchyardConfig
 	UIProxies  []UIProxy
@@ -294,6 +295,9 @@ func loadRouterConfig(opts ServeOptions) (RouterConfig, error) {
 }
 
 func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
+	if strings.TrimSpace(opts.ConfigPath) != "" {
+		return loadRouterFileAt(opts, opts.ConfigPath)
+	}
 	path, err := ResolveConfigPathWithError()
 	if err != nil {
 		return RouterConfig{}, false, err
@@ -301,6 +305,11 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 	if path == "" {
 		return RouterConfig{}, false, nil
 	}
+	return loadRouterFileAt(opts, path)
+}
+
+// loadRouterFileAt reads the router config at path; a missing file means no file.
+func loadRouterFileAt(opts ServeOptions, path string) (RouterConfig, bool, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -683,16 +692,6 @@ func (c RouterConfig) BackendIDs() []string {
 	for id := range c.Backends {
 		ids = append(ids, id)
 	}
-	sortStrings(ids)
+	slices.Sort(ids)
 	return ids
-}
-
-func sortStrings(ss []string) {
-	for i := 0; i < len(ss); i++ {
-		for j := i + 1; j < len(ss); j++ {
-			if ss[j] < ss[i] {
-				ss[i], ss[j] = ss[j], ss[i]
-			}
-		}
-	}
 }

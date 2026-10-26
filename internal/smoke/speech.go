@@ -52,11 +52,7 @@ func runSTT(ctx context.Context, opts Options) ([]Result, error) {
 		if len(strings.TrimSpace(text)) < 8 {
 			return "", fmt.Errorf("transcript too short: %q", text)
 		}
-		d := strings.TrimSpace(text)
-		if len(d) > 80 {
-			d = d[:77] + "..."
-		}
-		return d, nil
+		return truncate(text, 80), nil
 	})
 	out := []Result{prep, transcribe}
 	if transcribe.Status == StatusFail {
@@ -141,10 +137,13 @@ func transcribeAudio(ctx context.Context, opts Options, audio []byte) (string, e
 	return flat.Text, nil
 }
 
+// truncate trims s and caps it at n runes, ending a cut string with "...". It cuts on
+// rune boundaries, so model output in any script stays valid text.
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(r[:max(0, n-3)]) + "..."
 }

@@ -409,7 +409,7 @@ routers:
 		t.Fatal(err)
 	}
 	recRouter := &recordingRouter{reg: reg}
-	handler := observability.WrapHandler(newTestGateway(t, opts, recRouter))
+	handler := observability.WrapHandler(newTestGateway(t, opts, recRouter), nil)
 
 	ctx, root := tp.Tracer("client").Start(context.Background(), "test.client")
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(

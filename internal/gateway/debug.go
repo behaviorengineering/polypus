@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 var traceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -29,7 +27,7 @@ func (h healthHandler) serveFailureDump(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid trace_id", http.StatusBadRequest)
 		return
 	}
-	dumpDir := observability.FailureDumpDir()
+	dumpDir := h.dumpDir
 	if strings.TrimSpace(dumpDir) == "" {
 		http.Error(w, "failure dumps disabled", http.StatusServiceUnavailable)
 		return

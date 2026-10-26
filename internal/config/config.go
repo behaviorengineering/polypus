@@ -16,7 +16,12 @@ import (
 const (
 	DefaultHost       = "127.0.0.1"
 	DefaultPort       = 1320
+	DefaultMLXPort    = 1322
 	DefaultBackendURL = "http://127.0.0.1:1322"
+	// DefaultGatewayURL is where a gateway on the defaults answers.
+	DefaultGatewayURL = "http://127.0.0.1:1320"
+	// DefaultSwitchyardBaseURL is where the local Switchyard listens.
+	DefaultSwitchyardBaseURL = "http://127.0.0.1:4000"
 )
 
 // ServeOptions configures the public Polypus HTTP gateway.
@@ -25,6 +30,9 @@ type ServeOptions struct {
 	Port       int
 	BackendURL string
 	Keyring    operatorconfig.Keyring // optional; defaults to OS keyring when resolving config secrets.
+	// ConfigPath is an explicit config file; empty resolves POLYPUS_CONFIG, then the
+	// user config.
+	ConfigPath string
 }
 
 // LoadServeOptions reads POLYPUS_* and POLYPUS_BACKEND_URL / POLYPUS_MLX_URL from the environment.
@@ -56,7 +64,7 @@ func loadServeOptions() (ServeOptions, error) {
 		if mlxHost == "" {
 			mlxHost = DefaultHost
 		}
-		mlxPort, err := envPort("POLYPUS_MLX_PORT", 1322)
+		mlxPort, err := envPort("POLYPUS_MLX_PORT", DefaultMLXPort)
 		if err != nil {
 			return ServeOptions{}, err
 		}

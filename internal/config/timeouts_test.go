@@ -28,25 +28,25 @@ func TestParseTimeoutValue(t *testing.T) {
 
 func TestResolveChatBucketsAndHeader(t *testing.T) {
 	to := DefaultTimeouts()
-	if got := to.ResolveChat("", "lm_studio", false, false); got != 120*time.Second {
+	if got := to.ResolveChat("", "lm_studio", ChatKindOf(false, false)); got != 120*time.Second {
 		t.Fatalf("lm chat: %s", got)
 	}
-	if got := to.ResolveChat("", "cf_local", false, false); got != 60*time.Second {
+	if got := to.ResolveChat("", "cf_local", ChatKindOf(false, false)); got != 60*time.Second {
 		t.Fatalf("cf chat: %s", got)
 	}
-	if got := to.ResolveChat("", "cf_local", false, true); got != 600*time.Second {
+	if got := to.ResolveChat("", "cf_local", ChatKindOf(false, true)); got != 600*time.Second {
 		t.Fatalf("thinking: %s", got)
 	}
-	if got := to.ResolveChat("", "lm_studio", true, false); got != 300*time.Second {
+	if got := to.ResolveChat("", "lm_studio", ChatKindOf(true, false)); got != 300*time.Second {
 		t.Fatalf("vision: %s", got)
 	}
-	if got := to.ResolveChat("45s", "cf_local", false, false); got != 45*time.Second {
+	if got := to.ResolveChat("45s", "cf_local", ChatKindOf(false, false)); got != 45*time.Second {
 		t.Fatalf("header: %s", got)
 	}
-	if got := to.ResolveChat("2h", "cf_local", false, false); got != 900*time.Second {
+	if got := to.ResolveChat("2h", "cf_local", ChatKindOf(false, false)); got != 900*time.Second {
 		t.Fatalf("clamp max: %s", got)
 	}
-	if got := to.ResolveChat("1s", "cf_local", false, false); got != 5*time.Second {
+	if got := to.ResolveChat("1s", "cf_local", ChatKindOf(false, false)); got != 5*time.Second {
 		t.Fatalf("clamp min: %s", got)
 	}
 }
@@ -67,8 +67,8 @@ func TestParseTimeoutsFileOverlay(t *testing.T) {
 	if got.Backends["cf_local"].Chat != 30*time.Second {
 		t.Fatalf("cf overlay: %s", got.Backends["cf_local"].Chat)
 	}
-	if got.ResolveChat("", "cf_local", false, false) != 30*time.Second {
-		t.Fatalf("resolve after overlay: %s", got.ResolveChat("", "cf_local", false, false))
+	if got.ResolveChat("", "cf_local", ChatKindOf(false, false)) != 30*time.Second {
+		t.Fatalf("resolve after overlay: %s", got.ResolveChat("", "cf_local", ChatKindOf(false, false)))
 	}
 }
 
