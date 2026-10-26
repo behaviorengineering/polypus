@@ -15,6 +15,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 	"github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
 	"go.opentelemetry.io/otel/trace"
@@ -647,8 +648,9 @@ func bifrostErr(berr *schemas.BifrostError, header http.Header) error {
 	if berr.Error != nil && berr.Error.Code != nil {
 		hints = append(hints, strings.TrimSpace(*berr.Error.Code))
 	}
-	if rl := cloudflare.ClassifyRateLimit("cloudflare.workers", status, header, bifrostRawBody(berr), hints...); rl != nil {
-		return derrors.Wrap(rl, derrors.CodeRateLimited, "router.bifrost", "provider rate limited")
+	provider := string(berr.ExtraFields.RoutingInfo.Provider)
+	if rl := ratelimit.Classify("router.bifrost", status, header, bifrostRawBody(berr), hints...); rl != nil {
+		return derrors.Wrap(rl, derrors.CodeRateLimited, "router.bifrost", "provider rate limited").With("provider", provider)
 	}
 	if berr.Error != nil && berr.Error.Error != nil {
 		// Keep a domain code the provider (or a plugin) already set, such as a

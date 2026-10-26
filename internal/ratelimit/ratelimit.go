@@ -1,4 +1,9 @@
-package cloudflare
+// Package ratelimit is the provider-neutral shape of an upstream rate limit. Each client
+// classifies its throttled responses into a CodeRateLimited error carrying these
+// fields, and the gateway turns the fields back into response headers. Cloudflare is
+// the one upstream that also signals throttles by code in the body (3036, 3040, 1015),
+// so Classify recognises those codes whichever backend relayed them.
+package ratelimit
 
 import (
 	"encoding/json"
@@ -10,7 +15,7 @@ import (
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
-// Cloudflare Workers AI / edge rate-limit codes.
+// Cloudflare Workers AI and edge rate-limit codes, and the error fields.
 const (
 	WorkersQuotaCode    = "3036"
 	WorkersCapacityCode = "3040"
@@ -44,12 +49,12 @@ type workersErrorEnvelope struct {
 	} `json:"errors"`
 }
 
-// ClassifyRateLimit returns a CodeRateLimited error when status, JSON body,
-// or hints show a Cloudflare throttle. It returns nil when the response is
-// not a rate limit.
-func ClassifyRateLimit(op string, status int, header http.Header, body []byte, hints ...string) *derrors.Error {
+// Classify returns a CodeRateLimited error when the status is 429, or the JSON body
+// or hints carry a Cloudflare throttle code. It returns nil when the response is not
+// a rate limit. op names the caller (and so the backend) that saw the response.
+func Classify(op string, status int, header http.Header, body []byte, hints ...string) *derrors.Error {
 	if strings.TrimSpace(op) == "" {
-		op = "cloudflare.workers"
+		op = "ratelimit.Classify"
 	}
 	blob := strings.Join(hints, "\n")
 	if len(body) > 0 {

@@ -8,9 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 	"github.com/sony/gobreaker"
 )
 
@@ -77,7 +77,7 @@ func TestWriteUpstreamDialErrorSwitchyardUnreachableNoRetryAfter(t *testing.T) {
 func TestWriteUpstreamDialErrorRateLimitPrecedence(t *testing.T) {
 	err := derrors.Wrap(
 		derrors.New(derrors.CodeRateLimited, "cloudflare.workers", "quota").
-			With(cloudflare.FieldCFCode, cloudflare.WorkersQuotaCode),
+			With(ratelimit.FieldCFCode, ratelimit.WorkersQuotaCode),
 		derrors.CodeRateLimited,
 		"router.bifrost",
 		"provider rate limited",

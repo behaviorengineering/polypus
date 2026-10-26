@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
@@ -27,8 +27,8 @@ func TestBifrostErrRateLimitFromStatusAndBody(t *testing.T) {
 	if !errors.Is(err, derrors.ErrRateLimited) {
 		t.Fatalf("got %v", err)
 	}
-	if derrors.Field(err, cloudflare.FieldCFCode) != cloudflare.WorkersCapacityCode {
-		t.Fatalf("cf_code=%q", derrors.Field(err, cloudflare.FieldCFCode))
+	if derrors.Field(err, ratelimit.FieldCFCode) != ratelimit.WorkersCapacityCode {
+		t.Fatalf("cf_code=%q", derrors.Field(err, ratelimit.FieldCFCode))
 	}
 	if derrors.HTTPStatus(err) != http.StatusTooManyRequests {
 		t.Fatalf("status=%d", derrors.HTTPStatus(err))
@@ -94,14 +94,14 @@ func assertProduction429(t *testing.T, berr *schemas.BifrostError, hdr http.Head
 	if !errors.Is(err, derrors.ErrRateLimited) {
 		t.Fatalf("got %v", err)
 	}
-	if derrors.Field(err, cloudflare.FieldCFCode) != cloudflare.WorkersCapacityCode {
-		t.Fatalf("cf_code=%q", derrors.Field(err, cloudflare.FieldCFCode))
+	if derrors.Field(err, ratelimit.FieldCFCode) != ratelimit.WorkersCapacityCode {
+		t.Fatalf("cf_code=%q", derrors.Field(err, ratelimit.FieldCFCode))
 	}
-	if derrors.Field(err, cloudflare.FieldRetryAfter) != "12" {
-		t.Fatalf("retry_after=%q", derrors.Field(err, cloudflare.FieldRetryAfter))
+	if derrors.Field(err, ratelimit.FieldRetryAfter) != "12" {
+		t.Fatalf("retry_after=%q", derrors.Field(err, ratelimit.FieldRetryAfter))
 	}
-	if derrors.Field(err, cloudflare.FieldCFRay) != "abc-SYD" {
-		t.Fatalf("cf_ray=%q", derrors.Field(err, cloudflare.FieldCFRay))
+	if derrors.Field(err, ratelimit.FieldCFRay) != "abc-SYD" {
+		t.Fatalf("cf_ray=%q", derrors.Field(err, ratelimit.FieldCFRay))
 	}
 	msg := ""
 	for e := err; e != nil; {
@@ -121,5 +121,20 @@ func assertProduction429(t *testing.T, berr *schemas.BifrostError, hdr http.Head
 	}
 	if msg == "provider rate limited" {
 		t.Fatal("want Workers message, not router wrapper only")
+	}
+}
+
+func TestBifrostErrRateLimitNamesTheProvider(t *testing.T) {
+	status := http.StatusTooManyRequests
+	berr := &schemas.BifrostError{
+		StatusCode: &status,
+		Error:      &schemas.ErrorField{Message: "slow down"},
+		ExtraFields: schemas.BifrostErrorExtraFields{
+			RoutingInfo: schemas.RoutingInfo{Provider: "openrouter"},
+		},
+	}
+	err := bifrostErr(berr, nil)
+	if derrors.Field(err, "provider") != "openrouter" {
+		t.Fatalf("an OpenRouter 429 must name OpenRouter, not Cloudflare: %v", err)
 	}
 }

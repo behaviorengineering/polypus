@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
 
 // doSpeech runs /run once over the shared speech client. ctx must carry the
@@ -148,7 +149,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 		return "", err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if rl := ClassifyRateLimit("cloudflare.Transcribe", resp.StatusCode, resp.Header, body); rl != nil {
+		if rl := ratelimit.Classify("cloudflare.Transcribe", resp.StatusCode, resp.Header, body); rl != nil {
 			return "", rl
 		}
 		return "", derrors.New(derrors.CodeUnavailable, "cloudflare.Transcribe", "workers ai error").
@@ -165,7 +166,7 @@ func readAudioBody(resp *http.Response) ([]byte, string, error) {
 		return nil, contentType, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if rl := ClassifyRateLimit("cloudflare.speech", resp.StatusCode, resp.Header, body); rl != nil {
+		if rl := ratelimit.Classify("cloudflare.speech", resp.StatusCode, resp.Header, body); rl != nil {
 			return nil, contentType, rl
 		}
 		return nil, contentType, derrors.New(derrors.CodeUnavailable, "cloudflare.speech", "workers ai error").
@@ -193,7 +194,7 @@ func audioFromEnvelope(resp *http.Response, body []byte) ([]byte, error) {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.speech", "parse json")
 	}
 	if !envelope.Success {
-		if rl := ClassifyRateLimit("cloudflare.speech", resp.StatusCode, resp.Header, body); rl != nil {
+		if rl := ratelimit.Classify("cloudflare.speech", resp.StatusCode, resp.Header, body); rl != nil {
 			return nil, rl
 		}
 		msg := "cloudflare workers ai error"

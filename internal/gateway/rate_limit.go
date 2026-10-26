@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
 
 type openaiErrorBody struct {
@@ -34,13 +34,13 @@ func (s *shared) writeRateLimitError(w http.ResponseWriter, err error) bool {
 	if err == nil || derrors.CodeOf(err) != derrors.CodeRateLimited {
 		return false
 	}
-	if ra := derrors.Field(err, cloudflare.FieldRetryAfter); ra != "" {
+	if ra := derrors.Field(err, ratelimit.FieldRetryAfter); ra != "" {
 		w.Header().Set("Retry-After", ra)
 	}
-	if rl := derrors.Field(err, cloudflare.FieldRateLimit); rl != "" {
+	if rl := derrors.Field(err, ratelimit.FieldRateLimit); rl != "" {
 		w.Header().Set("Ratelimit", rl)
 	}
-	if ray := derrors.Field(err, cloudflare.FieldCFRay); ray != "" {
+	if ray := derrors.Field(err, ratelimit.FieldCFRay); ray != "" {
 		w.Header().Set("Cf-Ray", ray)
 	}
 	setRateLimitExtraHeaders(w, err)
@@ -51,10 +51,10 @@ func (s *shared) writeRateLimitError(w http.ResponseWriter, err error) bool {
 func setRateLimitExtraHeaders(w http.ResponseWriter, err error) {
 	eachDomainError(err, func(de *derrors.Error) {
 		for k, v := range de.Fields() {
-			if !strings.HasPrefix(k, cloudflare.FieldHeaderPrefix) {
+			if !strings.HasPrefix(k, ratelimit.FieldHeaderPrefix) {
 				continue
 			}
-			name := strings.TrimPrefix(k, cloudflare.FieldHeaderPrefix)
+			name := strings.TrimPrefix(k, ratelimit.FieldHeaderPrefix)
 			if name == "" {
 				continue
 			}
@@ -79,7 +79,7 @@ func eachDomainError(err error, fn func(*derrors.Error)) {
 }
 
 func openaiRateLimitBody(status int, header http.Header, body []byte) ([]byte, bool) {
-	rl := cloudflare.ClassifyRateLimit("cloudflare.workers", status, header, body)
+	rl := ratelimit.Classify("gateway.proxyChat", status, header, body)
 	if rl == nil {
 		return nil, false
 	}
@@ -91,7 +91,7 @@ func openaiRateLimitBody(status int, header http.Header, body []byte) ([]byte, b
 }
 
 func openaiRateLimitError(err error) openaiError {
-	code := derrors.Field(err, cloudflare.FieldCFCode)
+	code := derrors.Field(err, ratelimit.FieldCFCode)
 	if code == "" {
 		code = "rate_limited"
 	}

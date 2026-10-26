@@ -10,6 +10,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
 
 const (
@@ -143,7 +144,7 @@ func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte)
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if rl := ClassifyRateLimit("cloudflare.postBatchRun", resp.StatusCode, resp.Header, raw); rl != nil {
+		if rl := ratelimit.Classify("cloudflare.postBatchRun", resp.StatusCode, resp.Header, raw); rl != nil {
 			return nil, rl
 		}
 		msg := workersAIErrorMessage(raw)

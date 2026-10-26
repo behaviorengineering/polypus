@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
 
 // SystemOne calls Workers AI typesafe/jev (or another systemone-capable model).
@@ -57,7 +58,7 @@ func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]by
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if rl := ClassifyRateLimit("cloudflare.SystemOne", resp.StatusCode, resp.Header, raw); rl != nil {
+		if rl := ratelimit.Classify("cloudflare.SystemOne", resp.StatusCode, resp.Header, raw); rl != nil {
 			return nil, rl
 		}
 		msg := workersAIErrorMessage(raw)
@@ -125,7 +126,7 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 		}
 		if envelope.Success != nil {
 			if !*envelope.Success {
-				if rl := ClassifyRateLimit("cloudflare.unwrapRunResult", 0, nil, cur); rl != nil {
+				if rl := ratelimit.Classify("cloudflare.unwrapRunResult", 0, nil, cur); rl != nil {
 					return nil, rl
 				}
 				msg := "cloudflare workers ai error"
