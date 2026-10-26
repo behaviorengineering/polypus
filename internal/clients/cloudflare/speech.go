@@ -11,26 +11,22 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
-const speechTimeout = 300 * time.Second
-
-// doSpeech runs /run over the shared speech client. If ctx has no deadline,
-// a fallback speechTimeout is applied so calls cannot hang forever.
+// doSpeech runs /run once over the shared speech client. ctx must carry the
+// caller's deadline; outbound.DoOnce fails closed without one.
 func (c *Client) doSpeech(ctx context.Context, req *http.Request) (*http.Response, error) {
 	if c == nil || c.speechClient == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.doSpeech", "not configured")
 	}
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, speechTimeout)
-		defer cancel()
-		req = req.WithContext(ctx)
+	resp, err := outbound.DoOnce(ctx, outbound.DepCloudflare, c.speechClient, req)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.doSpeech", "post")
 	}
-	return c.speechClient.Do(req)
+	return resp, nil
 }
 
 // SpeechRequest is OpenAI-compatible TTS input for the Cloudflare Workers AI path.

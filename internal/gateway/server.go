@@ -648,11 +648,9 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 	dialUpstream := string(backendID)
 	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	hop := h.timeouts.ResolveSpeech(r.Header.Get(config.TimeoutHeader))
-	if hop > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hop)
-		defer cancel()
-	}
+	hop = hopBudget(hop, config.DefaultTimeouts().Speech)
+	ctx, cancel := context.WithTimeout(ctx, hop)
+	defer cancel()
 	var audio []byte
 	err = h.upstreams.Execute(string(backendID), func() error {
 		var synthErr error
@@ -719,11 +717,9 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 	dialUpstream := string(backendID)
 	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	hop := h.timeouts.ResolveSpeech(r.Header.Get(config.TimeoutHeader))
-	if hop > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hop)
-		defer cancel()
-	}
+	hop = hopBudget(hop, config.DefaultTimeouts().Speech)
+	ctx, cancel := context.WithTimeout(ctx, hop)
+	defer cancel()
 	var out []byte
 	var ct string
 	err = h.upstreams.Execute(string(backendID), func() error {
@@ -762,4 +758,14 @@ func speechContentType(format string) string {
 	default:
 		return "audio/mpeg"
 	}
+}
+
+// hopBudget returns the outbound budget for one request: hop, or fallback when the
+// timeouts block leaves it at zero. Every hop below then has a deadline, and the
+// clients fail closed without one.
+func hopBudget(hop, fallback time.Duration) time.Duration {
+	if hop > 0 {
+		return hop
+	}
+	return fallback
 }

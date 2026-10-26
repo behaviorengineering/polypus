@@ -69,11 +69,9 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 	dialUpstream := backendID
 	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, false)
-	if hop > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hop)
-		defer cancel()
-	}
+	hop = hopBudget(hop, config.DefaultTimeouts().Chat)
+	ctx, cancel := context.WithTimeout(ctx, hop)
+	defer cancel()
 	r = r.WithContext(ctx)
 
 	err = h.upstreams.Execute(backendID, func() error {

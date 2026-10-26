@@ -134,11 +134,9 @@ func (h batchesHandler) cancelClaudeBatch(r *http.Request, meta batch.BatchMeta)
 	}
 	ctx := r.Context()
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), meta.BackendID, false, false)
-	if hop > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hop)
-		defer cancel()
-	}
+	hop = hopBudget(hop, config.DefaultTimeouts().Chat)
+	ctx, cancel := context.WithTimeout(ctx, hop)
+	defer cancel()
 	if err := h.upstreams.Execute(meta.BackendID, func() error {
 		return h.router.ClaudeBatchCancel(ctx, meta.BackendID, meta.UpstreamBatchID, hop)
 	}); err != nil {

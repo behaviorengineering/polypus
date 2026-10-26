@@ -160,11 +160,9 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 	dialUpstream := backendID
 	defer func() { observability.EndDialSpan(span, submitErr, dialUpstream) }()
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, false, false)
-	if hop > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hop)
-		defer cancel()
-	}
+	hop = hopBudget(hop, config.DefaultTimeouts().Chat)
+	ctx, cancel := context.WithTimeout(ctx, hop)
+	defer cancel()
 	if backend.IsCloudflareExtension() {
 		meta.CFModel = cloudflare.NormalizeModel(downstream)
 	}
@@ -260,11 +258,9 @@ func (h batchesHandler) refreshBatch(r *http.Request, meta batch.BatchMeta) (bat
 	}
 	ctx := r.Context()
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), meta.BackendID, false, false)
-	if hop > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hop)
-		defer cancel()
-	}
+	hop = hopBudget(hop, config.DefaultTimeouts().Chat)
+	ctx, cancel := context.WithTimeout(ctx, hop)
+	defer cancel()
 	if backend.IsAnthropicExtension() {
 		return h.refreshClaudeBatch(ctx, meta, hop)
 	}

@@ -8,15 +8,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 const (
 	batchMaxPayload = 10 << 20
-	batchHopTimeout = 120 * time.Second
 )
 
 // BatchPollState is the Workers AI async batch poll outcome.
@@ -135,13 +134,7 @@ func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, batchHopTimeout)
-		defer cancel()
-		httpReq = httpReq.WithContext(ctx)
-	}
-	resp, err := c.speechClient.Do(httpReq)
+	resp, err := outbound.DoOnce(ctx, outbound.DepCloudflare, c.speechClient, httpReq)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.postBatchRun", "post").
 			With("target", target)

@@ -12,19 +12,18 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 const (
-	defaultAPIBase  = "https://openrouter.ai/api/v1"
-	batchHopTimeout = 60 * time.Second
-	batchMaxBody    = 64 << 20
+	defaultAPIBase = "https://openrouter.ai/api/v1"
+	batchMaxBody   = 64 << 20
 	// completionWindow is the only window OpenRouter accepts.
 	completionWindow = "24h"
 )
@@ -117,8 +116,9 @@ func newClient(base, token string) (*Client, error) {
 	return &Client{
 		apiBase: base,
 		apiKey:  token,
+		// No client Timeout: the caller's ctx deadline bounds each call (outbound fails
+		// closed without one).
 		httpClient: &http.Client{
-			Timeout:   batchHopTimeout,
 			Transport: observability.WrapTransport(http.DefaultTransport),
 		},
 	}, nil
@@ -221,7 +221,12 @@ func (c *Client) do(ctx context.Context, method, target string, payload []byte) 
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.httpClient.Do(req)
+	// A create is sent once (never submit a batch twice); a retrieve may retry.
+	send := outbound.Do
+	if method != http.MethodGet {
+		send = outbound.DoOnce
+	}
+	resp, err := send(ctx, outbound.DepOpenRouter, c.httpClient, req)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "openrouter.do", strings.ToLower(method)).
 			With("target", target)

@@ -1,7 +1,6 @@
 package cloudflare
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -71,7 +70,7 @@ func TestSystemOneUnwrapsEnvelope(t *testing.T) {
 			}
 		}
 	}`)
-	out, err := c.SystemOne(context.Background(), "cf_local/typesafe/jev", reqBody)
+	out, err := c.SystemOne(hopCtx(t), "cf_local/typesafe/jev", reqBody)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +103,7 @@ func TestSystemOneBareResponse(t *testing.T) {
 		apiKey:       "k",
 		speechClient: srv.Client(),
 	}
-	out, err := c.SystemOne(context.Background(), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
+	out, err := c.SystemOne(hopCtx(t), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +134,7 @@ func TestSystemOneUnwrapsUnifiedGateway(t *testing.T) {
 		apiKey:       "k",
 		speechClient: srv.Client(),
 	}
-	out, err := c.SystemOne(context.Background(), "typesafe/jev", []byte(`{"state":"s","questions":{"is_urgent":{"type":"noul","instructions":"?"}}}`))
+	out, err := c.SystemOne(hopCtx(t), "typesafe/jev", []byte(`{"state":"s","questions":{"is_urgent":{"type":"noul","instructions":"?"}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +182,7 @@ func TestSystemOneUnwrapsClassicThenUnified(t *testing.T) {
 		apiKey:       "k",
 		speechClient: srv.Client(),
 	}
-	out, err := c.SystemOne(context.Background(), "typesafe/jev", []byte(`{"state":"s","questions":{"is_urgent":{"type":"noul","instructions":"?"}}}`))
+	out, err := c.SystemOne(hopCtx(t), "typesafe/jev", []byte(`{"state":"s","questions":{"is_urgent":{"type":"noul","instructions":"?"}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +213,7 @@ func TestSystemOneSuccessFalse(t *testing.T) {
 		apiKey:       "k",
 		speechClient: srv.Client(),
 	}
-	_, err := c.SystemOne(context.Background(), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
+	_, err := c.SystemOne(hopCtx(t), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
 	if err == nil || !strings.Contains(err.Error(), "quota exceeded") {
 		t.Fatalf("err=%v", err)
 	}
@@ -237,7 +236,7 @@ func TestSystemOneHTTPErrorUsesCFMessage(t *testing.T) {
 		apiKey:       "k",
 		speechClient: srv.Client(),
 	}
-	_, err := c.SystemOne(context.Background(), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
+	_, err := c.SystemOne(hopCtx(t), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
 	if err == nil || !strings.Contains(err.Error(), "Insufficient balance") {
 		t.Fatalf("err=%v", err)
 	}

@@ -302,7 +302,7 @@ func TestSpeechSynthesize(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	audio, _, err := client.Synthesize(context.Background(), SpeechRequest{
+	audio, _, err := client.Synthesize(hopCtx(t), SpeechRequest{
 		Model: "@cf/deepgram/aura-2-en",
 		Input: "Episode one.",
 		Voice: "luna",
@@ -340,7 +340,7 @@ func TestSpeechSynthesizeJSONStringResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	audio, _, err := client.Synthesize(context.Background(), SpeechRequest{
+	audio, _, err := client.Synthesize(hopCtx(t), SpeechRequest{
 		Model: "@cf/deepgram/aura-2-en",
 		Input: "hello",
 	})
@@ -374,7 +374,7 @@ func TestSpeechTranscribe(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, err := client.Transcribe(context.Background(), TranscriptionRequest{
+	text, err := client.Transcribe(hopCtx(t), TranscriptionRequest{
 		Model:    "@cf/deepgram/nova-3",
 		Audio:    []byte("fake-mp3"),
 		Filename: "clip.mp3",

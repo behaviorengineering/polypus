@@ -8,12 +8,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
-
-const systemOneTimeout = 120 * time.Second
 
 // SystemOne calls Workers AI typesafe/jev (or another systemone-capable model).
 // Cloudflare's REST surface for this third-party model is POST /ai/run with
@@ -76,13 +74,11 @@ func (c *Client) doSystemOne(ctx context.Context, req *http.Request) (*http.Resp
 	if c == nil || c.speechClient == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.doSystemOne", "not configured")
 	}
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, systemOneTimeout)
-		defer cancel()
-		req = req.WithContext(ctx)
+	resp, err := outbound.DoOnce(ctx, outbound.DepCloudflare, c.speechClient, req)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.doSystemOne", "post")
 	}
-	return c.speechClient.Do(req)
+	return resp, nil
 }
 
 // stripModelField removes top-level "model" from a JSON object so CF /run

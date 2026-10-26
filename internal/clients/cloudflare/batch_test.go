@@ -1,7 +1,6 @@
 package cloudflare
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -54,14 +53,14 @@ func TestSubmitAndPollBatch(t *testing.T) {
 		CustomID: "c1",
 		Body:     []byte(`{"model":"@cf/meta/llama-3.3-70b-instruct-fp8-fast","messages":[{"role":"user","content":"hi"}]}`),
 	}}
-	id, err := c.SubmitBatch(context.Background(), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", batch.EndpointChatCompletions, lines)
+	id, err := c.SubmitBatch(hopCtx(t), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", batch.EndpointChatCompletions, lines)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if id != "cf-req-1" {
 		t.Fatalf("request id: %s", id)
 	}
-	poll, err := c.PollBatch(context.Background(), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", id)
+	poll, err := c.PollBatch(hopCtx(t), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", id)
 	if err != nil {
 		t.Fatal(err)
 	}

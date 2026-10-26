@@ -28,6 +28,7 @@ const (
 	DepCloudflare   = "cloudflare"
 	DepGemini       = "gemini"
 	DepAnthropic    = "anthropic"
+	DepOpenRouter   = "openrouter"
 	DepGateway      = "gateway"
 )
 
@@ -99,7 +100,7 @@ var (
 
 func breakerFor(name string) failsafe.Policy[any] {
 	switch name {
-	case DepGitHub, DepGHCR, DepRegistry, DepCloudflare, DepGemini, DepAnthropic:
+	case DepGitHub, DepGHCR, DepRegistry, DepCloudflare, DepGemini, DepAnthropic, DepOpenRouter:
 	default:
 		return nil
 	}
@@ -207,6 +208,8 @@ func Run(ctx context.Context, name string, fn func() error) error {
 }
 
 // Do performs one HTTP request under outbound policies. req is cloned per attempt.
+// When every attempt ends in an HTTP status (permanent, or retryable with retries
+// spent), Do returns the last response with a nil error for the caller to map.
 func Do(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
 	if err := validateCtx(ctx); err != nil {
 		return nil, err
@@ -235,7 +238,7 @@ func Do(ctx context.Context, name string, client *http.Client, req *http.Request
 			if err != nil {
 				return Abort(err)
 			}
-			r, err := client.Do(attempt)
+			r, err := client.Do(attempt) //nolint:gosec // G704: targets are operator-configured backend and registry URLs
 			if err != nil {
 				return err
 			}
@@ -246,7 +249,10 @@ func Do(ctx context.Context, name string, client *http.Client, req *http.Request
 					return Abort(fmt.Errorf("http status %d", r.StatusCode))
 				}
 				if HTTPStatusRetryable(r.StatusCode) {
-					_ = r.Body.Close()
+					// Kept until the next attempt closes it, so the caller still gets
+					// the last upstream answer (status, body, Retry-After) when
+					// retries run out.
+					resp = r
 					return fmt.Errorf("http status %d", r.StatusCode)
 				}
 			}
@@ -254,9 +260,39 @@ func Do(ctx context.Context, name string, client *http.Client, req *http.Request
 			return nil
 		})
 	if err != nil {
-		if errors.Is(err, ErrAbort) && resp != nil {
+		if resp != nil {
 			return resp, nil
 		}
+		return nil, err
+	}
+	return resp, nil
+}
+
+// DoOnce sends req exactly once under the breaker for name, with no retry. Use it
+// for paid or non-idempotent calls (inference, batch submit), whose upstream status
+// and Retry-After the caller acts on. Like Do, it fails closed without a deadline.
+func DoOnce(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
+	if err := validateCtx(ctx); err != nil {
+		return nil, err
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if req == nil {
+		return nil, fmt.Errorf("outbound: nil request")
+	}
+	var resp *http.Response
+	err := failsafe.With(breakerOnly(name)...).
+		WithContext(ctx).
+		Run(func() error {
+			r, err := client.Do(req.WithContext(ctx)) //nolint:gosec // G704: targets are operator-configured backend URLs
+			if err != nil {
+				return err
+			}
+			resp = r
+			return nil
+		})
+	if err != nil {
 		return nil, err
 	}
 	return resp, nil
