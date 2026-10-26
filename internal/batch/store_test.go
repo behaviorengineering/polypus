@@ -67,7 +67,7 @@ func TestDiskStoreRejectsIDsOutsideRoot(t *testing.T) {
 		if _, err := store.GetBatch(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
 			t.Errorf("GetBatch(%q): want CodeInvalid, got %v", id, err)
 		}
-		if err := store.UpdateBatch(BatchMeta{ID: id}); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+		if err := store.UpdateBatch(Meta{ID: id}); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
 			t.Errorf("UpdateBatch(%q): want CodeInvalid, got %v", id, err)
 		}
 	}
@@ -87,8 +87,8 @@ func TestDeleteFileReferencedByBatch(t *testing.T) {
 	if err := store.SaveFile(rec, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	meta := &BatchMeta{
-		Status:      BatchStatusInProgress,
+	meta := &Meta{
+		Status:      StatusInProgress,
 		InputFileID: rec.ID,
 		Endpoint:    EndpointChatCompletions,
 	}

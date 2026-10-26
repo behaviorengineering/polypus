@@ -126,7 +126,7 @@ backends:
 	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
 		t.Fatal(err)
 	}
-	if batchObj.Status != batch.BatchStatusInProgress {
+	if batchObj.Status != batch.StatusInProgress {
 		t.Fatalf("status: %s", batchObj.Status)
 	}
 
@@ -139,7 +139,7 @@ backends:
 	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
 		t.Fatal(err)
 	}
-	if batchObj.Status != batch.BatchStatusCompleted || batchObj.OutputFileID == "" {
+	if batchObj.Status != batch.StatusCompleted || batchObj.OutputFileID == "" {
 		t.Fatalf("final batch: %+v", batchObj)
 	}
 
@@ -203,7 +203,7 @@ func TestBatchCancelNotSupported(t *testing.T) {
 		t.Fatalf("cancel status: %d %s", rec.Code, rec.Body.String())
 	}
 	got, _ := h.batchStore.GetBatch(batchObj.ID)
-	if got.Status != batch.BatchStatusInProgress {
+	if got.Status != batch.StatusInProgress {
 		t.Fatalf("status unchanged: %s", got.Status)
 	}
 }
@@ -251,7 +251,7 @@ func TestBatchFailedLineErrorMessage(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &batchObj); err != nil {
 		t.Fatal(err)
 	}
-	if batchObj.Status != batch.BatchStatusFailed {
+	if batchObj.Status != batch.StatusFailed {
 		t.Fatalf("status: %s", batchObj.Status)
 	}
 	if batchObj.ErrorFileID == "" {
@@ -364,7 +364,7 @@ func TestBatchRetrievePollUnavailableKeepsInProgress(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != batch.BatchStatusInProgress {
+	if got.Status != batch.StatusInProgress {
 		t.Fatalf("status: %s", got.Status)
 	}
 	if got.OutputFileID != "" || got.RequestCounts.Completed != 0 {
@@ -402,7 +402,7 @@ func TestBatchRetrieveEmptyPollJSONKeepsInProgress(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != batch.BatchStatusInProgress {
+	if got.Status != batch.StatusInProgress {
 		t.Fatalf("status: %s", got.Status)
 	}
 }

@@ -33,7 +33,7 @@ func TestBifrostOTelTracer_sameTraceAsParent(t *testing.T) {
 		t.Fatal("expected otel span bridge handle")
 	}
 	bridge.schema.SetAttribute(schemas.AttrBifrostProviderName, string(schemas.Gemini))
-	tr.EndSpan(handle, schemas.SpanStatusOk, "")
+	tr.endSpan(handle, schemas.SpanStatusOk, "")
 	parent.End()
 
 	var childTrace string
@@ -89,8 +89,8 @@ func TestBifrostOTelTracer_concurrentRequestsKeepTheirOwnTrace(t *testing.T) {
 	// Interleave like two concurrent requests on the one shared tracer.
 	_, hA := tr.StartSpanID(schemas.NewBifrostContext(ctxA, schemas.NoDeadline), "llm A", schemas.SpanKindLLMCall)
 	_, hB := tr.StartSpanID(schemas.NewBifrostContext(ctxB, schemas.NoDeadline), "llm B", schemas.SpanKindLLMCall)
-	tr.EndSpan(hA, schemas.SpanStatusOk, "")
-	tr.EndSpan(hB, schemas.SpanStatusOk, "")
+	tr.endSpan(hA, schemas.SpanStatusOk, "")
+	tr.endSpan(hB, schemas.SpanStatusOk, "")
 	spanA.End()
 	spanB.End()
 	want := map[string]string{

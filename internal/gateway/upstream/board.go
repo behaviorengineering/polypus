@@ -20,7 +20,7 @@ const (
 // Gobreaker policy shared with HTTP Retry-After on breaker rejects.
 const (
 	OpenTimeout             = 30 * time.Second
-	HalfOpenMaxRequests     = uint32(1)
+	halfOpenMaxRequests     = uint32(1)
 	ConsecutiveFailuresTrip = uint32(3)
 )
 
@@ -80,7 +80,7 @@ func (b *Board) breaker(name string) *gobreaker.CircuitBreaker {
 	}
 	c := gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:        name,
-		MaxRequests: HalfOpenMaxRequests,
+		MaxRequests: halfOpenMaxRequests,
 		Interval:    0,
 		Timeout:     OpenTimeout,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {

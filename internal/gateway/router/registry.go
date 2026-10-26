@@ -20,7 +20,7 @@ type Registry struct {
 // NewRegistry validates backend URLs and builds the routing table.
 func NewRegistry(cfg config.RouterConfig) (*Registry, error) {
 	for id, b := range cfg.Backends {
-		if err := ValidateBackend(b, cfg.Policy); err != nil {
+		if err := validateBackend(b, cfg.Policy); err != nil {
 			return nil, fmt.Errorf("backends.%s: %w", id, err)
 		}
 		if b.IsCloudflareExtension() {

@@ -105,15 +105,6 @@ type Client struct {
 	policies   *outbound.Policies // nil: the process default.
 }
 
-// NewClient builds a batch client from an OpenRouter backend definition.
-func NewClient(b config.BackendDef) (*Client, error) {
-	token, err := b.Auth.ResolveBearerToken()
-	if err != nil {
-		return nil, err
-	}
-	return newClient(apiBase(b.BaseURL), token)
-}
-
 func newClient(base, token string) (*Client, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, derrors.New(derrors.CodeInvalid, "openrouter.newClient", "api key required")

@@ -28,9 +28,9 @@ func polypusConfigExtraPaths() []string {
 	return out
 }
 
-// ResolvePolypusSecrets fills env vars from the keyring for secrets declared in config.yaml.
+// resolvePolypusSecrets fills env vars from the keyring for secrets declared in config.yaml.
 // When secrets is empty, no keyring lookups are performed.
-func ResolvePolypusSecrets(secrets []operatorconfig.Secret, kr operatorconfig.Keyring) error {
+func resolvePolypusSecrets(secrets []operatorconfig.Secret, kr operatorconfig.Keyring) error {
 	if len(secrets) == 0 {
 		return nil
 	}

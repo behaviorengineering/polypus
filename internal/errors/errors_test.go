@@ -45,8 +45,8 @@ func TestWrapChainIsAndFields(t *testing.T) {
 	}
 }
 
-func TestNewDomainErrorAndSentinel(t *testing.T) {
-	err := NewDomainError(CodeNotFound, "backend missing", nil)
+func TestErrorMatchesItsCodeSentinel(t *testing.T) {
+	err := New(CodeNotFound, "", "backend missing")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatal("want Is ErrNotFound")
 	}

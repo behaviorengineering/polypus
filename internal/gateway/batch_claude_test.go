@@ -125,11 +125,11 @@ func TestClaudeBatchLifecycle(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Status != batch.BatchStatusInProgress || fr.createdModel != "claude-sonnet-5-5" || len(fr.createdLines) != 1 {
+	if created.Status != batch.StatusInProgress || fr.createdModel != "claude-sonnet-5-5" || len(fr.createdLines) != 1 {
 		t.Fatalf("created=%+v model=%q lines=%d", created, fr.createdModel, len(fr.createdLines))
 	}
 
-	if got := getBatch(t, h, created.ID); got.Status != batch.BatchStatusInProgress {
+	if got := getBatch(t, h, created.ID); got.Status != batch.StatusInProgress {
 		t.Fatalf("still running: %+v", got)
 	}
 
@@ -139,7 +139,7 @@ func TestClaudeBatchLifecycle(t *testing.T) {
 		{CustomID: "job-2", ErrCode: "errored", ErrMessage: "invalid_request_error"},
 	}
 	done := getBatch(t, h, created.ID)
-	if done.Status != batch.BatchStatusCompleted || done.RequestCounts.Completed != 1 || done.RequestCounts.Failed != 1 {
+	if done.Status != batch.StatusCompleted || done.RequestCounts.Completed != 1 || done.RequestCounts.Failed != 1 {
 		t.Fatalf("done: %+v", done)
 	}
 	if out := fileContent(t, h, done.OutputFileID); !strings.Contains(out, `"custom_id":"job-1"`) || !strings.Contains(out, "hello") {
@@ -163,7 +163,7 @@ func TestClaudeBatchCancelKeepsFinishedLines(t *testing.T) {
 	if rec.Code != http.StatusOK || !fr.cancelled {
 		t.Fatalf("cancel: %d %s cancelled=%v", rec.Code, rec.Body.String(), fr.cancelled)
 	}
-	if got := getBatch(t, h, created.ID); got.Status != batch.BatchStatusCancelling {
+	if got := getBatch(t, h, created.ID); got.Status != batch.StatusCancelling {
 		t.Fatalf("cancelling: %+v", got)
 	}
 
@@ -172,7 +172,7 @@ func TestClaudeBatchCancelKeepsFinishedLines(t *testing.T) {
 		{CustomID: "job-1", Body: json.RawMessage(`{"object":"chat.completion","choices":[]}`)},
 	}
 	done := getBatch(t, h, created.ID)
-	if done.Status != batch.BatchStatusCancelled || done.CancelledAt == 0 || done.OutputFileID == "" {
+	if done.Status != batch.StatusCancelled || done.CancelledAt == 0 || done.OutputFileID == "" {
 		t.Fatalf("cancelled: %+v", done)
 	}
 }

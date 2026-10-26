@@ -12,7 +12,7 @@ import (
 )
 
 func TestRunMissingDeadline(t *testing.T) {
-	err := Run(context.Background(), DepGitHub, func() error { return nil })
+	err := Run(context.Background(), depGitHub, func() error { return nil })
 	if err == nil || err.Error() != "outbound: missing deadline" {
 		t.Fatalf("expected missing deadline, got %v", err)
 	}
@@ -20,7 +20,7 @@ func TestRunMissingDeadline(t *testing.T) {
 
 func TestRunNilContext(t *testing.T) {
 	var ctx context.Context // Nil on purpose.
-	err := Run(ctx, DepGitHub, func() error { return nil })
+	err := Run(ctx, depGitHub, func() error { return nil })
 	if err == nil || err.Error() != "outbound: context required" {
 		t.Fatalf("got %v", err)
 	}
@@ -43,7 +43,7 @@ func TestDoRetries503(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := Do(ctx, DepGitHub, srv.Client(), req)
+	resp, err := Do(ctx, depGitHub, srv.Client(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestDoRetryResendsTheFullBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := Do(ctx, DepGitHub, srv.Client(), req)
+	resp, err := Do(ctx, depGitHub, srv.Client(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestDoSendsAnUnreplayableBodyOnce(t *testing.T) {
 	if req.GetBody != nil {
 		t.Fatal("test needs a body without GetBody")
 	}
-	resp, err := Do(ctx, DepGitHub, srv.Client(), req)
+	resp, err := Do(ctx, depGitHub, srv.Client(), req)
 	if err == nil {
 		_ = resp.Body.Close()
 	}
@@ -125,7 +125,7 @@ func TestDoAbort404(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := Do(ctx, DepGitHub, srv.Client(), req)
+	resp, err := Do(ctx, depGitHub, srv.Client(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestDoNeverDialsWithoutDeadline(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
-	_, err := Do(context.Background(), DepGitHub, srv.Client(), req)
+	_, err := Do(context.Background(), depGitHub, srv.Client(), req)
 	if err == nil || err.Error() != "outbound: missing deadline" {
 		t.Fatalf("got %v dialed=%v", err, dialed.Load())
 	}

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
-	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/outbound"
@@ -39,18 +38,6 @@ type Client struct {
 	backendID  string             // scopes the outbound breaker to this backend.
 	policies   *outbound.Policies // nil: the process default.
 	log        *slog.Logger       // nil: no warnings.
-}
-
-// NewClient builds a Gemini catalog client from a backend definition.
-func NewClient(b config.BackendDef) (*Client, error) {
-	if !b.IsGeminiExtension() {
-		return nil, derrors.Wrap(errNotGeminiExtension, derrors.CodeInvalid, "gemini", "backend").With("backend", b.ID)
-	}
-	token, err := b.Auth.ResolveBearerToken()
-	if err != nil {
-		return nil, err
-	}
-	return newClient(openAIModelsListURL(b.BaseURL), token)
 }
 
 // NewClientWithListURL builds a catalog client for a fixed list URL (tests and injected getters).

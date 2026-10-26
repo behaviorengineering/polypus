@@ -214,8 +214,8 @@ func StartLLMSpan(ctx context.Context, operation string, a LLMSpanAttrs) (contex
 	return ctx, span
 }
 
-// EndSpan records err on the span and ends it.
-func EndSpan(span trace.Span, err error) {
+// endSpan records err on the span and ends it.
+func endSpan(span trace.Span, err error) {
 	if span == nil {
 		return
 	}

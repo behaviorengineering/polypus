@@ -52,7 +52,7 @@ func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
 		// The gateway passes its own cache; a standalone client builds one.
 		cfGet = (&cloudflare.Clients{Logger: co.logger}).Get
 	}
-	account := NewAccount(cfg)
+	account := newAccount(cfg)
 	var plugins []schemas.LLMPlugin
 	if hasCloudflareBackend(cfg) {
 		lookup := func(provider string) (config.BackendDef, bool) {

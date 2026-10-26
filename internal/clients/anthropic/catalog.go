@@ -55,8 +55,8 @@ type Client struct {
 	log        *slog.Logger       // nil: no warnings.
 }
 
-// NewClient builds an Anthropic catalog client from a backend definition.
-func NewClient(b config.BackendDef) (*Client, error) {
+// newClientFromBackend builds an Anthropic catalog client from a backend definition.
+func newClientFromBackend(b config.BackendDef) (*Client, error) {
 	if !b.IsAnthropicExtension() {
 		return nil, derrors.Wrap(errNotAnthropicExtension, derrors.CodeInvalid, "anthropic", "backend").With("backend", b.ID)
 	}

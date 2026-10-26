@@ -22,7 +22,7 @@ type fakeSubmitter struct {
 
 func (f *fakeSubmitter) Validate(Job) error { return nil }
 
-func (f *fakeSubmitter) Submit(_ context.Context, _ Job, meta *batch.BatchMeta) error {
+func (f *fakeSubmitter) Submit(_ context.Context, _ Job, meta *batch.Meta) error {
 	if f.submitErr != nil {
 		return f.submitErr
 	}
@@ -30,9 +30,9 @@ func (f *fakeSubmitter) Submit(_ context.Context, _ Job, meta *batch.BatchMeta) 
 	return nil
 }
 
-func (f *fakeSubmitter) Poll(context.Context, batch.BatchMeta) (Poll, error) { return f.poll, nil }
+func (f *fakeSubmitter) Poll(context.Context, batch.Meta) (Poll, error) { return f.poll, nil }
 
-func (f *fakeSubmitter) Cancel(context.Context, batch.BatchMeta) error {
+func (f *fakeSubmitter) Cancel(context.Context, batch.Meta) error {
 	f.cancelled = true
 	return nil
 }
@@ -73,7 +73,7 @@ func TestCreateRecordsAFailedSubmit(t *testing.T) {
 		t.Fatalf("the provider's code must survive: %v", err)
 	}
 	stored, gerr := store.GetBatch(meta.ID)
-	if gerr != nil || stored.Status != batch.BatchStatusFailed || stored.FailedAt == 0 {
+	if gerr != nil || stored.Status != batch.StatusFailed || stored.FailedAt == 0 {
 		t.Fatalf("a failed submit stays stored as failed: %+v %v", stored, gerr)
 	}
 }
@@ -83,10 +83,10 @@ func TestCreateThenFinishWritesOutput(t *testing.T) {
 	sub := &fakeSubmitter{poll: Poll{State: PollRunning}}
 	svc, _ := newTestService(t, sub, &now)
 	meta, err := svc.Create(context.Background(), createRequest())
-	if err != nil || meta.Status != batch.BatchStatusInProgress || meta.UpstreamBatchID != "up_1" {
+	if err != nil || meta.Status != batch.StatusInProgress || meta.UpstreamBatchID != "up_1" {
 		t.Fatalf("create: %+v %v", meta, err)
 	}
-	if meta, err = svc.Refresh(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.BatchStatusInProgress {
+	if meta, err = svc.Refresh(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.StatusInProgress {
 		t.Fatalf("running: %+v %v", meta, err)
 	}
 	sub.poll = Poll{State: PollDone, Lines: []batch.LineResult{
@@ -94,7 +94,7 @@ func TestCreateThenFinishWritesOutput(t *testing.T) {
 		{CustomID: "b", ErrCode: "errored", ErrMessage: "boom"},
 	}}
 	meta, err = svc.Refresh(context.Background(), batchBackend, meta)
-	if err != nil || meta.Status != batch.BatchStatusCompleted || meta.RequestCounts.Completed != 1 || meta.RequestCounts.Failed != 1 {
+	if err != nil || meta.Status != batch.StatusCompleted || meta.RequestCounts.Completed != 1 || meta.RequestCounts.Failed != 1 {
 		t.Fatalf("done: %+v %v", meta, err)
 	}
 }
@@ -107,7 +107,7 @@ func TestRefreshExpiresAPastWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(48 * time.Hour)
-	if meta, err = svc.Refresh(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.BatchStatusExpired {
+	if meta, err = svc.Refresh(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.StatusExpired {
 		t.Fatalf("past its window: %+v %v", meta, err)
 	}
 }
@@ -120,11 +120,11 @@ func TestCancelledBatchFinishesCancelledWithItsLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta, err = svc.Cancel(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.BatchStatusCancelling || !sub.cancelled {
+	if meta, err = svc.Cancel(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.StatusCancelling || !sub.cancelled {
 		t.Fatalf("cancel: %+v %v", meta, err)
 	}
 	sub.poll = Poll{State: PollDone, Lines: []batch.LineResult{{CustomID: "a", Body: []byte(`{}`)}}}
-	if meta, err = svc.Refresh(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.BatchStatusCancelled || meta.RequestCounts.Completed != 1 {
+	if meta, err = svc.Refresh(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.StatusCancelled || meta.RequestCounts.Completed != 1 {
 		t.Fatalf("a cancelling batch ends cancelled with the finished lines: %+v %v", meta, err)
 	}
 }

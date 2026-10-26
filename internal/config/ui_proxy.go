@@ -27,8 +27,8 @@ type uiProxyFile struct {
 
 var reservedUIProxyPrefixes = []string{"/v1", "/health", "/debug", "/media"}
 
-// ParseUIProxies normalizes and validates ui_proxies from config file entries.
-func ParseUIProxies(entries []uiProxyFile) ([]UIProxy, error) {
+// parseUIProxies normalizes and validates ui_proxies from config file entries.
+func parseUIProxies(entries []uiProxyFile) ([]UIProxy, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -48,7 +48,7 @@ func ParseUIProxies(entries []uiProxyFile) ([]UIProxy, error) {
 				return nil, fmt.Errorf("router: ui_proxies path %q conflicts with reserved prefix %q", path, reserved)
 			}
 		}
-		rawURL, err := ExpandEnv(strings.TrimSpace(e.URL))
+		rawURL, err := expandEnv(strings.TrimSpace(e.URL))
 		if err != nil {
 			return nil, fmt.Errorf("router: ui_proxies[%d].url: %w", i, err)
 		}

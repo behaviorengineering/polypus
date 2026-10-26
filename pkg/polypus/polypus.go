@@ -57,11 +57,6 @@ func Serve(ctx context.Context, opts ServeOptions, options ...HandlerOption) err
 	return gateway.ListenAndServe(ctx, opts, options...)
 }
 
-// ListenAndServe is an alias for Serve.
-func ListenAndServe(ctx context.Context, opts ServeOptions, options ...HandlerOption) error {
-	return Serve(ctx, opts, options...)
-}
-
 // NewHandler builds the public HTTP handler without listening.
 func NewHandler(opts ServeOptions, options ...HandlerOption) (http.Handler, error) {
 	return gateway.NewHandler(opts, options...)

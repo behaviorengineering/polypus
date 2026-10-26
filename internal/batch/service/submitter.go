@@ -38,9 +38,9 @@ type Submitter interface {
 	Validate(job Job) error
 	// Submit sends the job once and records the provider's reference (its batch id,
 	// and anything else Poll needs) in meta.
-	Submit(ctx context.Context, job Job, meta *batch.BatchMeta) error
+	Submit(ctx context.Context, job Job, meta *batch.Meta) error
 	// Poll reports the batch state, with its lines once it is done.
-	Poll(ctx context.Context, meta batch.BatchMeta) (Poll, error)
+	Poll(ctx context.Context, meta batch.Meta) (Poll, error)
 	// Cancel asks the provider to cancel; CodeUnimplemented when it cannot.
-	Cancel(ctx context.Context, meta batch.BatchMeta) error
+	Cancel(ctx context.Context, meta batch.Meta) error
 }

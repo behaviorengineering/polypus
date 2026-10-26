@@ -25,7 +25,7 @@ func TestNewAccountRegistersCloudflareChatAndSpeech(t *testing.T) {
 		},
 	}
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
-	acct := NewAccount(cfg)
+	acct := newAccount(cfg)
 	providers, err := acct.GetConfiguredProviders()
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestNewAccountRegistersSwitchyardWhenComposed(t *testing.T) {
 		},
 		Switchyard: config.SwitchyardConfig{BaseURL: "http://127.0.0.1:4000"},
 	}
-	acct := NewAccount(cfg)
+	acct := newAccount(cfg)
 	providers, err := acct.GetConfiguredProviders()
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +131,7 @@ func TestNewAccountRegistersGeminiChat(t *testing.T) {
 			},
 		},
 	}
-	acct := NewAccount(cfg)
+	acct := newAccount(cfg)
 	pc, err := acct.GetConfigForProvider("gemini_studio")
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestNewAccountCopiesExtraHeaders(t *testing.T) {
 			},
 		},
 	}
-	acct := NewAccount(cfg)
+	acct := newAccount(cfg)
 	pc, err := acct.GetConfigForProvider("openrouter")
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +200,7 @@ func TestNewAccountRegistersNativeOpenRouter(t *testing.T) {
 			},
 		},
 	}
-	acct := NewAccount(cfg)
+	acct := newAccount(cfg)
 	pc, err := acct.GetConfigForProvider(schemas.OpenRouter)
 	if err != nil {
 		t.Fatal(err)

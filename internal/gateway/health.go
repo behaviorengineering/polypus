@@ -35,8 +35,8 @@ type backendHealthResponse struct {
 }
 
 type upstreamHealthResponse struct {
-	Status    string                      `json:"status"`
-	Upstreams []upstream.UpstreamSnapshot `json:"upstreams"`
+	Status    string              `json:"status"`
+	Upstreams []upstream.Snapshot `json:"upstreams"`
 }
 
 // serveUpstreamHealth reports in-process circuit breaker state (no upstream dials).

@@ -41,7 +41,7 @@ func (s claudeSubmitter) Validate(job Job) error {
 	return nil
 }
 
-func (s claudeSubmitter) Submit(ctx context.Context, job Job, meta *batch.BatchMeta) error {
+func (s claudeSubmitter) Submit(ctx context.Context, job Job, meta *batch.Meta) error {
 	id, err := s.batches.Create(ctx, s.backend.ID, job.Downstream, job.Lines, remaining(ctx))
 	if err != nil {
 		return err
@@ -50,7 +50,7 @@ func (s claudeSubmitter) Submit(ctx context.Context, job Job, meta *batch.BatchM
 	return nil
 }
 
-func (s claudeSubmitter) Poll(ctx context.Context, meta batch.BatchMeta) (Poll, error) {
+func (s claudeSubmitter) Poll(ctx context.Context, meta batch.Meta) (Poll, error) {
 	st, err := s.batches.Status(ctx, s.backend.ID, meta.UpstreamBatchID, remaining(ctx))
 	if err != nil {
 		return Poll{}, err
@@ -65,7 +65,7 @@ func (s claudeSubmitter) Poll(ctx context.Context, meta batch.BatchMeta) (Poll, 
 	return Poll{State: PollDone, Lines: lines}, nil
 }
 
-func (s claudeSubmitter) Cancel(ctx context.Context, meta batch.BatchMeta) error {
+func (s claudeSubmitter) Cancel(ctx context.Context, meta batch.Meta) error {
 	return s.batches.Cancel(ctx, s.backend.ID, meta.UpstreamBatchID, remaining(ctx))
 }
 

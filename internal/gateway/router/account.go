@@ -22,8 +22,8 @@ type Account struct {
 	timeouts config.Timeouts
 }
 
-// NewAccount returns a Bifrost account for leaf backends plus optional Switchyard.
-func NewAccount(cfg config.RouterConfig) *Account {
+// newAccount returns a Bifrost account for leaf backends plus optional Switchyard.
+func newAccount(cfg config.RouterConfig) *Account {
 	backends := make(map[schemas.ModelProvider]config.BackendDef, len(cfg.Backends)+1)
 	for id, b := range cfg.Backends {
 		backends[schemas.ModelProvider(id)] = b

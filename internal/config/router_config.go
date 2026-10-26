@@ -305,7 +305,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 	if err := dec.Decode(&file); err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
-	if err := ResolvePolypusSecrets(file.Secrets, opts.Keyring); err != nil {
+	if err := resolvePolypusSecrets(file.Secrets, opts.Keyring); err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
 	timeouts, err := parseTimeoutsFile(file.Timeouts)
@@ -316,7 +316,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 	if err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
-	uiProxies, err := ParseUIProxies(file.UIProxies)
+	uiProxies, err := parseUIProxies(file.UIProxies)
 	if err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
 	}
@@ -352,7 +352,7 @@ func loadRouterFile(opts ServeOptions) (RouterConfig, bool, error) {
 			}
 			caps = append(caps, c)
 		}
-		baseURL, err := ExpandEnv(strings.TrimSpace(entry.BaseURL))
+		baseURL, err := expandEnv(strings.TrimSpace(entry.BaseURL))
 		if err != nil {
 			return RouterConfig{}, false, fmt.Errorf("router config %s: backends.%s.base_url: %w", path, id, err)
 		}
@@ -655,7 +655,7 @@ func expandHeaders(in map[string]string) (map[string]string, error) {
 		if name == "" {
 			return nil, fmt.Errorf("empty header name")
 		}
-		val, err := ExpandEnv(strings.TrimSpace(v))
+		val, err := expandEnv(strings.TrimSpace(v))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}

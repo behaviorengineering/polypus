@@ -64,7 +64,7 @@ func hasInlineMedia(body json.RawMessage) bool {
 	return false
 }
 
-func (s openRouterSubmitter) Submit(ctx context.Context, job Job, meta *batch.BatchMeta) error {
+func (s openRouterSubmitter) Submit(ctx context.Context, job Job, meta *batch.Meta) error {
 	client, err := s.client()
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeNotReady, "batch.openrouter", "client")
@@ -77,7 +77,7 @@ func (s openRouterSubmitter) Submit(ctx context.Context, job Job, meta *batch.Ba
 	return nil
 }
 
-func (s openRouterSubmitter) Poll(ctx context.Context, meta batch.BatchMeta) (Poll, error) {
+func (s openRouterSubmitter) Poll(ctx context.Context, meta batch.Meta) (Poll, error) {
 	client, err := s.client()
 	if err != nil {
 		return Poll{}, derrors.Wrap(err, derrors.CodeNotReady, "batch.openrouter", "client")
@@ -103,7 +103,7 @@ func (s openRouterSubmitter) Poll(ctx context.Context, meta batch.BatchMeta) (Po
 	}
 }
 
-func (s openRouterSubmitter) Cancel(context.Context, batch.BatchMeta) error {
+func (s openRouterSubmitter) Cancel(context.Context, batch.Meta) error {
 	return derrors.New(derrors.CodeUnimplemented, "batch.openrouter", "openrouter batches cannot be cancelled")
 }
 

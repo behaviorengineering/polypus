@@ -31,7 +31,7 @@ func TestValidateRemoteBackendAllowedWithoutCloudEnv(t *testing.T) {
 		BaseURL: "https://api.cloudflare.com/client/v4/accounts/x/ai/v1",
 		Auth:    config.BackendAuth{BearerEnv: "CF_AI_API_KEY"},
 	}
-	if err := ValidateBackend(b, config.DefaultRouterPolicy()); err != nil {
+	if err := validateBackend(b, config.DefaultRouterPolicy()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -41,7 +41,7 @@ func TestValidateLocalBackendAllowsLANWhenPolicyOff(t *testing.T) {
 		BaseURL: "http://192.168.1.50:8000",
 	}
 	policy := config.RouterPolicy{RejectNonLoopbackBackends: false}
-	if err := ValidateBackend(b, policy); err != nil {
+	if err := validateBackend(b, policy); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -52,7 +52,7 @@ func TestValidateGeminiBackendEmptyURL(t *testing.T) {
 		Extension: config.ExtensionGemini,
 		Auth:      config.BackendAuth{BearerEnv: "GEMINI_API_KEY"},
 	}
-	if err := ValidateBackend(b, config.DefaultRouterPolicy()); err != nil {
+	if err := validateBackend(b, config.DefaultRouterPolicy()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -64,7 +64,7 @@ func TestValidateGeminiBackendGoogleHost(t *testing.T) {
 		BaseURL:   "https://generativelanguage.googleapis.com/v1beta",
 		Auth:      config.BackendAuth{BearerEnv: "GEMINI_API_KEY"},
 	}
-	if err := ValidateBackend(b, config.DefaultRouterPolicy()); err != nil {
+	if err := validateBackend(b, config.DefaultRouterPolicy()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -75,7 +75,7 @@ func TestValidateRemoteRejectsGoogleHostWithoutGeminiExtension(t *testing.T) {
 		BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
 		Auth:    config.BackendAuth{BearerEnv: "GEMINI_API_KEY"},
 	}
-	if err := ValidateBackend(b, config.DefaultRouterPolicy()); err == nil {
+	if err := validateBackend(b, config.DefaultRouterPolicy()); err == nil {
 		t.Fatal("expected blocked google host for generic remote")
 	}
 }

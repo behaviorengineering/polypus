@@ -17,8 +17,8 @@ var defaultAllowedHosts = map[string]struct{}{
 	"host.docker.internal": {},
 }
 
-// ValidateBackend validates a backend definition against router policy.
-func ValidateBackend(b config.BackendDef, policy config.RouterPolicy) error {
+// validateBackend validates a backend definition against router policy.
+func validateBackend(b config.BackendDef, policy config.RouterPolicy) error {
 	if b.IsGeminiExtension() {
 		return validateGeminiBackendURL(b.BaseURL)
 	}

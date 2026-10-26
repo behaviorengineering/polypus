@@ -33,7 +33,7 @@ func (s cloudflareSubmitter) Validate(job Job) error {
 	return nil
 }
 
-func (s cloudflareSubmitter) Submit(ctx context.Context, job Job, meta *batch.BatchMeta) error {
+func (s cloudflareSubmitter) Submit(ctx context.Context, job Job, meta *batch.Meta) error {
 	client, err := s.client()
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeNotReady, "batch.cloudflare", "client")
@@ -47,7 +47,7 @@ func (s cloudflareSubmitter) Submit(ctx context.Context, job Job, meta *batch.Ba
 	return nil
 }
 
-func (s cloudflareSubmitter) Poll(ctx context.Context, meta batch.BatchMeta) (Poll, error) {
+func (s cloudflareSubmitter) Poll(ctx context.Context, meta batch.Meta) (Poll, error) {
 	client, err := s.client()
 	if err != nil {
 		return Poll{}, derrors.Wrap(err, derrors.CodeNotReady, "batch.cloudflare", "client")
@@ -68,7 +68,7 @@ func (s cloudflareSubmitter) Poll(ctx context.Context, meta batch.BatchMeta) (Po
 	}
 }
 
-func (s cloudflareSubmitter) Cancel(context.Context, batch.BatchMeta) error {
+func (s cloudflareSubmitter) Cancel(context.Context, batch.Meta) error {
 	return derrors.New(derrors.CodeUnimplemented, "batch.cloudflare", "workers ai batches cannot be cancelled")
 }
 

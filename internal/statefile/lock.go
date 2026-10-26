@@ -9,14 +9,14 @@ import (
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
-// LockPath returns the lock file path for a state file.
-func LockPath(path string) string {
+// lockPath returns the lock file path for a state file.
+func lockPath(path string) string {
 	return path + ".lock"
 }
 
 // WithFileLock runs fn while holding an exclusive lock on path.lock.
 func WithFileLock(path string, fn func() error) error {
-	lockPath := LockPath(path)
+	lockPath := lockPath(path)
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WithFileLock", "mkdir")
 	}

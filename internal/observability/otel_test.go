@@ -176,7 +176,7 @@ func TestEndSpanRecordsTimeout(t *testing.T) {
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
 	_, span := tp.Tracer("test").Start(context.Background(), "polypus.chat")
-	EndSpan(span, context.DeadlineExceeded)
+	endSpan(span, context.DeadlineExceeded)
 
 	spans := exporter.GetSpans()
 	if len(spans) != 1 {

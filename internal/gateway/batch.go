@@ -208,11 +208,11 @@ func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request,
 }
 
 // batchTerminal reports a batch that no refresh changes.
-func batchTerminal(status batch.BatchStatus) bool {
+func batchTerminal(status batch.Status) bool {
 	switch status {
-	case batch.BatchStatusCompleted, batch.BatchStatusFailed, batch.BatchStatusCancelled, batch.BatchStatusExpired:
+	case batch.StatusCompleted, batch.StatusFailed, batch.StatusCancelled, batch.StatusExpired:
 		return true
-	case batch.BatchStatusValidating, batch.BatchStatusInProgress, batch.BatchStatusCancelling:
+	case batch.StatusValidating, batch.StatusInProgress, batch.StatusCancelling:
 		return false
 	default:
 		return false

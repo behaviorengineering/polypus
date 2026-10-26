@@ -10,15 +10,15 @@ import (
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
-// DefaultConfigDir returns the machine-wide Polypus config directory.
+// defaultConfigDir returns the machine-wide Polypus config directory.
 // Honors XDG_CONFIG_HOME when set; otherwise ~/.config/polypus.
-func DefaultConfigDir() (string, error) {
+func defaultConfigDir() (string, error) {
 	return xdgDir("XDG_CONFIG_HOME", ".config")
 }
 
 // DefaultConfigPath returns ~/.config/polypus/config.yaml (or $XDG_CONFIG_HOME/polypus/config.yaml).
 func DefaultConfigPath() (string, error) {
-	dir, err := DefaultConfigDir()
+	dir, err := defaultConfigDir()
 	if err != nil {
 		return "", err
 	}
@@ -78,8 +78,8 @@ func DefaultStateDir() (string, error) {
 	return filepath.Join(home, ".local", "state", "polypus"), nil
 }
 
-// DefaultBatchDir returns ~/.local/state/polypus/batch (or $XDG_STATE_HOME/polypus/batch).
-func DefaultBatchDir() (string, error) {
+// defaultBatchDir returns ~/.local/state/polypus/batch (or $XDG_STATE_HOME/polypus/batch).
+func defaultBatchDir() (string, error) {
 	dir, err := DefaultStateDir()
 	if err != nil {
 		return "", err
@@ -102,7 +102,7 @@ func resolveBatchDir() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("POLYPUS_BATCH_DIR")); path != "" {
 		return path, nil
 	}
-	return DefaultBatchDir()
+	return defaultBatchDir()
 }
 
 // DefaultProcessComposeSockPath returns the default process-compose Unix socket path.

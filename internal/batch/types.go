@@ -27,33 +27,33 @@ type RequestCounts struct {
 	Failed    int `json:"failed"`
 }
 
-// BatchStatus is the OpenAI batch status string.
-type BatchStatus string
+// Status is the OpenAI batch status string.
+type Status string
 
 const (
-	BatchStatusValidating BatchStatus = "validating"
-	BatchStatusInProgress BatchStatus = "in_progress"
-	BatchStatusCompleted  BatchStatus = "completed"
-	BatchStatusFailed     BatchStatus = "failed"
-	BatchStatusCancelling BatchStatus = "cancelling"
-	BatchStatusCancelled  BatchStatus = "cancelled"
-	BatchStatusExpired    BatchStatus = "expired"
+	StatusValidating Status = "validating"
+	StatusInProgress Status = "in_progress"
+	StatusCompleted  Status = "completed"
+	StatusFailed     Status = "failed"
+	StatusCancelling Status = "cancelling"
+	StatusCancelled  Status = "cancelled"
+	StatusExpired    Status = "expired"
 )
 
-// BatchMeta is persisted batch job state for the OpenAI facade.
-type BatchMeta struct {
-	ID               string      `json:"id"`
-	Object           string      `json:"object"`
-	Endpoint         string      `json:"endpoint"`
-	InputFileID      string      `json:"input_file_id"`
-	OutputFileID     string      `json:"output_file_id,omitempty"`
-	ErrorFileID      string      `json:"error_file_id,omitempty"`
-	CompletionWindow string      `json:"completion_window"`
-	Status           BatchStatus `json:"status"`
-	BackendID        string      `json:"backend_id"`
-	PublicModel      string      `json:"public_model"`
-	CFModel          string      `json:"cf_model"`
-	CFRequestID      string      `json:"cf_request_id"`
+// Meta is persisted batch job state for the OpenAI facade.
+type Meta struct {
+	ID               string `json:"id"`
+	Object           string `json:"object"`
+	Endpoint         string `json:"endpoint"`
+	InputFileID      string `json:"input_file_id"`
+	OutputFileID     string `json:"output_file_id,omitempty"`
+	ErrorFileID      string `json:"error_file_id,omitempty"`
+	CompletionWindow string `json:"completion_window"`
+	Status           Status `json:"status"`
+	BackendID        string `json:"backend_id"`
+	PublicModel      string `json:"public_model"`
+	CFModel          string `json:"cf_model"`
+	CFRequestID      string `json:"cf_request_id"`
 	// UpstreamBatchID is the provider batch id for non-Cloudflare backends (Claude Message Batches).
 	UpstreamBatchID string        `json:"upstream_batch_id,omitempty"`
 	RequestCounts   RequestCounts `json:"request_counts"`
@@ -66,7 +66,7 @@ type BatchMeta struct {
 }
 
 // PublicBatch is the OpenAI Batch object returned on the HTTP API.
-// Keep OpenAI-facing fields in sync with BatchMeta (excluding adapter-only columns).
+// Keep OpenAI-facing fields in sync with Meta (excluding adapter-only columns).
 type PublicBatch struct {
 	ID               string        `json:"id"`
 	Object           string        `json:"object"`
@@ -75,7 +75,7 @@ type PublicBatch struct {
 	OutputFileID     string        `json:"output_file_id,omitempty"`
 	ErrorFileID      string        `json:"error_file_id,omitempty"`
 	CompletionWindow string        `json:"completion_window"`
-	Status           BatchStatus   `json:"status"`
+	Status           Status        `json:"status"`
 	RequestCounts    RequestCounts `json:"request_counts"`
 	CreatedAt        int64         `json:"created_at"`
 	InProgressAt     int64         `json:"in_progress_at,omitempty"`
@@ -86,7 +86,7 @@ type PublicBatch struct {
 }
 
 // Public returns the OpenAI-shaped batch resource without adapter-only fields.
-func (m BatchMeta) Public() PublicBatch {
+func (m Meta) Public() PublicBatch {
 	obj := strings.TrimSpace(m.Object)
 	if obj == "" {
 		obj = "batch"

@@ -94,14 +94,6 @@ func Wrap(cause error, code Code, op, message string) *Error {
 	return &Error{code: code, op: op, message: message, cause: cause}
 }
 
-// NewDomainError is the pack-compatible constructor: code, message, optional cause.
-func NewDomainError(code Code, message string, cause error) *Error {
-	if cause == nil {
-		return New(code, "", message)
-	}
-	return Wrap(cause, code, "", message)
-}
-
 // Code returns the machine-readable class.
 func (e *Error) Code() Code {
 	if e == nil {

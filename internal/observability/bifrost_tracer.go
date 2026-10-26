@@ -93,7 +93,7 @@ func (t *BifrostOTelTracer) StartSpanID(ctx context.Context, name string, kind s
 	return schemaSpan.SpanID, bridge
 }
 
-func (t *BifrostOTelTracer) EndSpan(handle schemas.SpanHandle, status schemas.SpanStatus, statusMsg string) {
+func (t *BifrostOTelTracer) endSpan(handle schemas.SpanHandle, status schemas.SpanStatus, statusMsg string) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil {
 		return

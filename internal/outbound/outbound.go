@@ -22,9 +22,9 @@ var ErrAbort = errors.New("outbound: non-retryable")
 
 // Dependency names for breaker keys.
 const (
-	DepGitHub       = "github"
-	DepGHCR         = "ghcr"
-	DepRegistry     = "registry"
+	depGitHub       = "github"
+	depGHCR         = "ghcr"
+	depRegistry     = "registry"
 	DepHealth       = "health"
 	DepDockerDaemon = "docker-daemon"
 	DepCloudflare   = "cloudflare"
@@ -43,8 +43,8 @@ func Abort(err error) error {
 	return fmt.Errorf("%w: %w", ErrAbort, err)
 }
 
-// HTTPStatusRetryable reports whether an HTTP status should be retried.
-func HTTPStatusRetryable(status int) bool {
+// httpStatusRetryable reports whether an HTTP status should be retried.
+func httpStatusRetryable(status int) bool {
 	if status == http.StatusTooManyRequests {
 		return true
 	}
@@ -65,8 +65,8 @@ func HTTPStatusPermanent(status int) bool {
 	return status >= 400 && status < 500
 }
 
-// TransportRetryable reports whether a transport-level error should be retried.
-func TransportRetryable(err error) bool {
+// transportRetryable reports whether a transport-level error should be retried.
+func transportRetryable(err error) bool {
 	if err == nil || errors.Is(err, ErrAbort) {
 		return false
 	}
@@ -138,7 +138,7 @@ func (p *Policies) orDefault() *Policies {
 
 func (p *Policies) breakerFor(name string) failsafe.Policy[any] {
 	switch depOf(name) {
-	case DepGitHub, DepGHCR, DepRegistry, DepCloudflare, DepGemini, DepAnthropic, DepOpenRouter:
+	case depGitHub, depGHCR, depRegistry, DepCloudflare, DepGemini, DepAnthropic, DepOpenRouter:
 	default:
 		return nil
 	}
@@ -162,7 +162,7 @@ func retryableErr(name string, err error) bool {
 	if err == nil || errors.Is(err, ErrAbort) {
 		return false
 	}
-	if TransportRetryable(err) {
+	if transportRetryable(err) {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
@@ -170,13 +170,13 @@ func retryableErr(name string, err error) bool {
 		return true
 	}
 	switch depOf(name) {
-	case DepRegistry, DepDockerDaemon:
+	case depRegistry, DepDockerDaemon:
 		return strings.Contains(msg, "timeout") ||
 			strings.Contains(msg, "connection") ||
 			strings.Contains(msg, "429") ||
 			strings.Contains(msg, "temporarily") ||
 			strings.Contains(msg, "daemon")
-	case DepGitHub:
+	case depGitHub:
 		return strings.Contains(msg, "github releases: http 429") ||
 			strings.Contains(msg, "github releases: http 5") ||
 			strings.Contains(msg, "github actions: http 429") ||
@@ -184,7 +184,7 @@ func retryableErr(name string, err error) bool {
 			strings.Contains(msg, "github: tag ref http 5") ||
 			strings.Contains(msg, "registry http 429") ||
 			strings.Contains(msg, "registry http 5")
-	case DepGHCR:
+	case depGHCR:
 		return strings.Contains(msg, "registry http 429") ||
 			strings.Contains(msg, "registry http 5")
 	case DepCloudflare:
@@ -293,7 +293,7 @@ func (p *Policies) Do(ctx context.Context, name string, client *http.Client, req
 					resp = r
 					return Abort(fmt.Errorf("http status %d", r.StatusCode))
 				}
-				if HTTPStatusRetryable(r.StatusCode) {
+				if httpStatusRetryable(r.StatusCode) {
 					// Kept until the next attempt closes it, so the caller still gets
 					// the last upstream answer (status, body, Retry-After) when
 					// retries run out.

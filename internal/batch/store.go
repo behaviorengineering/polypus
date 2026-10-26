@@ -206,7 +206,7 @@ func (s *DiskStore) fileReferencedByBatchLocked(fileID string) (bool, error) {
 }
 
 // SaveBatch writes batch metadata.
-func (s *DiskStore) SaveBatch(meta *BatchMeta) error {
+func (s *DiskStore) SaveBatch(meta *Meta) error {
 	if s == nil || meta == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.SaveBatch", "not configured")
 	}
@@ -225,7 +225,7 @@ func (s *DiskStore) SaveBatch(meta *BatchMeta) error {
 }
 
 // UpdateBatch replaces batch metadata.
-func (s *DiskStore) UpdateBatch(meta BatchMeta) error {
+func (s *DiskStore) UpdateBatch(meta Meta) error {
 	if s == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.UpdateBatch", "not configured")
 	}
@@ -237,7 +237,7 @@ func (s *DiskStore) UpdateBatch(meta BatchMeta) error {
 	return s.writeBatchMeta(&meta)
 }
 
-func (s *DiskStore) writeBatchMeta(meta *BatchMeta) error {
+func (s *DiskStore) writeBatchMeta(meta *Meta) error {
 	if _, err := checkID("batch.SaveBatch", meta.ID); err != nil {
 		return err
 	}
@@ -250,13 +250,13 @@ func (s *DiskStore) writeBatchMeta(meta *BatchMeta) error {
 }
 
 // GetBatch loads batch metadata.
-func (s *DiskStore) GetBatch(id string) (BatchMeta, error) {
+func (s *DiskStore) GetBatch(id string) (Meta, error) {
 	if s == nil {
-		return BatchMeta{}, derrors.New(derrors.CodeFailedPrecondition, "batch.GetBatch", "not configured")
+		return Meta{}, derrors.New(derrors.CodeFailedPrecondition, "batch.GetBatch", "not configured")
 	}
 	id, err := checkID("batch.GetBatch", id)
 	if err != nil {
-		return BatchMeta{}, err
+		return Meta{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -264,19 +264,19 @@ func (s *DiskStore) GetBatch(id string) (BatchMeta, error) {
 	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return BatchMeta{}, derrors.New(derrors.CodeNotFound, "batch.GetBatch", "batch not found")
+			return Meta{}, derrors.New(derrors.CodeNotFound, "batch.GetBatch", "batch not found")
 		}
-		return BatchMeta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "read")
+		return Meta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "read")
 	}
-	var meta BatchMeta
+	var meta Meta
 	if err := json.Unmarshal(raw, &meta); err != nil {
-		return BatchMeta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "parse")
+		return Meta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "parse")
 	}
 	return meta, nil
 }
 
 // ListBatches returns all batch metadata (unordered).
-func (s *DiskStore) ListBatches() ([]BatchMeta, error) {
+func (s *DiskStore) ListBatches() ([]Meta, error) {
 	if s == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "batch.ListBatches", "not configured")
 	}
@@ -285,7 +285,7 @@ func (s *DiskStore) ListBatches() ([]BatchMeta, error) {
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "batch.ListBatches", "readdir")
 	}
-	out := make([]BatchMeta, 0, len(entries))
+	out := make([]Meta, 0, len(entries))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range entries {
@@ -303,15 +303,15 @@ func (s *DiskStore) ListBatches() ([]BatchMeta, error) {
 	return out, nil
 }
 
-func (s *DiskStore) readBatchMetaUnlocked(id string) (BatchMeta, error) {
+func (s *DiskStore) readBatchMetaUnlocked(id string) (Meta, error) {
 	metaPath := filepath.Join(s.root, batchMetaDir, id+".json")
 	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
 	if err != nil {
-		return BatchMeta{}, err
+		return Meta{}, err
 	}
-	var meta BatchMeta
+	var meta Meta
 	if err := json.Unmarshal(raw, &meta); err != nil {
-		return BatchMeta{}, err
+		return Meta{}, err
 	}
 	return meta, nil
 }

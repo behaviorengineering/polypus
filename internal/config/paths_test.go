@@ -113,7 +113,7 @@ func TestResolveModelsInventoryCachePathPrefersEnv(t *testing.T) {
 func TestDefaultBatchDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
-	got, err := DefaultBatchDir()
+	got, err := defaultBatchDir()
 	if err != nil {
 		t.Fatal(err)
 	}

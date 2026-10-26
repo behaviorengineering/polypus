@@ -73,11 +73,11 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 		return "", err
 	}
 	switch meta.Status {
-	case batch.BatchStatusCompleted:
+	case batch.StatusCompleted:
 		// continue.
-	case batch.BatchStatusFailed, batch.BatchStatusExpired, batch.BatchStatusCancelled:
+	case batch.StatusFailed, batch.StatusExpired, batch.StatusCancelled:
 		return "", fmt.Errorf("batch terminal status %s", meta.Status)
-	case batch.BatchStatusValidating, batch.BatchStatusInProgress, batch.BatchStatusCancelling:
+	case batch.StatusValidating, batch.StatusInProgress, batch.StatusCancelling:
 		return "", fmt.Errorf("batch not finished: %s", meta.Status)
 	default:
 		return "", fmt.Errorf("unexpected batch status %s", meta.Status)
@@ -172,8 +172,8 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 		return "", &statusError{what: "batches create", status: resp.StatusCode, body: string(raw)}
 	}
 	var parsed struct {
-		ID     string            `json:"id"`
-		Status batch.BatchStatus `json:"status"`
+		ID     string       `json:"id"`
+		Status batch.Status `json:"status"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return "", err
@@ -182,9 +182,9 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 		return "", fmt.Errorf("batches create: empty id")
 	}
 	switch parsed.Status {
-	case batch.BatchStatusValidating, batch.BatchStatusInProgress, batch.BatchStatusCompleted:
+	case batch.StatusValidating, batch.StatusInProgress, batch.StatusCompleted:
 		return parsed.ID, nil
-	case batch.BatchStatusFailed, batch.BatchStatusExpired, batch.BatchStatusCancelling, batch.BatchStatusCancelled:
+	case batch.StatusFailed, batch.StatusExpired, batch.StatusCancelling, batch.StatusCancelled:
 		return "", fmt.Errorf("batches create terminal status %s", parsed.Status)
 	default:
 		return "", fmt.Errorf("batches create unexpected status %s", parsed.Status)
@@ -192,9 +192,9 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 }
 
 type batchMetaSmoke struct {
-	ID           string            `json:"id"`
-	Status       batch.BatchStatus `json:"status"`
-	OutputFileID string            `json:"output_file_id"`
+	ID           string       `json:"id"`
+	Status       batch.Status `json:"status"`
+	OutputFileID string       `json:"output_file_id"`
 }
 
 func pollBatchTerminal(ctx context.Context, baseURL, batchID string) (batchMetaSmoke, error) {
@@ -209,9 +209,9 @@ func pollBatchTerminal(ctx context.Context, baseURL, batchID string) (batchMetaS
 		}
 		last = meta
 		switch meta.Status {
-		case batch.BatchStatusCompleted, batch.BatchStatusFailed, batch.BatchStatusExpired, batch.BatchStatusCancelled:
+		case batch.StatusCompleted, batch.StatusFailed, batch.StatusExpired, batch.StatusCancelled:
 			return meta, nil
-		case batch.BatchStatusValidating, batch.BatchStatusInProgress, batch.BatchStatusCancelling:
+		case batch.StatusValidating, batch.StatusInProgress, batch.StatusCancelling:
 			// keep polling.
 		default:
 			return meta, fmt.Errorf("batch poll unexpected status %s", meta.Status)

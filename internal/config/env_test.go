@@ -9,7 +9,7 @@ import (
 func TestExpandEnv(t *testing.T) {
 	for _, val := range []string{"acct-test", "acct-test\n"} {
 		t.Setenv("CF_ACCOUNT_ID", val)
-		got, err := ExpandEnv("https://example.com/accounts/${CF_ACCOUNT_ID}/ai/v1")
+		got, err := expandEnv("https://example.com/accounts/${CF_ACCOUNT_ID}/ai/v1")
 		want := "https://example.com/accounts/acct-test/ai/v1"
 		if err != nil || got != want {
 			t.Fatalf("value %q: got %q err %v, want %q", val, got, err, want)
@@ -19,7 +19,7 @@ func TestExpandEnv(t *testing.T) {
 
 func TestExpandEnvFailsOnUnsetVariable(t *testing.T) {
 	t.Setenv("POLYPUS_TEST_UNSET_ACCT", "")
-	if got, err := ExpandEnv("https://example.com/accounts/${POLYPUS_TEST_UNSET_ACCT}/ai/v1"); err == nil {
+	if got, err := expandEnv("https://example.com/accounts/${POLYPUS_TEST_UNSET_ACCT}/ai/v1"); err == nil {
 		t.Fatalf("an unset placeholder must fail, got %q", got)
 	}
 }

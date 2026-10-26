@@ -13,8 +13,8 @@ func TestTryFinalizeBatchConcurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := &BatchMeta{
-		Status:      BatchStatusInProgress,
+	meta := &Meta{
+		Status:      StatusInProgress,
 		InputFileID: "file-in",
 		Endpoint:    EndpointChatCompletions,
 	}
@@ -24,7 +24,7 @@ func TestTryFinalizeBatchConcurrent(t *testing.T) {
 	patch := FinalizePatch{
 		OkJSONL:       []byte(`{"custom_id":"a"}` + "\n"),
 		RequestCounts: RequestCounts{Total: 1, Completed: 1},
-		Status:        BatchStatusCompleted,
+		Status:        StatusCompleted,
 		CompletedAt:   fixed.Unix(),
 	}
 	var wg sync.WaitGroup
@@ -55,7 +55,7 @@ func TestTryFinalizeBatchConcurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if final.Status != BatchStatusCompleted || final.OutputFileID == "" {
+	if final.Status != StatusCompleted || final.OutputFileID == "" {
 		t.Fatalf("final: %+v", final)
 	}
 }

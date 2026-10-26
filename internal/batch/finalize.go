@@ -13,36 +13,36 @@ type FinalizePatch struct {
 	OkJSONL       []byte
 	ErrJSONL      []byte
 	RequestCounts RequestCounts
-	Status        BatchStatus
+	Status        Status
 	CompletedAt   int64
 	FailedAt      int64
 	CancelledAt   int64
 }
 
-func isTerminalBatchStatus(st BatchStatus) bool {
+func isTerminalBatchStatus(st Status) bool {
 	switch st {
-	case BatchStatusCompleted, BatchStatusFailed, BatchStatusCancelled, BatchStatusExpired:
+	case StatusCompleted, StatusFailed, StatusCancelled, StatusExpired:
 		return true
-	case BatchStatusValidating, BatchStatusInProgress, BatchStatusCancelling:
+	case StatusValidating, StatusInProgress, StatusCancelling:
 		return false
 	default:
 		return false
 	}
 }
 
-func statusAllowsFinalize(st BatchStatus) bool {
-	return st == BatchStatusValidating || st == BatchStatusInProgress || st == BatchStatusCancelling
+func statusAllowsFinalize(st Status) bool {
+	return st == StatusValidating || st == StatusInProgress || st == StatusCancelling
 }
 
 // TryFinalizeBatch atomically writes output files and terminal metadata when the batch is still open.
 // Returns applied=false when another caller already finalized or the batch is terminal/cancelled.
-func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (BatchMeta, bool, error) {
+func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (Meta, bool, error) {
 	if s == nil {
-		return BatchMeta{}, false, derrors.New(derrors.CodeFailedPrecondition, "batch.TryFinalizeBatch", "not configured")
+		return Meta{}, false, derrors.New(derrors.CodeFailedPrecondition, "batch.TryFinalizeBatch", "not configured")
 	}
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return BatchMeta{}, false, derrors.New(derrors.CodeInvalid, "batch.TryFinalizeBatch", "id required")
+		return Meta{}, false, derrors.New(derrors.CodeInvalid, "batch.TryFinalizeBatch", "id required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -50,9 +50,9 @@ func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (BatchMeta,
 	meta, err := s.readBatchMetaUnlocked(id)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return BatchMeta{}, false, derrors.New(derrors.CodeNotFound, "batch.TryFinalizeBatch", "batch not found")
+			return Meta{}, false, derrors.New(derrors.CodeNotFound, "batch.TryFinalizeBatch", "batch not found")
 		}
-		return BatchMeta{}, false, derrors.Wrap(err, derrors.CodeInternal, "batch.TryFinalizeBatch", "read")
+		return Meta{}, false, derrors.Wrap(err, derrors.CodeInternal, "batch.TryFinalizeBatch", "read")
 	}
 	if isTerminalBatchStatus(meta.Status) {
 		return meta, false, nil
