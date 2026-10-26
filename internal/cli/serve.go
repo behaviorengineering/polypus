@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/internal/gateway"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/pkg/polypus"
 )
@@ -56,7 +55,7 @@ func runServeWithOpts(host string, port int, backend string) int {
 			logger.Warn("otel shutdown", "err", err)
 		}
 	}()
-	if err := polypus.Serve(opts, gateway.WithLogger(logger)); err != nil {
+	if err := polypus.Serve(opts, polypus.WithLogger(logger)); err != nil {
 		fmt.Fprintf(os.Stderr, "polypus serve: %v\n", err)
 		return 1
 	}

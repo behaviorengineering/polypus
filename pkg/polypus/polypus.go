@@ -6,6 +6,7 @@ package polypus
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -15,6 +16,18 @@ import (
 
 // ServeOptions is the gateway listen configuration.
 type ServeOptions = config.ServeOptions
+
+// HandlerOption configures Serve and NewHandler. Build one with the With* functions
+// below.
+type HandlerOption = gateway.HandlerOption
+
+// WithLogger sets the logger the gateway writes warnings and request failures to
+// (slog.Default otherwise). Panics if l is nil.
+func WithLogger(l *slog.Logger) HandlerOption { return gateway.WithLogger(l) }
+
+// WithAdminStateDir keeps the models allow overlay and the admin key store under dir
+// instead of the XDG state directory. Panics if dir is empty.
+func WithAdminStateDir(dir string) HandlerOption { return gateway.WithAdminStateDir(dir) }
 
 // SmokeOptions configures multi-channel L1 smoke against a running gateway.
 type SmokeOptions = smoke.Options
@@ -38,17 +51,17 @@ func LoadServeOptions() (ServeOptions, error) {
 }
 
 // Serve starts the Polypus gateway (blocks until the server exits).
-func Serve(opts ServeOptions, options ...gateway.HandlerOption) error {
+func Serve(opts ServeOptions, options ...HandlerOption) error {
 	return gateway.ListenAndServe(opts, options...)
 }
 
 // ListenAndServe is an alias for Serve.
-func ListenAndServe(opts ServeOptions, options ...gateway.HandlerOption) error {
+func ListenAndServe(opts ServeOptions, options ...HandlerOption) error {
 	return Serve(opts, options...)
 }
 
 // NewHandler builds the public HTTP handler without listening.
-func NewHandler(opts ServeOptions, options ...gateway.HandlerOption) (http.Handler, error) {
+func NewHandler(opts ServeOptions, options ...HandlerOption) (http.Handler, error) {
 	return gateway.NewHandler(opts, options...)
 }
 

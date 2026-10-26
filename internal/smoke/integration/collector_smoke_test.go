@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/behaviorengineering/polypus/pkg/smoke/otelcol"
+	"github.com/behaviorengineering/polypus/internal/smoke/otelcol"
 )
 
 func TestSmokeOtelFanout(t *testing.T) {
