@@ -12,8 +12,14 @@ OpenAI-compatible gateway and switchyard sidecar.
 
 4. **Consumers:** pin `ghcr.io/ORG/polypus:X.Y.Z` or `X.Y.Z-rN` in `images.env` after publish-complete (full Auto patch verify for plain tags; Docker release success for `-rN`).
 
+5. **Platforms:** both images are built for `linux/amd64` and `linux/arm64` from `docker-bake.hcl` in one bake. Switchyard builds natively on an arm64 runner. A packaging rebuild of a tag released before arm64 builds stays `linux/amd64`.
+
 Manual packaging rebuild:
 
 ```bash
 gh workflow run packaging-rebuild.yml -f tag=v0.2.40 -f image_revision=1
 ```
+
+## Licence
+
+Apache 2.0, see [LICENSE](LICENSE). The Switchyard image also carries NVIDIA's Switchyard licence and notice under `/usr/share/doc/polypus-switchyard/`.

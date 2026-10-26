@@ -146,31 +146,48 @@ jobs:
           echo "gateway_base=debian:bookworm-slim" >> "$GITHUB_OUTPUT"
           echo "switchyard_base=debian:trixie-slim" >> "$GITHUB_OUTPUT"
 
+      # amd64 is required. arm64 is built when the release has both arm64 archives; tags
+      # released before arm64 builds have none, so a packaging rebuild of them stays amd64.
       - name: Download release binaries
+        id: bins
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VER: ${{ steps.release.outputs.app_version }}
           TAG: ${{ steps.release.outputs.app_ref }}
         run: |
           set -euo pipefail
-          mkdir -p docker-bin release-assets
-          gh release download "$TAG" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "polypus_${VER}_linux_amd64.tar.gz" \
-            --pattern "polypus-switchyard_${VER}_linux_amd64.tar.gz" \
-            --dir release-assets
-          gw=(release-assets/polypus_"${VER}"_linux_amd64.tar.gz)
-          sy=(release-assets/polypus-switchyard_"${VER}"_linux_amd64.tar.gz)
-          if [ "${#gw[@]}" -ne 1 ] || [ "${#sy[@]}" -ne 1 ]; then
-            echo "expected exactly one gateway and one switchyard archive" >&2
-            ls -la release-assets >&2 || true
-            exit 1
-          fi
-          tar -xzf "${gw[0]}" -C docker-bin polypus
-          tar -xzf "${sy[0]}" -C docker-bin switchyard-server
-          chmod +x docker-bin/polypus docker-bin/switchyard-server
-          test -x docker-bin/polypus
-          test -x docker-bin/switchyard-server
+          mkdir -p release-assets
+          assets="$(gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+          platforms=""
+          for arch in amd64 arm64; do
+            gw="polypus_${VER}_linux_${arch}.tar.gz"
+            sy="polypus-switchyard_${VER}_linux_${arch}.tar.gz"
+            has_gw=false
+            has_sy=false
+            if grep -qxF "$gw" <<<"$assets"; then has_gw=true; fi
+            if grep -qxF "$sy" <<<"$assets"; then has_sy=true; fi
+            if [[ "$arch" != "amd64" && "$has_gw" == "false" && "$has_sy" == "false" ]]; then
+              echo "no linux/${arch} archives on ${TAG}; building without linux/${arch}"
+              continue
+            fi
+            if [[ "$has_gw" == "false" || "$has_sy" == "false" ]]; then
+              echo "expected both ${gw} and ${sy} on ${TAG}" >&2
+              printf '%s\n' "$assets" >&2
+              exit 1
+            fi
+            gh release download "$TAG" --repo "${GITHUB_REPOSITORY}" \
+              --pattern "$gw" --pattern "$sy" --dir release-assets
+            mkdir -p "docker-bin/${arch}"
+            tar -xzf "release-assets/${gw}" -C "docker-bin/${arch}" polypus
+            tar -xzf "release-assets/${sy}" -C "docker-bin/${arch}" switchyard-server
+            chmod +x "docker-bin/${arch}/polypus" "docker-bin/${arch}/switchyard-server"
+            platforms="${platforms:+${platforms},}linux/${arch}"
+          done
+          echo "platforms=${platforms}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - uses: docker/login-action@v3
         with:
@@ -221,49 +238,32 @@ jobs:
           gw="${{ steps.meta.outputs.image }}:${IMAGE_TAG}"
           sy="${{ steps.meta.outputs.switchyard_image }}:${IMAGE_TAG}"
           if [[ "${MOVE_LATEST}" == "true" ]]; then
-            gw="${gw}"$'\n'"${{ steps.meta.outputs.image }}:latest"
-            sy="${sy}"$'\n'"${{ steps.meta.outputs.switchyard_image }}:latest"
+            gw="${gw},${{ steps.meta.outputs.image }}:latest"
+            sy="${sy},${{ steps.meta.outputs.switchyard_image }}:latest"
           fi
-          {
-            echo "gateway<<EOF"
-            echo "${gw}"
-            echo "EOF"
-            echo "switchyard<<EOF"
-            echo "${sy}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          echo "gateway=${gw}" >> "$GITHUB_OUTPUT"
+          echo "switchyard=${sy}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push polypus gateway
-        uses: docker/build-push-action@v6
+      # docker-bake.hcl defines both images; these env vars fill its variables.
+      # source: . builds from the checkout, because docker-bin/ is not in git.
+      - name: Build and push gateway and switchyard
+        uses: docker/bake-action@5be5f02ff8819ecd3092ea6b2e6261c31774f2b4 # v6.10.0
+        env:
+          PLATFORMS: ${{ steps.bins.outputs.platforms }}
+          GATEWAY_TAGS: ${{ steps.tags.outputs.gateway }}
+          SWITCHYARD_TAGS: ${{ steps.tags.outputs.switchyard }}
+          APP_VERSION: ${{ steps.release.outputs.app_version }}
+          GIT_REVISION: ${{ steps.oci.outputs.git_revision }}
+          BUILD_CREATED: ${{ steps.oci.outputs.build_created }}
+          REBUILD_REVISION: ${{ steps.release.outputs.rebuild_label }}
+          GATEWAY_BASE: ${{ steps.meta.outputs.gateway_base }}
+          GATEWAY_BASE_DIGEST: ${{ steps.base_digest.outputs.gateway }}
+          SWITCHYARD_BASE: ${{ steps.meta.outputs.switchyard_base }}
+          SWITCHYARD_BASE_DIGEST: ${{ steps.base_digest.outputs.switchyard }}
         with:
-          context: .
-          file: ./Dockerfile
+          source: .
+          files: docker-bake.hcl
           push: true
-          platforms: linux/amd64
-          tags: ${{ steps.tags.outputs.gateway }}
-          build-args: |
-            APP_VERSION=${{ steps.release.outputs.app_version }}
-            GIT_REVISION=${{ steps.oci.outputs.git_revision }}
-            BUILD_CREATED=${{ steps.oci.outputs.build_created }}
-            REBUILD_REVISION=${{ steps.release.outputs.rebuild_label }}
-            BASE_IMAGE=${{ steps.meta.outputs.gateway_base }}
-            BASE_DIGEST=${{ steps.base_digest.outputs.gateway }}
-
-      - name: Build and push switchyard
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.switchyard
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.tags.outputs.switchyard }}
-          build-args: |
-            APP_VERSION=${{ steps.release.outputs.app_version }}
-            GIT_REVISION=${{ steps.oci.outputs.git_revision }}
-            BUILD_CREATED=${{ steps.oci.outputs.build_created }}
-            REBUILD_REVISION=${{ steps.release.outputs.rebuild_label }}
-            BASE_IMAGE=${{ steps.meta.outputs.switchyard_base }}
-            BASE_DIGEST=${{ steps.base_digest.outputs.switchyard }}
 
       - name: Publish-ready image smoke (pull, binary load, /health)
         run: |
@@ -273,11 +273,29 @@ jobs:
             "${{ steps.meta.outputs.image }}:${{ steps.release.outputs.image_tag }}" \
             "${{ steps.meta.outputs.switchyard_image }}:${{ steps.release.outputs.image_tag }}"
 
-      - name: Verify GHCR manifests
+      - name: Verify GHCR manifests, platforms and licence label
+        env:
+          PLATFORMS: ${{ steps.bins.outputs.platforms }}
+          IMAGE_TAG: ${{ steps.release.outputs.image_tag }}
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect "${{ steps.meta.outputs.image }}:${{ steps.release.outputs.image_tag }}"
-          docker buildx imagetools inspect "${{ steps.meta.outputs.switchyard_image }}:${{ steps.release.outputs.image_tag }}"
+          for img in "${{ steps.meta.outputs.image }}" "${{ steps.meta.outputs.switchyard_image }}"; do
+            ref="${img}:${IMAGE_TAG}"
+            manifest="$(docker buildx imagetools inspect "$ref")"
+            printf '%s\n' "$manifest"
+            for p in ${PLATFORMS//,/ }; do
+              if ! grep -qE "Platform:[[:space:]]+${p}\$" <<<"$manifest"; then
+                echo "${ref} is missing platform ${p}" >&2
+                exit 1
+              fi
+            done
+            docker pull -q "$ref" >/dev/null
+            lic="$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.licenses"}}' "$ref")"
+            if [[ "$lic" != "Apache-2.0" ]]; then
+              echo "expected org.opencontainers.image.licenses=Apache-2.0 on ${ref}, got ${lic}" >&2
+              exit 1
+            fi
+          done
 
       - name: Assert OCI labels (gateway)
         env:

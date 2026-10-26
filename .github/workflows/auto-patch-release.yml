@@ -31,10 +31,16 @@ permissions:
   issues: write
 
 jobs:
+  # Release only from a green push to this repo's main. The branches filter on
+  # workflow_run matches by name, so a fork PR from a branch called main would
+  # otherwise get its head_sha tagged and released.
   gate:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,16 +103,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: dtolnay/rust-toolchain@master
-        if: steps.decide.outputs.skip != 'true'
-        with:
-          toolchain: 1.96.1
-
-      - uses: Swatinem/rust-cache@v2
-        if: steps.decide.outputs.skip != 'true'
-        with:
-          workspaces: providers/switchyard
-
       - name: Create and push tag
         if: steps.decide.outputs.skip != 'true'
         env:
@@ -127,10 +123,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and upload switchyard linux/amd64 archive
-        if: steps.decide.outputs.skip != 'true'
+  # Switchyard builds natively per arch: arm64 hosted runners are free for public repos.
+  switchyard:
+    needs: release
+    if: needs.release.outputs.skip != 'true'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ needs.release.outputs.new_tag }}
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: providers/switchyard
+          key: ${{ matrix.arch }}
+
+      - name: Build and upload switchyard linux/${{ matrix.arch }} archive
         env:
-          NEW_TAG: ${{ steps.decide.outputs.new_tag }}
+          NEW_TAG: ${{ needs.release.outputs.new_tag }}
+          ARCH: ${{ matrix.arch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -138,13 +161,13 @@ jobs:
           cargo build --release -p switchyard-server --manifest-path providers/switchyard/Cargo.toml
           mkdir -p dist
           cp providers/switchyard/target/release/switchyard-server "dist/switchyard-server"
-          ARCHIVE="dist/polypus-switchyard_${VER}_linux_amd64.tar.gz"
+          ARCHIVE="dist/polypus-switchyard_${VER}_linux_${ARCH}.tar.gz"
           tar -czf "$ARCHIVE" -C dist switchyard-server
-          sha256sum "$ARCHIVE" | tee "dist/polypus-switchyard_${VER}_linux_amd64.sha256"
-          gh release upload "${NEW_TAG}" "$ARCHIVE" "dist/polypus-switchyard_${VER}_linux_amd64.sha256" --clobber
+          sha256sum "$ARCHIVE" | tee "dist/polypus-switchyard_${VER}_linux_${ARCH}.sha256"
+          gh release upload "${NEW_TAG}" "$ARCHIVE" "dist/polypus-switchyard_${VER}_linux_${ARCH}.sha256" --clobber
 
   docker:
-    needs: release
+    needs: [release, switchyard]
     if: needs.release.outputs.skip != 'true'
     uses: ./.github/workflows/docker-release.yml
     with:
@@ -173,11 +196,19 @@ jobs:
           VER="${NEW_TAG#v}"
           GW="ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus:${VER}"
           SY="ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus-switchyard:${VER}"
-          docker buildx imagetools inspect "$GW"
-          docker buildx imagetools inspect "$SY"
+          for ref in "$GW" "$SY"; do
+            manifest="$(docker buildx imagetools inspect "$ref")"
+            printf '%s\n' "$manifest"
+            for p in linux/amd64 linux/arm64; do
+              if ! grep -qE "Platform:[[:space:]]+${p}\$" <<<"$manifest"; then
+                echo "${ref} is missing platform ${p}" >&2
+                exit 1
+              fi
+            done
+          done
 
   ci-failure:
-    needs: [gate, release, docker, verify]
+    needs: [gate, release, switchyard, docker, verify]
     if: >-
       always() &&
       (
@@ -186,6 +217,7 @@ jobs:
           needs.release.outputs.skip != 'true' &&
           (
             needs.release.result == 'failure' ||
+            needs.switchyard.result == 'failure' ||
             needs.docker.result == 'failure' ||
             needs.verify.result == 'failure'
           )

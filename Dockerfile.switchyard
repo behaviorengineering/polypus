@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1
-# Runtime image: COPY pre-built linux/amd64 switchyard-server from GitHub Release assets.
+# Runtime image: COPY the pre-built switchyard-server for TARGETARCH (amd64 or arm64) from
+# GitHub Release assets, unpacked under docker-bin/<arch>/.
 
-# switchyard-server is built on ubuntu-latest (glibc 2.38+); bookworm is too old.
+# switchyard-server is built on Ubuntu 24.04 runners (glibc 2.39); bookworm is too old.
 FROM debian:trixie-slim
 
+ARG TARGETARCH
 ARG APP_VERSION=
 ARG GIT_REVISION=
 ARG BUILD_CREATED=
@@ -20,6 +22,7 @@ LABEL org.opencontainers.image.title="polypus-switchyard" \
       org.opencontainers.image.revision="${GIT_REVISION}" \
       org.opencontainers.image.created="${BUILD_CREATED}" \
       org.opencontainers.image.vendor="behaviorengineering" \
+      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.base.name="${BASE_IMAGE}" \
       org.opencontainers.image.base.digest="${BASE_DIGEST}" \
       com.behaviorengineering.image.rebuild-revision="${REBUILD_REVISION}"
@@ -28,7 +31,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY docker-bin/switchyard-server /usr/local/bin/switchyard-server
+COPY docker-bin/${TARGETARCH}/switchyard-server /usr/local/bin/switchyard-server
+# Switchyard is NVIDIA's (Apache 2.0); its licence and notice ship with the binary.
+COPY providers/switchyard/LICENSE providers/switchyard/NOTICE /usr/share/doc/polypus-switchyard/
 COPY scripts/docker-switchyard-entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/switchyard-server
 
