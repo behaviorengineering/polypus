@@ -1,32 +1,42 @@
-# Gateway YAML for a polypus deploy environment (cf_local + Switchyard). polypus deploy init
+# The Digizoo default gateway YAML for a polypus deploy environment. polypus deploy init
 # writes it beside the environment's config.yaml; edit it there.
-# Credentials: polypus deploy injects CF_AI_API_KEY and CF_ACCOUNT_ID through the compose
-# environment, from the OS keyring. Do NOT add a secrets: block here; the gateway container
-# has no host OS keyring. A Mac or Windows host running polypus serve directly uses
-# ~/.config/polypus/config.yaml with secrets: and polypus secret set instead.
-# Add routers: from your live operator config when using composed models.
+#
+# It runs on OpenRouter alone, with the work OpenRouter key: polypus deploy injects
+# OPENROUTER_API_KEY through the compose environment, from the environment's keyring
+# service (polypus-<identifier>). Do NOT add a secrets: block here; the gateway container
+# has no host OS keyring.
+#
+# Claude direct on the Team plan's credits (claude_team) is below, commented out. A backend
+# in this file makes its key required on every deploy, so turn it on only once you have a
+# Console key: see "Turning Claude on" under backends.
 
 processes:
   mlx: false
 
-tts_backend:
-  enabled: true
-  default: cf_local
-stt_backend:
-  enabled: true
-  default: cf_local
-proxy_backend:
-  enabled: true
-  default: cf_local
 chat_backend:
   enabled: true
-  default: cf_local
+  default: openrouter
 vision_backend:
   enabled: true
-  default: cf_local
+  default: openrouter
+embed_backend:
+  enabled: true
+  default: openrouter
+# No proxy_backend: it serves voice listings (/v1/audio/voices), which OpenRouter does not.
+tts_backend:
+  enabled: true
+  default: openrouter
+stt_backend:
+  enabled: true
+  default: openrouter
 systemone_backend:
   enabled: true
-  default: cf_local
+  default: openrouter
+# /v1/batches on OpenRouter's Batch API: only models with a :batch variant on OpenRouter
+# accept batches (both chat models below do; openai/gpt-oss-20b is the cheapest).
+batch_backend:
+  enabled: true
+  default: openrouter
 
 timeouts:
   min: 5s
@@ -36,33 +46,59 @@ timeouts:
   vision: 300s
   embed: 60s
   speech: 180s
-  backends:
-    cf_local:
-      chat: 60s
 
 switchyard:
   base_url: http://switchyard:4000
   config_path: /var/lib/polypus/switchyard/routes.toml
 
 backends:
-  cf_local:
+  openrouter:
     remote: true
-    extension: cloudflare
-    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
+    base_url: https://openrouter.ai/api/v1
     auth:
-      bearer_env: CF_AI_API_KEY
-    capabilities: [chat, vision, tts, stt, voices, systemone]
+      bearer_env: OPENROUTER_API_KEY
+    capabilities: [chat, vision, embed, tts, stt, systemone, batch]
     models:
       sync: true
       allow:
-        - "@cf/zai-org/glm-4.7-flash"
-        - "@cf/ibm-granite/granite-4.0-h-micro"
-        - "@cf/google/gemma-4-26b-a4b-it"
-        - "@cf/openai/gpt-oss-20b"
-        - "@cf/deepgram/aura-2-en"
-        - "@cf/deepgram/nova-3"
-        - "typesafe/jev"
+        - anthropic/claude-sonnet-5.5
+        - anthropic/claude-haiku-5.5
+        - google/gemini-2.5-flash
+        - openai/gpt-oss-20b
+        - baai/bge-m3
+        - hexgrad/kokoro-82m
+        - fish-audio/transcribe-1-pro
+      systemone_allow:
+        - perplexity/pplx-decider-v1.2
 
-# routers:
-#   investigator:
-#     ...
+  # Turning Claude on, once you have a Console key from the Team plan's organisation:
+  #   1. Store ANTHROPIC_API_KEY in the keyring service polypus-<identifier>, or set it
+  #      in the environment of the deploy.
+  #   2. Uncomment claude_team below.
+  #   3. Set batch_backend.default to claude_team, and add batch to its capabilities.
+  #   4. Swap router/turno to the fallback route at the end of this file.
+  # claude_team:
+  #   remote: true
+  #   extension: anthropic
+  #   auth:
+  #     bearer_env: ANTHROPIC_API_KEY
+  #   capabilities: [chat, vision]
+  #   models:
+  #     sync: true
+  #     allow:
+  #       - claude-sonnet-5-5
+  #       - claude-haiku-5-5
+
+# Named routers (public model ids: router/<name>). turno-acp calls router/turno.
+routers:
+  turno:
+    capability: chat
+    route:
+      type: passthrough
+      target: openrouter/anthropic/claude-sonnet-5.5
+      # With claude_team on, Claude first and the same model on OpenRouter when Claude
+      # is unavailable (5xx, timeout, out of credit or overloaded):
+      # type: fallback
+      # targets:
+      #   - claude_team/claude-sonnet-5-5
+      #   - openrouter/anthropic/claude-sonnet-5.5
