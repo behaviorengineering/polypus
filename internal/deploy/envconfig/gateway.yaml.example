@@ -1,8 +1,9 @@
-# Windows / Docker Compose deploy (cf_local + Switchyard). Copy to config/config.yaml on the host.
-# Credentials: inject CF_AI_API_KEY and CF_ACCOUNT_ID via compose environment (SOPS/export-env on the
-# runner). Do NOT add a secrets: block here; the gateway container has no host OS keyring.
-# On a Mac/Windows host running polypus serve directly, use ~/.config/polypus/config.yaml with
-# secrets: and polypus secret set instead.
+# Gateway YAML for a polypus deploy environment (cf_local + Switchyard). polypus deploy init
+# writes it beside the environment's config.yaml; edit it there.
+# Credentials: polypus deploy injects CF_AI_API_KEY and CF_ACCOUNT_ID through the compose
+# environment, from the OS keyring. Do NOT add a secrets: block here; the gateway container
+# has no host OS keyring. A Mac or Windows host running polypus serve directly uses
+# ~/.config/polypus/config.yaml with secrets: and polypus secret set instead.
 # Add routers: from your live operator config when using composed models.
 
 processes:

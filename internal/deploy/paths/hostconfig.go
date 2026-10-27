@@ -10,11 +10,11 @@ import (
 
 // ResolveGatewayConfig returns the absolute host path of the gateway YAML to
 // bind-mount as the Polypus config. The path is required: the environment that
-// is deployed owns its gateway YAML, not this repository.
+// is deployed names its gateway YAML, not this repository.
 func ResolveGatewayConfig(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return "", fmt.Errorf("paths: gateway config required (--gateway-config)")
+		return "", fmt.Errorf("paths: gateway config required (gateway: in the environment config)")
 	}
 	dest, err := filepath.Abs(path)
 	if err != nil {
