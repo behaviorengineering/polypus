@@ -19,7 +19,7 @@ OTELCOL_IMAGE=otel/opentelemetry-collector-contrib:0.120.0
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Verify(path); err != nil {
+	if err := Verify(path, Services{Routers: true, Observability: true}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -37,7 +37,7 @@ OTELCOL_IMAGE=otel/opentelemetry-collector-contrib:0.120.0
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Verify(path); err == nil {
+	if err := Verify(path, Services{Routers: true, Observability: true}); err == nil {
 		t.Fatal("expected error for :latest")
 	}
 }

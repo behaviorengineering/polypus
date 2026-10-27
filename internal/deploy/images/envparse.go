@@ -6,9 +6,6 @@ import (
 	"strings"
 )
 
-// ghcrProbeKeys are the only images.env entries checked against GHCR.
-var ghcrProbeKeys = []string{polypusImageKey, switchyardImageKey}
-
 func readEnvFile(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // G304: the operator's own images file
 	if err != nil {
@@ -29,13 +26,13 @@ func readEnvFile(path string) (map[string]string, error) {
 	return found, nil
 }
 
-func probeRefsFromEnv(path string) ([]string, error) {
+func probeRefsFromEnv(path string, keys []string) ([]string, error) {
 	found, err := readEnvFile(path)
 	if err != nil {
 		return nil, err
 	}
 	var refs []string
-	for _, key := range ghcrProbeKeys {
+	for _, key := range keys {
 		val, ok := found[key]
 		if !ok || val == "" {
 			return nil, fmt.Errorf("images: missing %s in %s", key, path)
@@ -47,7 +44,7 @@ func probeRefsFromEnv(path string) ([]string, error) {
 
 // PolypusVersionFromEnv returns the semver tag from POLYPUS_IMAGE in images.env.
 func PolypusVersionFromEnv(path string) (string, error) {
-	refs, err := probeRefsFromEnv(path)
+	refs, err := probeRefsFromEnv(path, []string{polypusImageKey})
 	if err != nil {
 		return "", err
 	}

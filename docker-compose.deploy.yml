@@ -2,6 +2,8 @@
 # Secrets: .env.deploy from polypus deploy export-env.
 # Containers and volumes are named by the compose project, polypus-<identifier>, so two
 # environments run side by side on one host.
+# Profiles: routers runs Switchyard; observability runs the OTLP collector, Phoenix and HyperDX.
+# polypus deploy picks them from the gateway YAML and the environment's observability switch.
 # Usage: docker compose -f docker-compose.deploy.yml -p polypus-<identifier> --env-file .env.images --env-file .env.deploy up -d
 
 services:
@@ -25,7 +27,9 @@ services:
       DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_API_KEY_FREE: ${GEMINI_API_KEY_FREE:-}
-      POLYPUS_OTLP_ENDPOINT: ${POLYPUS_OTLP_ENDPOINT:-http://otelcol:4317}
+      # Empty when observability is off: traces stay local (failure dumps still written).
+      POLYPUS_OTLP_ENDPOINT: ${POLYPUS_DEPLOY_OTLP_ENDPOINT?run through polypus deploy}
+      POLYPUS_PHOENIX: "false"
       POLYPUS_FAILURE_DUMP_DIR: /var/lib/polypus/inference-failures
       POLYPUS_MODELS_ALLOW_OVERLAY: /var/lib/polypus/state/models-allow-overlay.yaml
       POLYPUS_ADMIN_KEYS: /var/lib/polypus/state/admin-api-keys.json
@@ -40,13 +44,6 @@ services:
       timeout: 3s
       retries: 12
       start_period: 45s
-    depends_on:
-      phoenix:
-        condition: service_started
-      hyperdx:
-        condition: service_started
-      otelcol:
-        condition: service_started
 
   switchyard:
     profiles: ["routers"]
@@ -56,7 +53,7 @@ services:
       SWITCHYARD_CONFIG: /var/lib/polypus/switchyard/routes.toml
       SWITCHYARD_HOST: "0.0.0.0"
       SWITCHYARD_PORT: "4000"
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${POLYPUS_OTLP_ENDPOINT:-http://otelcol:4317}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${POLYPUS_DEPLOY_OTLP_ENDPOINT?run through polypus deploy}
       OTEL_SERVICE_NAME: switchyard-server
       SWITCHYARD_FAILURE_DUMP_DIR: /var/lib/switchyard/inference-failures
     volumes:
@@ -73,6 +70,7 @@ services:
         condition: service_healthy
 
   phoenix:
+    profiles: ["observability"]
     image: ${PHOENIX_IMAGE}
     restart: unless-stopped
     ports:
@@ -83,6 +81,7 @@ services:
       - phoenix_data:/data
 
   hyperdx:
+    profiles: ["observability"]
     image: ${HYPERDX_IMAGE}
     restart: unless-stopped
     ports:
@@ -96,6 +95,7 @@ services:
       - hyperdx_ch_logs:/var/log/clickhouse-server
 
   otelcol:
+    profiles: ["observability"]
     image: ${OTELCOL_IMAGE}
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yaml"]
@@ -124,16 +124,11 @@ services:
       TS_HOSTNAME: ${POLYPUS_TS_HOSTNAME:?run through polypus deploy}
     volumes:
       - tailscale_state:/var/lib/tailscale
-      - ./tailscale:/config
+      # serve.json, rendered per deploy with the observability forwards only when they run.
+      - ${POLYPUS_TS_SERVE_DIR:?run through polypus deploy}:/config
     depends_on:
       gateway:
         condition: service_healthy
-      phoenix:
-        condition: service_started
-      hyperdx:
-        condition: service_started
-      otelcol:
-        condition: service_started
 
 volumes:
   switchyard_routes:

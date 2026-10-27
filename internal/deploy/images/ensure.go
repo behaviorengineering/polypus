@@ -23,14 +23,16 @@ type EnsureOptions struct {
 	// After Actions success, re-probe GHCR on 404 before failing (GHCR lag).
 	PostWaitProbeTimeout  time.Duration
 	PostWaitProbeInterval time.Duration
+	// Services picks the images to probe: Polypus always, Switchyard with routers.
+	Services Services
 }
 
-// EnsurePresent probes POLYPUS_IMAGE and SWITCHYARD_IMAGE in images.env.
+// EnsurePresent probes POLYPUS_IMAGE, and SWITCHYARD_IMAGE when routers run, in images.env.
 func EnsurePresent(ctx context.Context, path string, opts EnsureOptions) error {
 	if ctx == nil {
 		return fmt.Errorf("images: context required")
 	}
-	refs, err := probeRefsFromEnv(path)
+	refs, err := probeRefsFromEnv(path, opts.Services.probeKeys())
 	if err != nil {
 		return err
 	}

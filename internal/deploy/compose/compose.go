@@ -55,6 +55,15 @@ func (c Client) Up(ctx context.Context) error {
 	return c.runCompose(ctx, c.Args("up", "-d"))
 }
 
+// RemoveServices stops and removes the given services' containers; their named
+// volumes stay. Services with no container are skipped.
+func (c Client) RemoveServices(ctx context.Context, services ...string) error {
+	if len(services) == 0 {
+		return nil
+	}
+	return c.runCompose(ctx, append(c.Args("rm", "--stop", "--force"), services...))
+}
+
 // RecreateServices runs docker compose up -d --force-recreate --no-deps for the given services.
 func (c Client) RecreateServices(ctx context.Context, services ...string) error {
 	if len(services) == 0 {

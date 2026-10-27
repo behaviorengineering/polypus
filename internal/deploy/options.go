@@ -21,6 +21,8 @@ type Options struct {
 	PinsFile string
 	// ImagesEnv is where the deploy writes the resolved pins when PinsFile is empty.
 	ImagesEnv string
+	// StateDir holds files the deploy renders per environment, under <StateDir>/<Name>/.
+	StateDir  string
 	Version   string
 	EnvDeploy string
 	// Environment is the deploy environment the options came from.
@@ -56,6 +58,7 @@ func DefaultOptions(root string) Options {
 		ComposeFile:   filepath.Join(root, "docker-compose.deploy.yml"),
 		RepoPins:      filepath.Join(root, "images.env"),
 		ImagesEnv:     filepath.Join(root, ".env.images"),
+		StateDir:      filepath.Join(root, ".deploy"),
 		EnvDeploy:     filepath.Join(root, ".env.deploy"),
 		Name:          "polypus",
 		HealthURL:     "http://127.0.0.1:1320",
