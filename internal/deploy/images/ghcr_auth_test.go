@@ -9,6 +9,9 @@ import (
 )
 
 func TestRegistryBearerTokenUsesBasicAuth(t *testing.T) {
+	// CI runners set GITHUB_ACTOR; clear both so the username is the default.
+	t.Setenv("GHCR_USERNAME", "")
+	t.Setenv("GITHUB_ACTOR", "")
 	const wantUser = "token"
 	const wantPass = "ghp_test_pat"
 	var gotAuth string

@@ -21,7 +21,7 @@ func ResolveCollectorOptions(in CollectorOptions) CollectorOptions {
 		)
 	}
 	if strings.TrimSpace(out.OTLPEndpoint) == "" && isRemote {
-		out.OTLPEndpoint = "http://" + remoteHost + ":4318"
+		out.OTLPEndpoint = observabilityHTTPBase(remoteHost, "4318")
 	}
 
 	if strings.TrimSpace(out.PhoenixBaseURL) == "" {
@@ -79,8 +79,11 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// observabilityHTTPBase is plain HTTP on purpose: tailscale/serve.json forwards the
+// collector, Phoenix and HyperDX ports as raw TCP on the tailnet, where WireGuard
+// already encrypts the traffic, so those ports have no TLS to speak.
 func observabilityHTTPBase(host, port string) string {
-	return "http://" + host + ":" + port
+	return "http://" + host + ":" + port // NOSONAR go:S5332 tailnet TCP forward, encrypted by WireGuard.
 }
 
 func coerceObservabilityHTTP(homelabHost, baseURL, port string) string {
