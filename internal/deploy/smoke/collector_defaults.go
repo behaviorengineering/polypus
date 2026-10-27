@@ -79,7 +79,7 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// observabilityHTTPBase is plain HTTP on purpose: tailscale/serve.json forwards the
+// observabilityHTTPBase is plain HTTP on purpose: the Tailscale serve config (tsserve) forwards the
 // collector, Phoenix and HyperDX ports as raw TCP on the tailnet, where WireGuard
 // already encrypts the traffic, so those ports have no TLS to speak.
 func observabilityHTTPBase(host, port string) string {

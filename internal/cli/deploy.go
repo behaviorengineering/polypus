@@ -306,7 +306,11 @@ func newDeployVerifyImagesCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			path, err := verifyImagesFile(opts)
+			svc, err := deploy.Services(opts)
+			if err != nil {
+				return err
+			}
+			path, err := verifyImagesFile(opts, svc)
 			if err != nil {
 				return err
 			}
@@ -315,7 +319,7 @@ func newDeployVerifyImagesCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), deployJobTimeout)
 			defer cancel()
-			if err := images.EnsurePresent(ctx, path, images.EnsureOptions{Wait: false}); err != nil {
+			if err := images.EnsurePresent(ctx, path, images.EnsureOptions{Wait: false, Services: svc}); err != nil {
 				return err
 			}
 			ver, err := images.PolypusVersionFromEnv(path)
@@ -335,15 +339,15 @@ func newDeployVerifyImagesCmd() *cobra.Command {
 
 // verifyImagesFile returns the pins file to verify: the environment's own, or this
 // build's release pins written to a temporary file.
-func verifyImagesFile(opts deploy.Options) (string, error) {
+func verifyImagesFile(opts deploy.Options, svc images.Services) (string, error) {
 	if strings.TrimSpace(opts.PinsFile) != "" {
-		return opts.PinsFile, images.Verify(opts.PinsFile)
+		return opts.PinsFile, images.Verify(opts.PinsFile, svc)
 	}
 	pins, err := images.VersionPins(opts.RepoPins, opts.Version)
 	if err != nil {
 		return "", err
 	}
-	if err := images.VerifyPins(pins, opts.RepoPins); err != nil {
+	if err := images.VerifyPins(pins, opts.RepoPins, svc); err != nil {
 		return "", err
 	}
 	f, err := os.CreateTemp("", "polypus-images-*.env")

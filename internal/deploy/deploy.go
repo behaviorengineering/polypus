@@ -17,18 +17,32 @@ import (
 	"github.com/behaviorengineering/polypus/internal/deploy/routers"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
 	"github.com/behaviorengineering/polypus/internal/deploy/smoke"
+	"github.com/behaviorengineering/polypus/internal/deploy/tsserve"
 )
 
-// bindMountReloadServices are force-recreated after compose up so bind-mounted
-// files (gateway YAML, otelcol config, Tailscale serve.json) reload on Windows.
-var bindMountReloadServices = []string{"gateway", "otelcol", "tailscale"}
+// observabilityServices run behind the observability compose profile.
+var observabilityServices = []string{"otelcol", "phoenix", "hyperdx"}
+
+// collectorEndpoint is where the gateway and Switchyard send traces when the
+// collector runs.
+const collectorEndpoint = "http://otelcol:4317"
+
+// reloadServices are force-recreated after compose up so bind-mounted files
+// (gateway YAML, otelcol config, Tailscale serve.json) reload on Windows. Only
+// services that run are listed.
+func reloadServices(svc images.Services) []string {
+	if svc.Observability {
+		return []string{"gateway", "otelcol", "tailscale"}
+	}
+	return []string{"gateway", "tailscale"}
+}
 
 // plan is what a deploy resolves before it changes anything.
 type plan struct {
 	gatewayPath    string
 	imagesEnv      string
 	pins           string // resolved pins to write to imagesEnv; empty when an environment file is used.
-	routers        bool
+	services       images.Services
 	smokeSystemOne bool
 	secretNames    []string
 }
@@ -58,11 +72,11 @@ func resolvePlan(opts Options) (plan, error) {
 		return p, err
 	}
 	p.gatewayPath = gatewayPath
-	if p.imagesEnv, p.pins, err = resolvePins(opts); err != nil {
+	if p.services, err = Services(opts); err != nil {
 		return p, err
 	}
-	if p.routers, err = routers.HasTopLevelRouters(gatewayPath); err != nil {
-		return p, fmt.Errorf("deploy: routers detect: %w", err)
+	if p.imagesEnv, p.pins, err = resolvePins(opts, p.services); err != nil {
+		return p, err
 	}
 	if p.smokeSystemOne, err = smokeSystemOne(gatewayPath); err != nil {
 		return p, err
@@ -70,18 +84,34 @@ func resolvePlan(opts Options) (plan, error) {
 	if p.secretNames, err = ExportSecretNames(opts); err != nil {
 		return p, fmt.Errorf("deploy: gateway secrets: %w", err)
 	}
-	otelCfg := filepath.Join(opts.Root, "otelcol.config.yaml")
-	if _, err := os.Stat(otelCfg); err != nil {
-		return p, fmt.Errorf("deploy: missing otel collector config at %s", otelCfg)
+	if p.services.Observability {
+		otelCfg := filepath.Join(opts.Root, "otelcol.config.yaml")
+		if _, err := os.Stat(otelCfg); err != nil {
+			return p, fmt.Errorf("deploy: missing otel collector config at %s", otelCfg)
+		}
 	}
 	return p, nil
 }
 
+// Services returns the optional services the environment runs: Switchyard when its
+// gateway YAML has routers, and the observability stack when its switch is on.
+func Services(opts Options) (images.Services, error) {
+	gatewayPath, err := paths.ResolveGatewayConfig(opts.GatewayConfig)
+	if err != nil {
+		return images.Services{}, err
+	}
+	hasRouters, err := routers.HasTopLevelRouters(gatewayPath)
+	if err != nil {
+		return images.Services{}, fmt.Errorf("deploy: routers detect: %w", err)
+	}
+	return images.Services{Routers: hasRouters, Observability: opts.Environment.Observability}, nil
+}
+
 // resolvePins returns the images file compose reads and, when the deploy writes
 // that file itself, its content. An environment's own pins file is used as is.
-func resolvePins(opts Options) (path, pins string, err error) {
+func resolvePins(opts Options, svc images.Services) (path, pins string, err error) {
 	if strings.TrimSpace(opts.PinsFile) != "" {
-		if err := images.Verify(opts.PinsFile); err != nil {
+		if err := images.Verify(opts.PinsFile, svc); err != nil {
 			return "", "", err
 		}
 		return opts.PinsFile, "", nil
@@ -90,7 +120,7 @@ func resolvePins(opts Options) (path, pins string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	if err := images.VerifyPins(pins, opts.RepoPins); err != nil {
+	if err := images.VerifyPins(pins, opts.RepoPins, svc); err != nil {
 		return "", "", err
 	}
 	return opts.ImagesEnv, pins, nil
@@ -121,10 +151,15 @@ func printPlan(opts Options, p plan) {
 	} else {
 		fmt.Printf("deploy: images of release %s (written to %s)\n", opts.Version, p.imagesEnv)
 	}
-	if p.routers {
-		fmt.Println("deploy: routers in host config; COMPOSE_PROFILES=routers POLYPUS_SWITCHYARD=1")
+	if p.services.Routers {
+		fmt.Println("deploy: routers in host config; switchyard on")
 	} else {
-		fmt.Println("deploy: no routers in host config; switchyard profile off")
+		fmt.Println("deploy: no routers in host config; switchyard off")
+	}
+	if p.services.Observability {
+		fmt.Println("deploy: observability on; collector, Phoenix and HyperDX run")
+	} else {
+		fmt.Println("deploy: observability off; collector, Phoenix and HyperDX do not run")
 	}
 	fmt.Printf("deploy: secrets %s\n", strings.Join(p.secretNames, ","))
 }
@@ -138,10 +173,17 @@ func apply(ctx context.Context, opts Options, p plan) error {
 	if err := images.EnsurePresent(ctx, p.imagesEnv, images.EnsureOptions{
 		Wait:        true,
 		WaitTimeout: 20 * time.Minute,
+		Services:    p.services,
 	}); err != nil {
 		return err
 	}
-	if err := setComposeEnv(opts, p); err != nil {
+	serveDir := filepath.Join(opts.StateDir, opts.Name, "tailscale")
+	servePath, err := tsserve.Write(serveDir, p.services.Observability)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("deploy: wrote %s\n", servePath)
+	if err := setComposeEnv(opts, p, serveDir); err != nil {
 		return err
 	}
 	if p.smokeSystemOne {
@@ -180,23 +222,43 @@ func apply(ctx context.Context, opts Options, p plan) error {
 	return nil
 }
 
-func setComposeEnv(opts Options, p plan) error {
-	if err := setProcessEnv("POLYPUS_HOST_CONFIG", paths.DockerBindPath(p.gatewayPath)); err != nil {
-		return err
+// setComposeEnv sets the variables docker-compose.deploy.yml reads from the deploy.
+func setComposeEnv(opts Options, p plan, serveDir string) error {
+	switchyard, endpoint := "0", ""
+	if p.services.Routers {
+		switchyard = "1"
 	}
-	if err := setProcessEnv("POLYPUS_TS_HOSTNAME", opts.Name); err != nil {
-		return err
+	if p.services.Observability {
+		endpoint = collectorEndpoint
 	}
-	if !p.routers {
-		if err := setProcessEnv("POLYPUS_SWITCHYARD", "0"); err != nil {
+	vars := [][2]string{
+		{"POLYPUS_HOST_CONFIG", paths.DockerBindPath(p.gatewayPath)},
+		{"POLYPUS_TS_HOSTNAME", opts.Name},
+		{"POLYPUS_TS_SERVE_DIR", paths.DockerBindPath(serveDir)},
+		{"POLYPUS_SWITCHYARD", switchyard},
+		{"POLYPUS_DEPLOY_OTLP_ENDPOINT", endpoint},
+	}
+	for _, v := range vars {
+		if err := setProcessEnv(v[0], v[1]); err != nil {
 			return err
 		}
-		return unsetProcessEnv("COMPOSE_PROFILES")
 	}
-	if err := setProcessEnv("POLYPUS_SWITCHYARD", "1"); err != nil {
-		return err
+	if profiles := composeProfiles(p.services); profiles != "" {
+		return setProcessEnv("COMPOSE_PROFILES", profiles)
 	}
-	return setProcessEnv("COMPOSE_PROFILES", "routers")
+	return unsetProcessEnv("COMPOSE_PROFILES")
+}
+
+// composeProfiles is the COMPOSE_PROFILES value for the services that run.
+func composeProfiles(svc images.Services) string {
+	var profiles []string
+	if svc.Routers {
+		profiles = append(profiles, "routers")
+	}
+	if svc.Observability {
+		profiles = append(profiles, "observability")
+	}
+	return strings.Join(profiles, ",")
 }
 
 func printSystemOneTargets(gatewayPath string) error {
@@ -220,13 +282,21 @@ func startStack(ctx context.Context, opts Options, p plan, cc compose.Client) er
 	if err := cc.Up(ctx); err != nil {
 		return err
 	}
-	fmt.Println("deploy: recreate gateway, otelcol, and tailscale (reload bind-mounted config)")
+	if !p.services.Observability {
+		// compose up leaves a profile's containers running once the profile is off.
+		fmt.Println("deploy: remove collector, Phoenix and HyperDX containers if present (their volumes stay)")
+		if err := cc.RemoveServices(ctx, observabilityServices...); err != nil {
+			return err
+		}
+	}
+	reload := reloadServices(p.services)
+	fmt.Printf("deploy: recreate %s (reload bind-mounted config)\n", strings.Join(reload, ", "))
 	if opts.PruneFunc == nil {
 		opts.PruneFunc = func(ctx context.Context, gatewayPath string) error {
 			return overlay.PruneContainer(ctx, gatewayPath, overlay.ContainerConfig{Compose: cc})
 		}
 	}
-	return postComposeUpReload(ctx, opts, p.gatewayPath, cc.RecreateServices, bindMountReloadServices...)
+	return postComposeUpReload(ctx, opts, p.gatewayPath, cc.RecreateServices, reload...)
 }
 
 func runSmoke(ctx context.Context, opts Options, p plan) error {
@@ -246,7 +316,7 @@ func runSmoke(ctx context.Context, opts Options, p plan) error {
 		RouterModel:   opts.SmokeRouterModel,
 		Capable:       opts.SmokeCapable,
 		Efficient:     opts.SmokeEfficient,
-		WithRouter:    p.routers,
+		WithRouter:    p.services.Routers,
 		WithSystemOne: p.smokeSystemOne,
 		WithProviders: withProviders,
 		GatewayConfig: p.gatewayPath,

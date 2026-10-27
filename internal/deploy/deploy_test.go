@@ -5,6 +5,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/deploy/images"
 )
 
 func TestPostComposeUpReloadPrunesBeforeRecreate(t *testing.T) {
@@ -30,9 +32,27 @@ func TestPostComposeUpReloadPrunesBeforeRecreate(t *testing.T) {
 	}
 }
 
-func TestBindMountReloadServicesIncludesTailscale(t *testing.T) {
-	want := []string{"gateway", "otelcol", "tailscale"}
-	if !slices.Equal(bindMountReloadServices, want) {
-		t.Fatalf("bindMountReloadServices = %q, want %q", bindMountReloadServices, want)
+func TestReloadServicesFollowObservability(t *testing.T) {
+	if got, want := reloadServices(images.Services{Observability: true}), []string{"gateway", "otelcol", "tailscale"}; !slices.Equal(got, want) {
+		t.Fatalf("observability on: %q want %q", got, want)
+	}
+	if got, want := reloadServices(images.Services{}), []string{"gateway", "tailscale"}; !slices.Equal(got, want) {
+		t.Fatalf("observability off: %q want %q", got, want)
+	}
+}
+
+func TestComposeProfiles(t *testing.T) {
+	for _, tc := range []struct {
+		svc  images.Services
+		want string
+	}{
+		{images.Services{}, ""},
+		{images.Services{Routers: true}, "routers"},
+		{images.Services{Observability: true}, "observability"},
+		{images.Services{Routers: true, Observability: true}, "routers,observability"},
+	} {
+		if got := composeProfiles(tc.svc); got != tc.want {
+			t.Fatalf("%+v: %q want %q", tc.svc, got, tc.want)
+		}
 	}
 }

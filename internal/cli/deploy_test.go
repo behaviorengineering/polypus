@@ -152,3 +152,26 @@ func TestDeployInit(t *testing.T) {
 		t.Fatalf("second init should keep both files: exit %d stdout=%s", code, out)
 	}
 }
+
+func TestDeployRunPinsFollowObservability(t *testing.T) {
+	root, config, _ := deployFixture(t)
+	minimal := filepath.Join(filepath.Dir(config), "minimal.env")
+	writeFiles(t, filepath.Dir(config), map[string]string{
+		"minimal.env": "POLYPUS_IMAGE=ghcr.io/behaviorengineering/polypus:0.3.0\nTAILSCALE_IMAGE=tailscale/tailscale:v1.102.4\n",
+	})
+	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config, "--images", minimal})
+	if code != 0 {
+		t.Fatalf("observability off with minimal pins: exit %d\nstderr=%s", code, errOut)
+	}
+	if !strings.Contains(out, "observability off") {
+		t.Fatalf("stdout missing observability off:\n%s", out)
+	}
+
+	writeFiles(t, filepath.Dir(config), map[string]string{
+		"config.yaml": "identifier: work\ntailnet: corp.ts.net\nobservability: true\n",
+	})
+	code, _, errOut = captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config, "--images", minimal})
+	if code != 1 || !strings.Contains(errOut, "PHOENIX_IMAGE") {
+		t.Fatalf("observability on needs the Phoenix pin: exit %d stderr=%s", code, errOut)
+	}
+}
