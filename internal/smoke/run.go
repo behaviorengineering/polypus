@@ -55,6 +55,9 @@ type Options struct {
 	AllowedSelectedModels []string
 	Temperature           float64
 	MaxTokens             int
+	// APIKey is the gateway access key, sent as a bearer token on every probe when
+	// the gateway is locked. Empty sends none.
+	APIKey string
 }
 
 // Status is a probe outcome.
@@ -140,6 +143,7 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "smoke.Run", "context deadline required")
 	}
 	opts.Normalize()
+	ctx = withAPIKey(ctx, opts.APIKey)
 
 	var out []Result
 	var errs []error

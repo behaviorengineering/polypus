@@ -97,6 +97,8 @@ Images default to this build's release; pass --images to pin others.`,
 	cmd.AddCommand(newDeploySmokeCollectorCmd())
 	cmd.AddCommand(newDeployVerifyImagesCmd())
 	cmd.AddCommand(newDeployExportEnvCmd())
+	cmd.AddCommand(newDeployClientKeyCmd())
+	cmd.AddCommand(newDeploySecretCmd())
 	return cmd
 }
 
@@ -204,6 +206,16 @@ func newDeploySmokeCmd() *cobra.Command {
 		GroupID: groupInspect,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			env, found, err := discoverOptional(t.config)
+			if err != nil {
+				return err
+			}
+			if found {
+				// Env POLYPUS_API_KEY wins, then the environment's keyring service.
+				if o.APIKey, err = secrets.Lookup(nil, env.Name(), secrets.ClientKeyName); err != nil {
+					return err
+				}
+			}
 			if o.WithProviders || o.WithSystemOne || o.WithRouter {
 				opts, err := t.options()
 				if err != nil {
@@ -230,7 +242,7 @@ func newDeploySmokeCmd() *cobra.Command {
 			if err := smoke.Run(ctx, o); err != nil {
 				return err
 			}
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), "smoke: ok")
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), "smoke: ok")
 			return err
 		},
 	}

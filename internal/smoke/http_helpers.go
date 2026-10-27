@@ -29,9 +29,28 @@ func httpNewPost(ctx context.Context, url, body string) (*http.Request, error) {
 }
 
 // httpDefaultDo sends a probe once through the outbound seam: no retry, so a real
-// 5xx is reported rather than hidden, and no call without a deadline.
+// 5xx is reported rather than hidden, and no call without a deadline. The run's
+// access key, when set, goes on as a bearer token.
 func httpDefaultDo(req *http.Request) (*http.Response, error) {
+	if key := apiKeyFrom(req.Context()); key != "" && req.Header.Get("Authorization") == "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	return outbound.DoOnce(req.Context(), outbound.DepSmoke, smokeHTTPClient, req)
+}
+
+// apiKeyCtx carries a run's access key to every probe request built from its context.
+type apiKeyCtx struct{}
+
+func withAPIKey(ctx context.Context, key string) context.Context {
+	if key = strings.TrimSpace(key); key == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, apiKeyCtx{}, key)
+}
+
+func apiKeyFrom(ctx context.Context) string {
+	key, _ := ctx.Value(apiKeyCtx{}).(string)
+	return key
 }
 
 func ioReadAllLimit(r io.Reader, n int64) ([]byte, error) {

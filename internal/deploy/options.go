@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
+
 	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
 	"github.com/behaviorengineering/polypus/internal/deploy/tailnet"
 )
@@ -42,6 +44,8 @@ type Options struct {
 	// Tailnet, when set, is checked before the deploy changes anything: this
 	// machine must be on it to reach HealthURL.
 	Tailnet string
+	// Keyring holds the environment's secrets; nil uses the OS keyring.
+	Keyring operatorconfig.Keyring
 	// TailnetStatus reads `tailscale status --json`; nil runs the tailscale CLI.
 	TailnetStatus    tailnet.StatusFunc
 	HealthTimeout    time.Duration

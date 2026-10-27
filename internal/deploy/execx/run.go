@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // RunContext streams stdout/stderr and honors ctx cancellation.
@@ -40,6 +41,22 @@ func OutputContext(ctx context.Context, name string, args []string, stdin []byte
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("%s %v: %w", name, args, err)
+	}
+	return out, nil
+}
+
+// StdoutContext runs a command and returns its stdout alone, so machine output (for
+// example JSON) is not mixed with warnings. Stderr goes into the error on failure.
+func StdoutContext(ctx context.Context, name string, args []string) ([]byte, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("execx: context required")
+	}
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: name and args are the deploy's own docker commands.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return out, fmt.Errorf("%s %v: %w: %s", name, args, err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil
 }
