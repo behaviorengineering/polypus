@@ -42,6 +42,9 @@ const (
 	DepOpenRouter   = "openrouter"
 	DepSmoke        = "smoke"
 	DepGateway      = "gateway"
+	DepGitHub       = "github"
+	DepGHCR         = "ghcr"
+	DepRegistry     = "registry"
 )
 
 // Abort wraps err so failsafe stops retrying.
@@ -147,7 +150,7 @@ func (p *Policies) orDefault() *Policies {
 
 func (p *Policies) breakerFor(name string) failsafe.Policy[any] {
 	switch depOf(name) {
-	case DepCloudflare, DepGemini, DepAnthropic, DepOpenRouter:
+	case DepCloudflare, DepGemini, DepAnthropic, DepOpenRouter, DepGitHub, DepGHCR, DepRegistry:
 	default:
 		return nil
 	}

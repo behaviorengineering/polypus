@@ -1,0 +1,185 @@
+# Homelab Polypus gateway config (Docker Compose deploy). Mounted on every deploy.
+# Cloudflare credentials: OS keyring service "polypus" via deploy export-env (not in this file).
+
+processes:
+  mlx: false
+
+tts_backend:
+  enabled: true
+  default: cf_local
+stt_backend:
+  enabled: true
+  default: cf_local
+proxy_backend:
+  enabled: true
+  default: cf_local
+chat_backend:
+  enabled: true
+  default: cf_local
+vision_backend:
+  enabled: true
+  default: cf_local
+embed_backend:
+  enabled: true
+  default: cf_local
+systemone_backend:
+  enabled: true
+  default: cf_local
+batch_backend:
+  enabled: true
+  default: cf_local
+
+timeouts:
+  min: 5s
+  max: 900s
+  chat: 120s
+  chat_thinking: 600s
+  vision: 300s
+  embed: 60s
+  speech: 180s
+  backends:
+    cf_local:
+      chat: 120s
+    gemini_free:
+      chat: 120s
+      vision: 300s
+    gemini_paid:
+      chat: 120s
+      vision: 300s
+    openrouter:
+      chat: 120s
+      vision: 300s
+    deepinfra:
+      chat: 120s
+      vision: 300s
+
+switchyard:
+  base_url: http://switchyard:4000
+  config_path: /var/lib/polypus/switchyard/routes.toml
+
+backends:
+  cf_local:
+    remote: true
+    extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
+    auth:
+      bearer_env: CF_AI_API_KEY
+    capabilities: [chat, vision, embed, tts, stt, voices, systemone, batch]
+    models:
+      sync: true
+      allow:
+        - "@cf/zai-org/glm-4.7-flash"
+        - "@cf/ibm-granite/granite-4.0-h-micro"
+        - "@cf/google/gemma-4-26b-a4b-it"
+        - "@cf/deepseek-ai/deepseek-v4-flash-0731"
+        - "@cf/deepgram/aura-2-en"
+        - "@cf/deepgram/nova-3"
+        - "@cf/deepgram/flux"
+        - "@cf/openai/whisper-large-v3-turbo"
+        - "@cf/pipecat-ai/smart-turn-v2"
+        - "@cf/baai/bge-m3"
+        - "@cf/baai/bge-small-en-v1.5"
+        - "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+        - "@cf/mistralai/mistral-small-3.1-24b-instruct"
+        - "typesafe/jev"
+
+  # OpenRouter: chat + vision share /v1/chat/completions; tts uses /v1/audio/speech.
+  # Homelab tts_backend.default stays cf_local (Deepgram on Workers AI). Use
+  # model=openrouter/<slug> on speech when you want Kokoro or Fish free TTS.
+  # Curate slugs from https://openrouter.ai/rankings/speech and inventory sync.
+  # batch: /v1/batches with model=openrouter/<slug> uses OpenRouter's Batch API;
+  # batch_backend.default stays cf_local. Only slugs with a :batch variant on
+  # https://openrouter.ai/api/v1/models accept batches; gpt-oss-20b is the cheapest.
+  openrouter:
+    remote: true
+    base_url: https://openrouter.ai/api/v1
+    auth:
+      bearer_env: OPENROUTER_API_KEY
+    capabilities: [chat, vision, tts, systemone, batch]
+    models:
+      sync: true
+      allow:
+        - mistralai/mistral-nemo
+        - meta-llama/llama-3.3-70b-instruct
+        - meta/muse-spark-1.3
+        - meta/muse-wonder
+        - google/gemini-2.5-flash
+        - google/gemini-3-flash-preview
+        - openai/gpt-oss-20b
+        - hexgrad/kokoro-82m
+        - fish-audio/s2.1-pro-free:free
+      systemone_allow:
+        - perplexity/pplx-decider-v1.2
+        - perplexity/pplx-decider-flash-v1.2
+        - inception/mercury-decide
+
+  # DeepInfra OpenAI-compat (DEEPINFRA_API_KEY). Chat/vision/embed under /v1/openai.
+  # Curate slugs from https://deepinfra.com and inventory sync.
+  # Gemma 4 ids keep DeepInfra catalog casing (26B/31B), not Google AI Studio lowercase.
+  deepinfra:
+    remote: true
+    base_url: https://api.deepinfra.com/v1/openai
+    auth:
+      bearer_env: DEEPINFRA_API_KEY
+    capabilities: [chat, vision, embed]
+    models:
+      sync: true
+      allow:
+        - deepseek-ai/DeepSeek-V4-Flash-0731
+        - google/gemma-4-26B-A4B-it
+        - google/gemma-4-31B-it
+        - google/gemma-3-27b-it
+        - ibm-granite/granite-4.2-8b
+        - meta-llama/Llama-4-Scout-17B-16E-Instruct
+        - BAAI/bge-m3
+
+  # Google AI Studio free tier: Gemma only (GEMINI_API_KEY_FREE). Flash + Pro on gemini_paid.
+  # RPM/RPD: https://aistudio.google.com/rate-limit
+  #
+  # Vision (images in chat): gemma-4-* on this backend only.
+  # Do not add stt: that flag is OpenAI /v1/audio/transcriptions (Cloudflare plugin), not Gemini chat.
+  # Omit base_url: Bifrost Gemini default. Native Google URL 502s OpenAI chat fields.
+  gemini_free:
+    remote: true
+    extension: gemini
+    auth:
+      bearer_env: GEMINI_API_KEY_FREE
+    capabilities: [chat, vision]
+    models:
+      sync: true
+      allow:
+        - gemma-4-26b-a4b-it
+        - gemma-4-31b-it
+        # Gemma 4 with native audio in multimodal chat (not 26b MoE):
+        # - gemma-4-12b-it
+
+  # Billing-enabled project (GEMINI_API_KEY). Flash + Pro; Gemma 4 when you want billing quota instead of gemini_free.
+  # Search/TTS/Live/Nano Banana: native API only for now.
+  # Omit base_url: Bifrost Gemini default. Native Google URL 502s OpenAI chat fields.
+  gemini_paid:
+    remote: true
+    extension: gemini
+    auth:
+      bearer_env: GEMINI_API_KEY
+    capabilities: [chat, vision]
+    models:
+      sync: true
+      allow:
+        - gemini-2.5-flash
+        - gemini-3-flash-preview
+        - gemini-3.8-flash
+        - gemini-2.5-pro
+        - gemini-3.1-pro-preview
+        - gemma-4-26b-a4b-it
+        - gemma-4-31b-it
+
+routers:
+  investigator:
+    capability: chat
+    route:
+      type: stage_router
+      picker: efficient_first
+      confidence_threshold: 0.5
+      capable: cf_local/@cf/google/gemma-4-26b-a4b-it
+      efficient: cf_local/@cf/zai-org/glm-4.7-flash
+      recent_turn_window: 3

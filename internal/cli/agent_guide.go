@@ -48,12 +48,12 @@ func appendGuideGroup(b *strings.Builder, root *cobra.Command, groupID string, t
 					continue
 				}
 				line := cmd.Name() + " " + child.Name()
-				fmt.Fprintf(b, "    %-20s %s\n", line, child.Short)
+				fmt.Fprintf(b, "    %-24s %s\n", line, child.Short)
 			}
 			continue
 		}
 		if cmd.GroupID == groupID {
-			fmt.Fprintf(b, "    %-20s %s\n", cmd.Name(), cmd.Short)
+			fmt.Fprintf(b, "    %-24s %s\n", cmd.Name(), cmd.Short)
 		}
 	}
 }

@@ -36,3 +36,7 @@ coverage.html
 # Editor
 .idea/
 .vscode/
+
+# polypus deploy: resolved secrets and image pins, written per deploy
+.env.deploy
+.env.images
