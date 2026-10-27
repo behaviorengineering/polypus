@@ -16,7 +16,7 @@ const (
 	defaultTimeoutChat         = 120 * time.Second
 	defaultTimeoutChatThinking = 600 * time.Second
 	defaultTimeoutVision       = 300 * time.Second
-	defaultTimeoutEmbed        = 60 * time.Second
+	defaultTimeoutEmbed        = 15 * time.Second
 	defaultTimeoutSpeech       = 180 * time.Second
 	defaultTimeoutChatCF       = 60 * time.Second
 	// defaultStreamIdle is the longest gap allowed between chunks of a chat stream.
