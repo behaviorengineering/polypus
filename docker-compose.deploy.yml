@@ -1,12 +1,12 @@
-# Polypus homelab stack. Image pins: images.env (no :latest). Secrets: .env.deploy from export-env.
-# Canonical homelab copy lives in gitlab.com/xynova/polypus-local.
-# Usage: docker compose -f docker-compose.deploy.yml --env-file images.env --env-file .env.deploy up -d
+# Polypus deploy stack, run by polypus deploy run. Image pins: .env.images (written per deploy, no :latest).
+# Secrets: .env.deploy from polypus deploy export-env.
+# Usage: docker compose -f docker-compose.deploy.yml --env-file .env.images --env-file .env.deploy up -d
 
 services:
   gateway:
     image: ${POLYPUS_IMAGE}
     container_name: polypus-gateway
-    restart: unless-stopped
+    restart: on-failure:5
     ports:
       - "127.0.0.1:1320:1320"
     environment:
@@ -15,30 +15,40 @@ services:
       POLYPUS_BASE_URL: http://gateway:1320
       POLYPUS_SWITCHYARD_BASE_URL: http://switchyard:4000
       POLYPUS_SWITCHYARD_CONFIG: /var/lib/polypus/switchyard/routes.toml
-      POLYPUS_SWITCHYARD: "1"
+      # deploy sets POLYPUS_SWITCHYARD=1 and COMPOSE_PROFILES=routers when host config has routers:
+      POLYPUS_SWITCHYARD: "${POLYPUS_SWITCHYARD:-0}"
       POLYPUS_CONFIG: /etc/polypus/config.yaml
       CF_AI_API_KEY: ${CF_AI_API_KEY}
       CF_ACCOUNT_ID: ${CF_ACCOUNT_ID}
-      # Homelab canonical stack: gitlab.com/xynova/polypus-local docker-compose.deploy.yml (otelcol fan-out).
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_API_KEY_FREE: ${GEMINI_API_KEY_FREE:-}
       POLYPUS_OTLP_ENDPOINT: ${POLYPUS_OTLP_ENDPOINT:-http://otelcol:4317}
       POLYPUS_FAILURE_DUMP_DIR: /var/lib/polypus/inference-failures
+      POLYPUS_MODELS_ALLOW_OVERLAY: /var/lib/polypus/state/models-allow-overlay.yaml
+      POLYPUS_ADMIN_KEYS: /var/lib/polypus/state/admin-api-keys.json
     volumes:
       - ${POLYPUS_HOST_CONFIG}:/etc/polypus/config.yaml:ro
       - switchyard_routes:/var/lib/polypus/switchyard
+      - polypus_state:/var/lib/polypus/state
       - polypus_inference_failures:/var/lib/polypus/inference-failures
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:1320/health"]
       interval: 5s
       timeout: 3s
       retries: 12
-      start_period: 15s
+      start_period: 45s
     depends_on:
       phoenix:
         condition: service_started
       hyperdx:
         condition: service_started
+      otelcol:
+        condition: service_started
 
   switchyard:
+    profiles: ["routers"]
     image: ${SWITCHYARD_IMAGE}
     container_name: polypus-switchyard
     restart: unless-stopped
@@ -68,7 +78,6 @@ services:
     restart: unless-stopped
     ports:
       - "${PHOENIX_PORT:-6006}:6006"
-      - "${PHOENIX_OTLP_PORT:-4317}:4317"
     environment:
       PHOENIX_WORKING_DIR: /data
     volumes:
@@ -78,23 +87,64 @@ services:
     image: ${HYPERDX_IMAGE}
     container_name: polypus-hyperdx
     restart: unless-stopped
-    environment:
-      CUSTOM_OTELCOL_CONFIG_FILE: /etc/otelcol-contrib/custom.config.yaml
     ports:
       - "${HYPERDX_PORT:-8080}:8080"
-      - "${HYPERDX_OTLP_GRPC_PORT:-4319}:4317"
-      - "${HYPERDX_OTLP_HTTP_PORT:-4318}:4318"
+    environment:
+      CUSTOM_OTELCOL_CONFIG_FILE: /etc/otelcol-contrib/custom.config.yaml
     volumes:
       - ./hyperdx.custom.config.yaml:/etc/otelcol-contrib/custom.config.yaml:ro
       - hyperdx_db:/data/db
       - hyperdx_ch_data:/var/lib/clickhouse
       - hyperdx_ch_logs:/var/log/clickhouse-server
 
+  otelcol:
+    image: ${OTELCOL_IMAGE}
+    container_name: polypus-otelcol
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    ports:
+      - "${OTELCOL_OTLP_GRPC_PORT:-4317}:4317"
+      - "${OTELCOL_OTLP_HTTP_PORT:-4318}:4318"
+    volumes:
+      - ./otelcol.config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      phoenix:
+        condition: service_started
+      hyperdx:
+        condition: service_started
+
+  tailscale:
+    image: ${TAILSCALE_IMAGE}
+    container_name: polypus-tailscale
+    hostname: polypus
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_AUTH_ONCE: "true"
+      TS_USERSPACE: "true"
+      TS_HOSTNAME: polypus
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - ./tailscale:/config
+    depends_on:
+      gateway:
+        condition: service_healthy
+      phoenix:
+        condition: service_started
+      hyperdx:
+        condition: service_started
+      otelcol:
+        condition: service_started
+
 volumes:
   switchyard_routes:
+  polypus_state:
   polypus_inference_failures:
   switchyard_inference_failures:
   phoenix_data:
   hyperdx_db:
   hyperdx_ch_data:
   hyperdx_ch_logs:
+  tailscale_state:

@@ -51,7 +51,7 @@ func TestCommandsUseRunEOnly(t *testing.T) {
 func TestCommandTreeNames(t *testing.T) {
 	root := newRoot()
 	wantRoot := []string{
-		"version", "processes", "init", "secret", "serve", "switchyard-render", "admin-key",
+		"version", "processes", "init", "secret", "serve", "switchyard-render", "admin-key", "deploy",
 	}
 	gotRoot := commandNames(root.Commands())
 	if !sameSet(gotRoot, wantRoot) {
@@ -67,6 +67,11 @@ func TestCommandTreeNames(t *testing.T) {
 	if !sameSet(commandNames(adminKey.Commands()), wantAdmin) {
 		t.Fatalf("admin-key children: got %v want %v", commandNames(adminKey.Commands()), wantAdmin)
 	}
+	deployCmd := root.Commands()[indexOf(root.Commands(), "deploy")]
+	wantDeploy := []string{"run", "smoke", "smoke-collector", "verify-images", "export-env"}
+	if !sameSet(commandNames(deployCmd.Commands()), wantDeploy) {
+		t.Fatalf("deploy children: got %v want %v", commandNames(deployCmd.Commands()), wantDeploy)
+	}
 }
 
 func TestAgentGuideListsLeaves(t *testing.T) {
@@ -76,6 +81,8 @@ func TestAgentGuideListsLeaves(t *testing.T) {
 		"secret set",
 		"admin-key list",
 		"admin-key generate",
+		"deploy run",
+		"deploy export-env",
 		"serve",
 		"version",
 	} {

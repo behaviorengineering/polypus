@@ -35,6 +35,7 @@ func newRoot() *cobra.Command {
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newSwitchyardRenderCmd())
 	root.AddCommand(newAdminKeyCmd())
+	root.AddCommand(newDeployCmd())
 	addUsedGroups(root)
 	root.SetVersionTemplate("polypus {{.Version}}\n")
 	return root
