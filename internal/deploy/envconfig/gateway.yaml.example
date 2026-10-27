@@ -3,8 +3,8 @@
 #
 # It runs on OpenRouter alone, with the work OpenRouter key: polypus deploy injects
 # OPENROUTER_API_KEY through the compose environment, from the environment's keyring
-# service (polypus-<identifier>). Do NOT add a secrets: block here; the gateway container
-# has no host OS keyring.
+# service (polypus-<identifier>); store it with polypus deploy secret set OPENROUTER_API_KEY.
+# Do NOT add a secrets: block here; the gateway container has no host OS keyring.
 #
 # Claude direct on the Team plan's credits (claude_team) is below, commented out. A backend
 # in this file makes its key required on every deploy, so turn it on only once you have a
@@ -72,9 +72,8 @@ backends:
         - perplexity/pplx-decider-v1.2
 
   # Turning Claude on, once you have a Console key from the Team plan's organisation:
-  #   1. Store ANTHROPIC_API_KEY in the keyring service polypus-<identifier>, or set it
-  #      in the environment of the deploy.
-  #   2. Uncomment claude_team below.
+  #   1. Uncomment claude_team below.
+  #   2. Store the key: polypus deploy secret set ANTHROPIC_API_KEY
   #   3. Set batch_backend.default to claude_team, and add batch to its capabilities.
   #   4. Swap router/turno to the fallback route at the end of this file.
   # claude_team:

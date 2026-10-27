@@ -88,7 +88,7 @@ func runSecretSet(args []string, o secretSetOpts) int {
 		}
 		value = line
 	default:
-		line, err := readSecretPrompt(envName, os.Stdin)
+		line, err := readSecretPrompt("polypus secret set", envName, os.Stdin)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "polypus secret set: %v\n", err)
 			return 1
@@ -117,14 +117,15 @@ func warnSecretOnCLI() {
 	fmt.Fprintln(os.Stderr, secretCLIInsecureWarning)
 }
 
-func readSecretPrompt(envName string, r io.Reader) (string, error) {
+// readSecretPrompt reads a secret from a hidden prompt; cmd names the command in it.
+func readSecretPrompt(cmd, envName string, r io.Reader) (string, error) {
 	f, ok := r.(interface {
 		Fd() uintptr
 	})
 	if !ok || !term.IsTerminal(int(f.Fd())) {
 		return "", fmt.Errorf("cannot prompt when stdin is not a TTY; use --stdin")
 	}
-	fmt.Fprintf(os.Stderr, "polypus secret set: enter value for %s (input hidden): ", envName)
+	fmt.Fprintf(os.Stderr, "%s: enter value for %s (input hidden): ", cmd, envName)
 	b, err := term.ReadPassword(int(f.Fd()))
 	fmt.Fprintln(os.Stderr)
 	if err != nil {

@@ -261,3 +261,31 @@ func TestRunRequiresADeadline(t *testing.T) {
 		t.Fatal("smoke.Run without a deadline must fail closed")
 	}
 }
+
+func TestRunSendsAPIKey(t *testing.T) {
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = append(auth, r.Header.Get("Authorization"))
+		switch r.URL.Path {
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"content":"ok"}}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := smoke.Run(ctx, smoke.Options{BaseURL: srv.URL, Channels: []string{smoke.ChannelChat}, ChatModel: "m", APIKey: "pk_test"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(auth) == 0 {
+		t.Fatal("no requests reached the server")
+	}
+	for _, a := range auth {
+		if a != "Bearer pk_test" {
+			t.Fatalf("authorization %q on a probe, want Bearer pk_test", a)
+		}
+	}
+}
