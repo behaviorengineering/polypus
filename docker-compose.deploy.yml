@@ -21,8 +21,9 @@ services:
       # deploy sets POLYPUS_SWITCHYARD=1 and COMPOSE_PROFILES=routers when host config has routers:
       POLYPUS_SWITCHYARD: "${POLYPUS_SWITCHYARD:-0}"
       POLYPUS_CONFIG: /etc/polypus/config.yaml
-      CF_AI_API_KEY: ${CF_AI_API_KEY}
-      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID}
+      # Set only when the gateway YAML has a Cloudflare backend.
+      CF_AI_API_KEY: ${CF_AI_API_KEY:-}
+      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
