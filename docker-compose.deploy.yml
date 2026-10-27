@@ -1,11 +1,12 @@
 # Polypus deploy stack, run by polypus deploy run. Image pins: .env.images (written per deploy, no :latest).
 # Secrets: .env.deploy from polypus deploy export-env.
-# Usage: docker compose -f docker-compose.deploy.yml --env-file .env.images --env-file .env.deploy up -d
+# Containers and volumes are named by the compose project, polypus-<identifier>, so two
+# environments run side by side on one host.
+# Usage: docker compose -f docker-compose.deploy.yml -p polypus-<identifier> --env-file .env.images --env-file .env.deploy up -d
 
 services:
   gateway:
     image: ${POLYPUS_IMAGE}
-    container_name: polypus-gateway
     restart: on-failure:5
     ports:
       - "127.0.0.1:1320:1320"
@@ -50,7 +51,6 @@ services:
   switchyard:
     profiles: ["routers"]
     image: ${SWITCHYARD_IMAGE}
-    container_name: polypus-switchyard
     restart: unless-stopped
     environment:
       SWITCHYARD_CONFIG: /var/lib/polypus/switchyard/routes.toml
@@ -74,7 +74,6 @@ services:
 
   phoenix:
     image: ${PHOENIX_IMAGE}
-    container_name: polypus-phoenix
     restart: unless-stopped
     ports:
       - "${PHOENIX_PORT:-6006}:6006"
@@ -85,7 +84,6 @@ services:
 
   hyperdx:
     image: ${HYPERDX_IMAGE}
-    container_name: polypus-hyperdx
     restart: unless-stopped
     ports:
       - "${HYPERDX_PORT:-8080}:8080"
@@ -99,7 +97,6 @@ services:
 
   otelcol:
     image: ${OTELCOL_IMAGE}
-    container_name: polypus-otelcol
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yaml"]
     ports:
@@ -115,8 +112,8 @@ services:
 
   tailscale:
     image: ${TAILSCALE_IMAGE}
-    container_name: polypus-tailscale
-    hostname: polypus
+    # polypus deploy sets POLYPUS_TS_HOSTNAME to polypus-<identifier>, the environment's tailnet host.
+    hostname: ${POLYPUS_TS_HOSTNAME:?run through polypus deploy}
     restart: unless-stopped
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY}
@@ -124,7 +121,7 @@ services:
       TS_SERVE_CONFIG: /config/serve.json
       TS_AUTH_ONCE: "true"
       TS_USERSPACE: "true"
-      TS_HOSTNAME: polypus
+      TS_HOSTNAME: ${POLYPUS_TS_HOSTNAME:?run through polypus deploy}
     volumes:
       - tailscale_state:/var/lib/tailscale
       - ./tailscale:/config

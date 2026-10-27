@@ -114,6 +114,7 @@ func printPlan(opts Options, p plan) {
 	if opts.Environment.Path != "" {
 		fmt.Printf("deploy: environment %s (%s)\n", opts.Environment.Identifier, opts.Environment.Path)
 	}
+	fmt.Printf("deploy: compose project, tailnet host and keyring service %s\n", opts.Name)
 	fmt.Printf("deploy: gateway config %s\n", p.gatewayPath)
 	if p.pins == "" {
 		fmt.Printf("deploy: images %s\n", p.imagesEnv)
@@ -140,7 +141,7 @@ func apply(ctx context.Context, opts Options, p plan) error {
 	}); err != nil {
 		return err
 	}
-	if err := setComposeEnv(p); err != nil {
+	if err := setComposeEnv(opts, p); err != nil {
 		return err
 	}
 	if p.smokeSystemOne {
@@ -148,21 +149,22 @@ func apply(ctx context.Context, opts Options, p plan) error {
 			return err
 		}
 	}
-	if err := secrets.Export(opts.App, p.secretNames, opts.EnvDeploy); err != nil {
+	if err := secrets.Export(opts.Name, p.secretNames, opts.EnvDeploy); err != nil {
 		return err
 	}
 	fmt.Printf("export-env: wrote %s\n", opts.EnvDeploy)
 
 	cc := compose.Client{
+		Project:     opts.Name,
 		ComposeFile: opts.ComposeFile,
 		EnvFiles:    []string{p.imagesEnv, opts.EnvDeploy},
 	}
 	if err := startStack(ctx, opts, p, cc); err != nil {
-		health.DumpGateway()
+		health.DumpGateway(cc)
 		return err
 	}
 	if err := health.Poll(ctx, opts.HealthURL, opts.HealthTimeout); err != nil {
-		health.DumpGateway()
+		health.DumpGateway(cc)
 		return err
 	}
 	if opts.SkipSmoke {
@@ -171,15 +173,18 @@ func apply(ctx context.Context, opts Options, p plan) error {
 		return nil
 	}
 	if err := runSmoke(ctx, opts, p); err != nil {
-		health.DumpGateway()
+		health.DumpGateway(cc)
 		return fmt.Errorf("deploy: smoke: %w", err)
 	}
 	fmt.Printf("deploy ok: %s/health (smoke passed)\n", opts.HealthURL)
 	return nil
 }
 
-func setComposeEnv(p plan) error {
+func setComposeEnv(opts Options, p plan) error {
 	if err := setProcessEnv("POLYPUS_HOST_CONFIG", paths.DockerBindPath(p.gatewayPath)); err != nil {
+		return err
+	}
+	if err := setProcessEnv("POLYPUS_TS_HOSTNAME", opts.Name); err != nil {
 		return err
 	}
 	if !p.routers {
@@ -216,6 +221,11 @@ func startStack(ctx context.Context, opts Options, p plan, cc compose.Client) er
 		return err
 	}
 	fmt.Println("deploy: recreate gateway, otelcol, and tailscale (reload bind-mounted config)")
+	if opts.PruneFunc == nil {
+		opts.PruneFunc = func(ctx context.Context, gatewayPath string) error {
+			return overlay.PruneContainer(ctx, gatewayPath, overlay.ContainerConfig{Compose: cc})
+		}
+	}
 	return postComposeUpReload(ctx, opts, p.gatewayPath, cc.RecreateServices, bindMountReloadServices...)
 }
 
@@ -262,11 +272,10 @@ func runPostUpOverlayPrune(ctx context.Context, opts Options, gatewayPath string
 		fmt.Println("deploy: skip overlay prune (--skip-overlay-prune)")
 		return nil
 	}
-	prune := opts.PruneFunc
-	if prune == nil {
-		prune = overlay.PruneContainerDefault
+	if opts.PruneFunc == nil {
+		return fmt.Errorf("deploy: overlay prune: no prune function")
 	}
-	if err := prune(ctx, gatewayPath); err != nil {
+	if err := opts.PruneFunc(ctx, gatewayPath); err != nil {
 		return fmt.Errorf("deploy: overlay prune: %w", err)
 	}
 	return nil

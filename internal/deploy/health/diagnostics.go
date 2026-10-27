@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/deploy/compose"
 	"github.com/behaviorengineering/polypus/internal/deploy/execx"
 )
 
@@ -12,24 +13,22 @@ import (
 // after a failure, often once the deploy's own deadline has passed.
 const dumpBudget = 30 * time.Second
 
-// DumpGateway prints gateway and Switchyard container logs and state for CI debugging.
-func DumpGateway() {
+// DumpGateway prints the gateway and Switchyard logs and state in cc's project,
+// for CI debugging.
+func DumpGateway(cc compose.Client) {
 	ctx, cancel := context.WithTimeout(context.Background(), dumpBudget)
 	defer cancel()
-	dumpContainer(ctx, "polypus-gateway")
-	dumpContainer(ctx, "polypus-switchyard")
-}
-
-func dumpContainer(ctx context.Context, name string) {
-	fmt.Printf("polypus deploy: %s diagnostics (last 120 log lines):\n", name)
-	out, err := execx.OutputContext(ctx, "docker", []string{"logs", name, "--tail", "120"}, nil)
-	fmt.Printf("%s\n", out)
-	if err != nil {
-		fmt.Printf("docker logs %s: %v\n", name, err)
+	for _, service := range []string{"gateway", "switchyard"} {
+		fmt.Printf("polypus deploy: %s diagnostics (last 120 log lines):\n", service)
+		out, err := execx.OutputContext(ctx, "docker", cc.Args("logs", "--no-color", "--tail", "120", service), nil)
+		fmt.Printf("%s\n", out)
+		if err != nil {
+			fmt.Printf("docker compose logs %s: %v\n", service, err)
+		}
 	}
-	state, err := execx.OutputContext(ctx, "docker", []string{"inspect", name, "--format", "State={{json .State}}"}, nil)
+	state, err := execx.OutputContext(ctx, "docker", cc.Args("ps", "--all", "gateway", "switchyard"), nil)
 	if err != nil {
-		fmt.Printf("docker inspect %s: %v\n", name, err)
+		fmt.Printf("docker compose ps: %v\n", err)
 		return
 	}
 	fmt.Printf("%s\n", state)

@@ -14,29 +14,24 @@ import (
 )
 
 const (
-	DefaultGatewayContainer = "polypus-gateway"
-	DefaultOverlayPath      = "/var/lib/polypus/state/models-allow-overlay.yaml"
-	dockerSubcommandExec    = "exec"
+	// DefaultService is the gateway's compose service.
+	DefaultService = "gateway"
+	// DefaultOverlayPath is the models allow overlay inside the gateway container.
+	DefaultOverlayPath = "/var/lib/polypus/state/models-allow-overlay.yaml"
 )
 
-// ContainerConfig names the gateway container and overlay path inside it.
+// ContainerConfig names the environment's compose project, the gateway service in
+// it, and the overlay path inside that service's container.
 type ContainerConfig struct {
-	Container   string
+	Compose     compose.Client
+	Service     string
 	OverlayPath string
-}
-
-// DefaultContainerConfig returns homelab deploy defaults.
-func DefaultContainerConfig() ContainerConfig {
-	return ContainerConfig{
-		Container:   DefaultGatewayContainer,
-		OverlayPath: DefaultOverlayPath,
-	}
 }
 
 // PruneContainer reads overlay YAML from the running gateway, prunes git duplicates, and writes back.
 func PruneContainer(ctx context.Context, gatewayYAMLPath string, cfg ContainerConfig) error {
-	if cfg.Container == "" {
-		cfg = DefaultContainerConfig()
+	if cfg.Service == "" {
+		cfg.Service = DefaultService
 	}
 	if cfg.OverlayPath == "" {
 		cfg.OverlayPath = DefaultOverlayPath
@@ -64,7 +59,7 @@ func PruneContainer(ctx context.Context, gatewayYAMLPath string, cfg ContainerCo
 }
 
 func readOverlayFromContainer(ctx context.Context, cfg ContainerConfig) (File, bool, error) {
-	args := []string{dockerSubcommandExec, cfg.Container, "cat", cfg.OverlayPath}
+	args := cfg.Compose.Args("exec", "-T", cfg.Service, "cat", cfg.OverlayPath)
 	var out []byte
 	var missingFile bool
 	err := outbound.Run(ctx, outbound.DepDockerDaemon, func() error {
@@ -138,9 +133,9 @@ func writeOverlayToContainer(ctx context.Context, cfg ContainerConfig, file File
 		return fmt.Errorf("overlay: close temp: %w", err)
 	}
 	remoteTmp := cfg.OverlayPath + ".tmp"
-	cpArgs := []string{"cp", hostPath, cfg.Container + ":" + remoteTmp}
-	mvArgs := []string{dockerSubcommandExec, cfg.Container, "mv", remoteTmp, cfg.OverlayPath}
-	chmodArgs := []string{dockerSubcommandExec, cfg.Container, "chmod", "600", cfg.OverlayPath}
+	cpArgs := cfg.Compose.Args("cp", hostPath, cfg.Service+":"+remoteTmp)
+	mvArgs := cfg.Compose.Args("exec", "-T", cfg.Service, "mv", remoteTmp, cfg.OverlayPath)
+	chmodArgs := cfg.Compose.Args("exec", "-T", cfg.Service, "chmod", "600", cfg.OverlayPath)
 	return outbound.Run(ctx, outbound.DepDockerDaemon, func() error {
 		if err := execx.RunContext(ctx, "docker", cpArgs, nil); err != nil {
 			if compose.DockerExecRetryable(err) {
@@ -187,9 +182,4 @@ func equalAllow(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-// PruneContainerDefault is a convenience wrapper for deploy.
-func PruneContainerDefault(ctx context.Context, gatewayYAMLPath string) error {
-	return PruneContainer(ctx, gatewayYAMLPath, DefaultContainerConfig())
 }

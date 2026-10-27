@@ -9,18 +9,25 @@ import (
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
-// Client runs docker compose for homelab deploy.
+// Client runs docker compose for one environment's project.
 type Client struct {
+	// Project is the compose project name (-p), polypus-<identifier>. It prefixes
+	// every container and named volume, so environments stay apart on one host.
+	Project     string
 	ComposeFile string
 	EnvFiles    []string
 }
 
-func (c Client) baseArgs() []string {
+// Args returns the docker arguments for compose subcommand sub in this project.
+func (c Client) Args(sub ...string) []string {
 	args := []string{"compose", "-f", c.ComposeFile}
+	if c.Project != "" {
+		args = append(args, "-p", c.Project)
+	}
 	for _, ef := range c.EnvFiles {
 		args = append(args, "--env-file", ef)
 	}
-	return args
+	return append(args, sub...)
 }
 
 func (c Client) env() []string {
@@ -45,8 +52,7 @@ func (c Client) runCompose(ctx context.Context, args []string) error {
 
 // Up runs docker compose up -d.
 func (c Client) Up(ctx context.Context) error {
-	args := append(c.baseArgs(), "up", "-d")
-	return c.runCompose(ctx, args)
+	return c.runCompose(ctx, c.Args("up", "-d"))
 }
 
 // RecreateServices runs docker compose up -d --force-recreate --no-deps for the given services.
@@ -54,7 +60,6 @@ func (c Client) RecreateServices(ctx context.Context, services ...string) error 
 	if len(services) == 0 {
 		return nil
 	}
-	args := append(c.baseArgs(), "up", "-d", "--force-recreate", "--no-deps")
-	args = append(args, services...)
-	return c.runCompose(ctx, args)
+	args := c.Args("up", "-d", "--force-recreate", "--no-deps")
+	return c.runCompose(ctx, append(args, services...))
 }

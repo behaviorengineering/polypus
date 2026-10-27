@@ -18,7 +18,7 @@ func (c Client) Pull(ctx context.Context) error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return fmt.Errorf("compose: docker not found on PATH (is Docker Desktop running?)")
 	}
-	args := append(c.baseArgs(), "pull")
+	args := c.Args("pull")
 	return outbound.Run(ctx, outbound.DepRegistry, func() error {
 		err := execx.RunContext(ctx, "docker", args, c.env())
 		if err == nil {
