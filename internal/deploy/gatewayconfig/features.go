@@ -4,11 +4,15 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// placeholderPattern matches a ${VAR} placeholder the gateway expands from env.
+var placeholderPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 type gatewayYAML struct {
 	SystemOneBackend capabilityBackend      `yaml:"systemone_backend"`
@@ -21,6 +25,7 @@ type capabilityBackend struct {
 
 type backendYAML struct {
 	Extension    string          `yaml:"extension"`
+	BaseURL      string          `yaml:"base_url"`
 	Auth         backendAuthYAML `yaml:"auth"`
 	Capabilities []string        `yaml:"capabilities"`
 	Models       modelsYAML      `yaml:"models"`
@@ -47,8 +52,9 @@ func SystemOneBackendEnabled(path string) (bool, error) {
 	return *cfg.SystemOneBackend.Enabled, nil
 }
 
-// SecretEnvNames returns deploy keyring env vars required for backends in gateway YAML,
-// appended after defaultNames (CF_*, TS_AUTHKEY). Order is stable and deduplicated.
+// SecretEnvNames returns deploy keyring env vars required for backends in gateway YAML
+// (each bearer_env, each ${VAR} in a base_url, and GEMINI_API_KEY for the Gemini
+// extension), appended after defaultNames (TS_AUTHKEY). Order is stable and deduplicated.
 func SecretEnvNames(path string, defaultNames []string) ([]string, error) {
 	cfg, err := loadGatewayYAML(path)
 	if err != nil {
@@ -64,6 +70,10 @@ func SecretEnvNames(path string, defaultNames []string) ([]string, error) {
 		b := cfg.Backends[id]
 		if env := strings.TrimSpace(b.Auth.BearerEnv); env != "" {
 			appendSecret(&out, seen, env)
+		}
+		// A ${VAR} in base_url (Cloudflare's ${CF_ACCOUNT_ID}) is needed as well.
+		for _, m := range placeholderPattern.FindAllStringSubmatch(b.BaseURL, -1) {
+			appendSecret(&out, seen, m[1])
 		}
 		ext := strings.TrimSpace(b.Extension)
 		if strings.EqualFold(ext, "gemini") {

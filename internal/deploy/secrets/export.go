@@ -2,14 +2,17 @@ package secrets
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
-// Default secret env names for homelab deploy.
-var DefaultNames = []string{"CF_AI_API_KEY", "CF_ACCOUNT_ID", "TS_AUTHKEY"}
+// DefaultNames are the secrets every deploy needs, whatever its backends: the
+// Tailscale auth key. Backend keys come from the gateway YAML.
+var DefaultNames = []string{"TS_AUTHKEY"}
 
-// Export resolves secrets via operatorconfig and writes dotenv.
+// Export resolves names from the environment, then keyring service app, and writes
+// them to outPath as dotenv. Each is required, and each is checked for shape.
 func Export(app string, names []string, outPath string) error {
 	if app == "" {
 		app = "polypus"
@@ -28,8 +31,10 @@ func Export(app string, names []string, outPath string) error {
 	if err := operatorconfig.WriteDotenv(outPath, secrets); err != nil {
 		return fmt.Errorf("secrets: %w", err)
 	}
-	if err := ValidateCloudflareFromEnv(); err != nil {
-		return err
+	if slices.Contains(names, cloudflareAccountID) {
+		if err := ValidateCloudflareAccountIDFromEnv(app); err != nil {
+			return err
+		}
 	}
-	return ValidateOptionalAPIKeysFromEnv(names)
+	return ValidateAPIKeysFromEnv(app, names)
 }

@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// homelab deploy default keyring names (mirror secrets.DefaultNames).
-var homelabDefaultSecretNames = []string{"CF_AI_API_KEY", "CF_ACCOUNT_ID", "TS_AUTHKEY"}
+// homelabDefaultSecretNames mirrors secrets.DefaultNames.
+var homelabDefaultSecretNames = []string{"TS_AUTHKEY"}
 
 func TestSystemOneBackendEnabled(t *testing.T) {
 	dir := t.TempDir()
