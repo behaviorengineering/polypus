@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -194,58 +195,96 @@ func TestRunChatOnly(t *testing.T) {
 	}
 }
 
-func TestRunRouterRequiresSelectedInAllowList(t *testing.T) {
-	var calls int
+// routerGateway writes a gateway YAML with a composed router (investigator) and a
+// passthrough router (turno).
+func routerGateway(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "gateway.yaml")
+	body := `routers:
+  investigator:
+    capability: chat
+    route:
+      type: stage_router
+      capable: cf_local/big
+      efficient: cf_local/small
+  turno:
+    capability: chat
+    route:
+      type: passthrough
+      target: openrouter/anthropic/claude-sonnet-5.5
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// routerServer answers chat as a gateway would: investigator names its leaf in the
+// routing header, turno reports only the upstream model in the body.
+func routerServer(t *testing.T, investigatorLeaf string, models *[]string) *httptest.Server {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
 			w.WriteHeader(http.StatusOK)
 		case "/v1/chat/completions":
-			calls++
 			body, _ := readBody(r)
 			w.Header().Set("Content-Type", "application/json")
-			if strings.Contains(body, "router/investigator") {
-				w.Header().Set("x-model-router-selected-model", defaultCapable)
-				_, _ = w.Write([]byte(`{"model":"` + defaultCapable + `","choices":[{"message":{"content":"ok"}}]}`))
-				return
+			switch {
+			case strings.Contains(body, "router/investigator"):
+				*models = append(*models, "router/investigator")
+				w.Header().Set("x-model-router-selected-model", investigatorLeaf)
+				_, _ = w.Write([]byte(`{"model":"` + investigatorLeaf + `","choices":[{"message":{"content":"ok"}}]}`))
+			case strings.Contains(body, "router/turno"):
+				*models = append(*models, "router/turno")
+				_, _ = w.Write([]byte(`{"model":"anthropic/claude-sonnet-5.5","choices":[{"message":{"content":"ok"}}]}`))
+			default:
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
 			}
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
+	return srv
+}
 
+func TestRunRoutersFromGateway(t *testing.T) {
+	var models []string
+	srv := routerServer(t, "cf_local/big", &models)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := Run(ctx, Options{BaseURL: srv.URL, WithRouter: true}); err != nil {
+	if err := Run(ctx, Options{BaseURL: srv.URL, WithRouter: true, GatewayConfig: routerGateway(t)}); err != nil {
 		t.Fatal(err)
 	}
-	if calls < 2 {
-		t.Fatalf("expected chat + router calls, got %d", calls)
+	if want := []string{"router/investigator", "router/turno"}; !slices.Equal(models, want) {
+		t.Fatalf("routers smoked %v want %v", models, want)
 	}
 }
 
 func TestRunRouterFailsWrongLeaf(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/health":
-			w.WriteHeader(http.StatusOK)
-		case "/v1/chat/completions":
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("x-model-router-selected-model", "cf_local/@cf/wrong")
-			_, _ = w.Write([]byte(`{"model":"cf_local/@cf/wrong","choices":[{"message":{"content":"ok"}}]}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-
+	var models []string
+	srv := routerServer(t, "cf_local/wrong", &models)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	err := Run(ctx, Options{BaseURL: srv.URL, WithRouter: true})
+	err := Run(ctx, Options{BaseURL: srv.URL, WithRouter: true, GatewayConfig: routerGateway(t)})
 	if err == nil || !strings.Contains(err.Error(), "not in allow-list") {
 		t.Fatalf("expected allow-list error, got %v", err)
+	}
+}
+
+func TestRunRouterNeedsRouters(t *testing.T) {
+	var models []string
+	srv := routerServer(t, "cf_local/big", &models)
+	path := filepath.Join(t.TempDir(), "gateway.yaml")
+	if err := os.WriteFile(path, []byte("backends: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	err := Run(ctx, Options{BaseURL: srv.URL, WithRouter: true, GatewayConfig: path})
+	if err == nil || !strings.Contains(err.Error(), "no chat routers") {
+		t.Fatalf("expected no-routers error, got %v", err)
 	}
 }
 

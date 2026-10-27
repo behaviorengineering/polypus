@@ -324,9 +324,6 @@ func runSmoke(ctx context.Context, opts Options, p plan) error {
 	return smoke.Run(smokeCtx, smoke.Options{
 		BaseURL:       opts.HealthURL,
 		ChatModel:     opts.SmokeChatModel,
-		RouterModel:   opts.SmokeRouterModel,
-		Capable:       opts.SmokeCapable,
-		Efficient:     opts.SmokeEfficient,
 		WithRouter:    p.services.Routers,
 		WithSystemOne: p.smokeSystemOne,
 		WithProviders: withProviders,

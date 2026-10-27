@@ -170,9 +170,6 @@ func newDeployRunCmd() *cobra.Command {
 			opts.SkipOverlayPrune = o.SkipOverlayPrune
 			opts.SmokeTimeout = o.SmokeTimeout
 			opts.SmokeChatModel = o.SmokeChatModel
-			opts.SmokeRouterModel = o.SmokeRouterModel
-			opts.SmokeCapable = o.SmokeCapable
-			opts.SmokeEfficient = o.SmokeEfficient
 			ctx, cancel := context.WithTimeout(cmd.Context(), opts.HealthTimeout+opts.SmokeTimeout+deployEnsureBudget)
 			defer cancel()
 			return deploy.Run(ctx, opts)
@@ -186,17 +183,14 @@ func newDeployRunCmd() *cobra.Command {
 	f.DurationVar(&o.HealthTimeout, "health-timeout", 120*time.Second, "health poll timeout")
 	f.BoolVar(&o.SkipSmoke, "skip-smoke", os.Getenv("POLYPUS_DEPLOY_SKIP_SMOKE") == "1", "skip the inference smoke after health (env POLYPUS_DEPLOY_SKIP_SMOKE=1)")
 	f.BoolVar(&o.SkipOverlayPrune, "skip-overlay-prune", os.Getenv("POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE") == "1", "skip the models allow overlay prune before the gateway is recreated (env POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE=1)")
-	bindSmokeModelFlags(cmd, &o.SmokeTimeout, &o.SmokeChatModel, &o.SmokeRouterModel, &o.SmokeCapable, &o.SmokeEfficient)
+	bindSmokeModelFlags(cmd, &o.SmokeTimeout, &o.SmokeChatModel)
 	return cmd
 }
 
-func bindSmokeModelFlags(cmd *cobra.Command, timeout *time.Duration, chat, router, capable, efficient *string) {
+func bindSmokeModelFlags(cmd *cobra.Command, timeout *time.Duration, chat *string) {
 	f := cmd.Flags()
 	f.DurationVar(timeout, "smoke-timeout", smoke.DefaultSmokeTimeout, "inference smoke timeout")
 	f.StringVar(chat, "smoke-chat-model", "", "direct chat smoke model")
-	f.StringVar(router, "smoke-router-model", "", "router smoke model")
-	f.StringVar(capable, "smoke-router-capable", "", "expected capable leaf for router smoke")
-	f.StringVar(efficient, "smoke-router-efficient", "", "expected efficient leaf for router smoke")
 }
 
 func newDeploySmokeCmd() *cobra.Command {
@@ -210,7 +204,7 @@ func newDeploySmokeCmd() *cobra.Command {
 		GroupID: groupInspect,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if o.WithProviders || o.WithSystemOne {
+			if o.WithProviders || o.WithSystemOne || o.WithRouter {
 				opts, err := t.options()
 				if err != nil {
 					return err
@@ -243,11 +237,11 @@ func newDeploySmokeCmd() *cobra.Command {
 	t.bind(cmd)
 	f := cmd.Flags()
 	f.StringVar(&o.BaseURL, "health-url", "", healthURLHelp)
-	f.BoolVar(&o.WithRouter, "with-router", os.Getenv("POLYPUS_SWITCHYARD") == "1", "also smoke router/investigator with the selected-leaf check")
+	f.BoolVar(&o.WithRouter, "with-router", os.Getenv("POLYPUS_SWITCHYARD") == "1", "also smoke each chat router in the gateway YAML, reporting the model that answered")
 	f.BoolVar(&o.WithSystemOne, "with-systemone", os.Getenv("POLYPUS_SMOKE_SYSTEMONE") == "1", "also smoke /v1/systemone for the gateway YAML's SystemOne backends")
 	f.BoolVar(&o.WithProviders, "with-providers", os.Getenv("POLYPUS_SMOKE_PROVIDERS") == "1", "smoke chat per backend in the gateway YAML (secret names from --env-deploy)")
 	f.StringVar(&envDeploy, "env-deploy", "", "dotenv with secret names for --with-providers (default: .env.deploy in the checkout)")
-	bindSmokeModelFlags(cmd, &timeout, &o.ChatModel, &o.RouterModel, &o.Capable, &o.Efficient)
+	bindSmokeModelFlags(cmd, &timeout, &o.ChatModel)
 	return cmd
 }
 
