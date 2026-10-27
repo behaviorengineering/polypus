@@ -47,6 +47,12 @@ type Environment struct {
 	Images string
 }
 
+// Name is polypus-<identifier>: the environment's compose project, Tailscale
+// hostname and keyring service.
+func (e Environment) Name() string {
+	return "polypus-" + e.Identifier
+}
+
 type fileConfig struct {
 	Identifier    string `yaml:"identifier"`
 	Tailnet       string `yaml:"tailnet"`

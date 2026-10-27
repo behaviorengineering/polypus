@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -56,6 +57,7 @@ func (t *deployTarget) options() (deploy.Options, error) {
 	}
 	opts := deploy.DefaultOptions(root)
 	opts.Environment = env
+	opts.Name = env.Name()
 	opts.GatewayConfig = env.Gateway
 	opts.PinsFile = env.Images
 	if t.images != "" {
@@ -74,7 +76,9 @@ with Docker Compose, for one environment: a config.yaml that names the environme
 and points at its gateway YAML. polypus deploy init writes a starting one under
 ~/.config/polypus/deploy/.
 
-Secrets come from the OS keyring (service "polypus"), never from files in a repo.
+Each environment is its own compose project, Tailscale host and keyring service,
+all named polypus-<identifier>. Secrets come from that keyring service, never from
+files in a repo.
 Images default to this build's release; pass --images to pin others.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -237,12 +241,20 @@ func newDeploySmokeCollectorCmd() *cobra.Command {
 	var o smoke.CollectorOptions
 	var timeout time.Duration
 	var withHyperDX bool
+	var config string
 	cmd := &cobra.Command{
 		Use:     "smoke-collector",
 		Short:   "OTLP fan-out smoke (otelcol to Phoenix and HyperDX)",
 		GroupID: groupInspect,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if o.HyperDXContainer == "" {
+				container, err := hyperDXContainer(config)
+				if err != nil {
+					return err
+				}
+				o.HyperDXContainer = container
+			}
 			opts := smoke.ResolveCollectorOptions(o)
 			if withHyperDX {
 				opts.SkipHyperDXVerify = false
@@ -262,9 +274,24 @@ func newDeploySmokeCollectorCmd() *cobra.Command {
 	f.StringVar(&o.PhoenixBaseURL, "phoenix-url", "", "Phoenix base URL")
 	f.StringVar(&o.PhoenixProject, "phoenix-project", "", "Phoenix project name")
 	f.StringVar(&o.HyperDXBaseURL, "hyperdx-url", "", "HyperDX base URL")
-	f.StringVar(&o.HyperDXContainer, "hyperdx-container", "", "docker container for the ClickHouse fallback")
+	f.StringVar(&o.HyperDXContainer, "hyperdx-container", "", "docker container for the ClickHouse fallback (default: the environment's, polypus-<identifier>-hyperdx-1)")
+	f.StringVar(&config, "config", "", "the environment's config.yaml, to name its HyperDX container (default: "+envconfig.ConfigEnv+", then ~/.config/polypus/deploy/config.yaml)")
 	f.BoolVar(&withHyperDX, "with-hyperdx", false, "verify HyperDX (skipped by default when POLYPUS_BASE_URL is a remote host)")
 	return cmd
+}
+
+// hyperDXContainer names the HyperDX container of the environment config finds:
+// compose names it <project>-<service>-1. With no environment it returns "", and
+// the collector smoke keeps its own default.
+func hyperDXContainer(config string) (string, error) {
+	env, err := envconfig.Discover(config)
+	if errors.Is(err, envconfig.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return env.Name() + "-hyperdx-1", nil
 }
 
 func newDeployVerifyImagesCmd() *cobra.Command {
@@ -358,6 +385,9 @@ func newDeployExportEnvCmd() *cobra.Command {
 				_, err := fmt.Fprintf(cmd.OutOrStdout(), "export-env: would write %s\n  secrets: %s\n", out, strings.Join(names, ","))
 				return err
 			}
+			if app == "" {
+				app = opts.Name
+			}
 			if err := secrets.Export(app, names, out); err != nil {
 				return err
 			}
@@ -367,7 +397,7 @@ func newDeployExportEnvCmd() *cobra.Command {
 	}
 	t.bind(cmd)
 	f := cmd.Flags()
-	f.StringVar(&app, "app", "polypus", "keyring service")
+	f.StringVar(&app, "app", "", "keyring service (default: polypus-<identifier>)")
 	f.StringVar(&out, "out", "", "dotenv path (default: .env.deploy in the checkout)")
 	f.StringVar(&secretCSV, "secrets", "", "comma-separated env names (default: from the gateway YAML)")
 	f.BoolVar(&dryRun, "dry-run", false, "print the path and secret names; write nothing")

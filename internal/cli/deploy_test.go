@@ -67,7 +67,7 @@ func TestDeployRunDryRunWritesNothing(t *testing.T) {
 		t.Fatalf("exit %d want 0\nstdout=%s\nstderr=%s", code, out, errOut)
 	}
 	gateway := filepath.Join(filepath.Dir(config), "gateway.yaml")
-	for _, want := range []string{"deploy: environment work (" + config + ")", "deploy: gateway config " + gateway, "deploy: images " + pins, "OPENROUTER_API_KEY", "dry run"} {
+	for _, want := range []string{"deploy: environment work (" + config + ")", "keyring service polypus-work", "deploy: gateway config " + gateway, "deploy: images " + pins, "OPENROUTER_API_KEY", "dry run"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, out)
 		}

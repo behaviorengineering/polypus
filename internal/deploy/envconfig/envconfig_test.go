@@ -210,3 +210,13 @@ func TestExampleIsNotDeployable(t *testing.T) {
 		t.Fatalf("err = %v, want the placeholder tailnet rejected", err)
 	}
 }
+
+func TestEnvironmentName(t *testing.T) {
+	env, err := Load(writeConfig(t, t.TempDir(), validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := env.Name(); got != "polypus-work" {
+		t.Fatalf("name %q want polypus-work", got)
+	}
+}

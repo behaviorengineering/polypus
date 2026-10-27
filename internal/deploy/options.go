@@ -26,8 +26,10 @@ type Options struct {
 	// Environment is the deploy environment the options came from.
 	Environment envconfig.Environment
 	// GatewayConfig is the environment's gateway YAML, bind-mounted as the Polypus config.
-	GatewayConfig    string
-	App              string
+	GatewayConfig string
+	// Name is polypus-<identifier>: the compose project, the Tailscale hostname and
+	// the keyring service that holds the environment's secrets.
+	Name             string
 	SecretNames      []string
 	SkipPull         bool
 	DryRun           bool
@@ -55,7 +57,7 @@ func DefaultOptions(root string) Options {
 		RepoPins:      filepath.Join(root, "images.env"),
 		ImagesEnv:     filepath.Join(root, ".env.images"),
 		EnvDeploy:     filepath.Join(root, ".env.deploy"),
-		App:           "polypus",
+		Name:          "polypus",
 		HealthURL:     "http://127.0.0.1:1320",
 		HealthTimeout: 120 * time.Second,
 		SmokeTimeout:  300 * time.Second,
