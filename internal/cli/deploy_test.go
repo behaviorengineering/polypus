@@ -5,12 +5,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
 )
 
 // deployFixture lays out a minimal Polypus checkout and environment: the files a
-// deploy plan reads, with no keyring or Docker involved.
-func deployFixture(t *testing.T) (root, gateway, pins string) {
+// deploy plan reads, with no keyring or Docker involved. The user config dir is
+// isolated so no test reads the developer's own environment.
+func deployFixture(t *testing.T) (root, config, pins string) {
 	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv(envconfig.ConfigEnv, "")
 	root = t.TempDir()
 	files := map[string]string{
 		"go.mod":                    "module example.com/polypus\n",
@@ -18,30 +23,31 @@ func deployFixture(t *testing.T) (root, gateway, pins string) {
 		"otelcol.config.yaml":       "receivers: {}\n",
 		"images.env":                "PHOENIX_IMAGE=arizephoenix/phoenix:version-5.8.0\n",
 	}
+	writeFiles(t, root, files)
+	env := t.TempDir()
+	pins = filepath.Join(env, "images.env")
+	writeFiles(t, env, map[string]string{
+		"config.yaml":  "identifier: work\ntailnet: corp.ts.net\ngateway: gateway.yaml\n",
+		"gateway.yaml": "backends:\n  openrouter:\n    base_url: https://openrouter.ai/api/v1\n    auth:\n      bearer_env: OPENROUTER_API_KEY\n",
+		"images.env": strings.Join([]string{
+			"POLYPUS_IMAGE=ghcr.io/behaviorengineering/polypus:0.3.0",
+			"SWITCHYARD_IMAGE=ghcr.io/behaviorengineering/polypus-switchyard:0.3.0",
+			"PHOENIX_IMAGE=arizephoenix/phoenix:version-5.8.0",
+			"HYPERDX_IMAGE=clickhouse/clickstack-local:2.10.0",
+			"TAILSCALE_IMAGE=tailscale/tailscale:v1.102.4",
+			"OTELCOL_IMAGE=otel/opentelemetry-collector-contrib:0.120.0",
+		}, "\n") + "\n",
+	})
+	return root, filepath.Join(env, "config.yaml"), pins
+}
+
+func writeFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
 	for name, body := range files {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	env := t.TempDir()
-	gateway = filepath.Join(env, "gateway.yaml")
-	gw := "backends:\n  openrouter:\n    base_url: https://openrouter.ai/api/v1\n    auth:\n      bearer_env: OPENROUTER_API_KEY\n"
-	if err := os.WriteFile(gateway, []byte(gw), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	pins = filepath.Join(env, "images.env")
-	body := strings.Join([]string{
-		"POLYPUS_IMAGE=ghcr.io/behaviorengineering/polypus:0.3.0",
-		"SWITCHYARD_IMAGE=ghcr.io/behaviorengineering/polypus-switchyard:0.3.0",
-		"PHOENIX_IMAGE=arizephoenix/phoenix:version-5.8.0",
-		"HYPERDX_IMAGE=clickhouse/clickstack-local:2.10.0",
-		"TAILSCALE_IMAGE=tailscale/tailscale:v1.102.4",
-		"OTELCOL_IMAGE=otel/opentelemetry-collector-contrib:0.120.0",
-	}, "\n") + "\n"
-	if err := os.WriteFile(pins, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return root, gateway, pins
 }
 
 func TestDeployBareShowsHelpExit2(t *testing.T) {
@@ -49,18 +55,19 @@ func TestDeployBareShowsHelpExit2(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit %d want 2", code)
 	}
-	if !strings.Contains(out, "run") || !strings.Contains(out, "export-env") {
+	if !strings.Contains(out, "run") || !strings.Contains(out, "init") {
 		t.Fatalf("deploy help missing subcommands: %q", out)
 	}
 }
 
 func TestDeployRunDryRunWritesNothing(t *testing.T) {
-	root, gateway, pins := deployFixture(t)
-	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--gateway-config", gateway, "--images", pins})
+	root, config, pins := deployFixture(t)
+	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config, "--images", pins})
 	if code != 0 {
 		t.Fatalf("exit %d want 0\nstdout=%s\nstderr=%s", code, out, errOut)
 	}
-	for _, want := range []string{"deploy: gateway config " + gateway, "deploy: images " + pins, "OPENROUTER_API_KEY", "dry run"} {
+	gateway := filepath.Join(filepath.Dir(config), "gateway.yaml")
+	for _, want := range []string{"deploy: environment work (" + config + ")", "deploy: gateway config " + gateway, "deploy: images " + pins, "OPENROUTER_API_KEY", "dry run"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, out)
 		}
@@ -72,9 +79,21 @@ func TestDeployRunDryRunWritesNothing(t *testing.T) {
 	}
 }
 
+func TestDeployRunFindsEnvironmentFromEnv(t *testing.T) {
+	root, config, pins := deployFixture(t)
+	t.Setenv(envconfig.ConfigEnv, config)
+	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--images", pins})
+	if code != 0 {
+		t.Fatalf("exit %d want 0\nstderr=%s", code, errOut)
+	}
+	if !strings.Contains(out, "deploy: environment work") {
+		t.Fatalf("stdout missing environment: %s", out)
+	}
+}
+
 func TestDeployRunDevBuildNeedsImages(t *testing.T) {
-	root, gateway, _ := deployFixture(t)
-	code, _, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--gateway-config", gateway})
+	root, config, _ := deployFixture(t)
+	code, _, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config})
 	if code != 1 {
 		t.Fatalf("exit %d want 1", code)
 	}
@@ -83,20 +102,20 @@ func TestDeployRunDevBuildNeedsImages(t *testing.T) {
 	}
 }
 
-func TestDeployRunNeedsGatewayConfig(t *testing.T) {
+func TestDeployRunNeedsEnvironment(t *testing.T) {
 	root, _, pins := deployFixture(t)
 	code, _, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--images", pins})
 	if code != 1 {
 		t.Fatalf("exit %d want 1", code)
 	}
-	if !strings.Contains(errOut, "--gateway-config") {
-		t.Fatalf("stderr should name --gateway-config: %q", errOut)
+	if !strings.Contains(errOut, "polypus deploy init") {
+		t.Fatalf("stderr should point at init: %q", errOut)
 	}
 }
 
 func TestDeployExportEnvDryRun(t *testing.T) {
-	root, gateway, _ := deployFixture(t)
-	code, out, errOut := captureRun([]string{"deploy", "export-env", "--dry-run", "--root", root, "--gateway-config", gateway})
+	root, config, _ := deployFixture(t)
+	code, out, errOut := captureRun([]string{"deploy", "export-env", "--dry-run", "--root", root, "--config", config})
 	if code != 0 {
 		t.Fatalf("exit %d want 0\nstderr=%s", code, errOut)
 	}
@@ -105,5 +124,31 @@ func TestDeployExportEnvDryRun(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".env.deploy")); !os.IsNotExist(err) {
 		t.Fatalf("dry run wrote .env.deploy (stat err %v)", err)
+	}
+}
+
+func TestDeployInit(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	dir := filepath.Join(xdg, "polypus", "deploy")
+
+	code, out, errOut := captureRun([]string{"deploy", "init", "--dry-run"})
+	if code != 0 || !strings.Contains(out, "would write") {
+		t.Fatalf("dry run: exit %d stdout=%s stderr=%s", code, out, errOut)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("dry run created %s", dir)
+	}
+
+	if code, out, _ = captureRun([]string{"deploy", "init"}); code != 0 || !strings.Contains(out, "wrote") {
+		t.Fatalf("first init: exit %d stdout=%s", code, out)
+	}
+	for _, name := range []string{"config.yaml", "gateway.yaml"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("init did not write %s: %v", name, err)
+		}
+	}
+	if code, out, _ = captureRun([]string{"deploy", "init"}); code != 0 || strings.Contains(out, "wrote") {
+		t.Fatalf("second init should keep both files: exit %d stdout=%s", code, out)
 	}
 }

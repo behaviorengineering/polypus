@@ -3,6 +3,7 @@ package gatewayconfig
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -147,4 +148,25 @@ func contains(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func TestSecretEnvNamesStableOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gateway.yaml")
+	yaml := "backends:\n" +
+		"  zeta:\n    auth:\n      bearer_env: ZETA_KEY\n" +
+		"  alpha:\n    auth:\n      bearer_env: ALPHA_KEY\n" +
+		"  mid:\n    auth:\n      bearer_env: MID_KEY\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"TS_AUTHKEY", "ALPHA_KEY", "MID_KEY", "ZETA_KEY"}
+	for range 5 {
+		got, err := SecretEnvNames(path, []string{"TS_AUTHKEY"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("names %v want %v", got, want)
+		}
+	}
 }

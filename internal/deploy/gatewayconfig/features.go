@@ -2,7 +2,9 @@ package gatewayconfig
 
 import (
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -57,7 +59,9 @@ func SecretEnvNames(path string, defaultNames []string) ([]string, error) {
 	for _, n := range out {
 		seen[n] = struct{}{}
 	}
-	for _, b := range cfg.Backends {
+	// Backends in id order, so the names (and the plan that prints them) are stable.
+	for _, id := range slices.Sorted(maps.Keys(cfg.Backends)) {
+		b := cfg.Backends[id]
 		if env := strings.TrimSpace(b.Auth.BearerEnv); env != "" {
 			appendSecret(&out, seen, env)
 		}

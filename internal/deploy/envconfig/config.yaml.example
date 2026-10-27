@@ -1,0 +1,19 @@
+# A polypus deploy environment. polypus deploy init writes this file; edit it here.
+# Paths are relative to this file's folder.
+
+# identifier names the environment's containers, tailnet host and keyring service:
+# lower-case letters, digits and hyphens, for example personal or work.
+identifier: personal
+
+# tailnet is your Tailscale MagicDNS suffix, used to reach the gateway for health
+# and smoke checks. Find it in the Tailscale admin console under DNS.
+tailnet: example.ts.net
+
+# observability runs the OTLP collector, Phoenix and HyperDX alongside the gateway.
+observability: false
+
+# gateway is the Polypus gateway YAML this environment deploys.
+gateway: gateway.yaml
+
+# images pins an images file instead of this release's own images (optional).
+# images: images.env

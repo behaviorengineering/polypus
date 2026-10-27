@@ -68,7 +68,7 @@ func TestCommandTreeNames(t *testing.T) {
 		t.Fatalf("admin-key children: got %v want %v", commandNames(adminKey.Commands()), wantAdmin)
 	}
 	deployCmd := root.Commands()[indexOf(root.Commands(), "deploy")]
-	wantDeploy := []string{"run", "smoke", "smoke-collector", "verify-images", "export-env"}
+	wantDeploy := []string{"init", "run", "smoke", "smoke-collector", "verify-images", "export-env"}
 	if !sameSet(commandNames(deployCmd.Commands()), wantDeploy) {
 		t.Fatalf("deploy children: got %v want %v", commandNames(deployCmd.Commands()), wantDeploy)
 	}

@@ -14,7 +14,7 @@ description: >-
 ## Start every task
 
 1. Confirm workspace: Polypus repo root (or this tree nested under `providers/polypus/` in a parent monorepo).
-2. For Compose deploy: use `polypus deploy` (`run`, `smoke`, `smoke-collector`, `verify-images`, `export-env`; start with `polypus deploy run --dry-run --gateway-config <environment gateway.yaml>`). The homelab still deploys from **gitlab.com/xynova/polypus-local** until it switches over; wire **operatorconfig** via `go list -m -f '{{.Dir}}' github.com/behaviorengineering/operatorconfig` and that module's `ai-copilots/BOOTSTRAP.md` (do not copy operatorconfig skill bodies here).
+2. For Compose deploy: use `polypus deploy` (`run`, `smoke`, `smoke-collector`, `verify-images`, `export-env`; start with `polypus deploy init`, set `tailnet:` in `~/.config/polypus/deploy/config.yaml`, then `polypus deploy run --dry-run`; `--config` or `POLYPUS_DEPLOY_CONFIG` picks another environment). The homelab still deploys from **gitlab.com/xynova/polypus-local** until it switches over; wire **operatorconfig** via `go list -m -f '{{.Dir}}' github.com/behaviorengineering/operatorconfig` and that module's `ai-copilots/BOOTSTRAP.md` (do not copy operatorconfig skill bodies here).
 3. Load shard when needed: [config-reference.md](config-reference.md), [troubleshooting.md](troubleshooting.md), [harness.md](harness.md), [thinking-policy.md](thinking-policy.md), [openai-compat.md](openai-compat.md), [windows-gitlab-deploy.md](windows-gitlab-deploy.md) (pointer to polypus-local + keyring).
 4. Run health before deep edits: `curl -sf http://127.0.0.1:1320/health | jq .` (upstream probe: `/health/backends`, which needs the gateway access key once a key exists)
 

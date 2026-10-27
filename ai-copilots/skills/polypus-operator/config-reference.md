@@ -8,7 +8,7 @@
 | 2 | `~/.config/polypus/config.yaml` (`$XDG_CONFIG_HOME/polypus/config.yaml` when set) |
 | 3 | `$POLYPUS_ROOT/config.yaml` or cwd `config.yaml` (dev fallback) |
 
-Bootstrap: `polypus init` or `go tool task init` (writes `~/.config/polypus/config.yaml` at mode `0600` when missing). Declare `secrets:` in config (env var names only); Polypus loads those from the OS keyring when unset. `polypus secret set` stores a value only if that name is already in `secrets:`. Env and `.env` still win at runtime. Omit `secrets:` for local-only stacks to avoid keyring access. Docker Compose deploy (`config.deploy.yaml.example`) omits `secrets:`; inject `CF_*` via compose env (runner `export-env` / SOPS), not the container keyring.
+Bootstrap: `polypus init` or `go tool task init` (writes `~/.config/polypus/config.yaml` at mode `0600` when missing). Declare `secrets:` in config (env var names only); Polypus loads those from the OS keyring when unset. `polypus secret set` stores a value only if that name is already in `secrets:`. Env and `.env` still win at runtime. Omit `secrets:` for local-only stacks to avoid keyring access. Docker Compose deploy (the gateway YAML `polypus deploy init` writes) omits `secrets:`; inject `CF_*` via compose env (runner `export-env` / SOPS), not the container keyring.
 
 CI: PRs run hermetic `go test -tags=integration` (temp config from `internal/smoke/integration`). Push to **main** runs live integration with `POLYPUS_SMOKE_LIVE=1` and `CF_AI_API_KEY` / `CF_ACCOUNT_ID` secrets.
 

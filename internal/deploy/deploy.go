@@ -111,6 +111,9 @@ func smokeSystemOne(gatewayPath string) (bool, error) {
 }
 
 func printPlan(opts Options, p plan) {
+	if opts.Environment.Path != "" {
+		fmt.Printf("deploy: environment %s (%s)\n", opts.Environment.Identifier, opts.Environment.Path)
+	}
 	fmt.Printf("deploy: gateway config %s\n", p.gatewayPath)
 	if p.pins == "" {
 		fmt.Printf("deploy: images %s\n", p.imagesEnv)

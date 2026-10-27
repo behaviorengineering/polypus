@@ -9,6 +9,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/buildinfo"
 	"github.com/behaviorengineering/polypus/internal/deploy"
+	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
 	"github.com/behaviorengineering/polypus/internal/deploy/images"
 	"github.com/behaviorengineering/polypus/internal/deploy/paths"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
@@ -23,17 +24,17 @@ const (
 )
 
 // deployTarget is the flags every deploy command shares: where the Polypus checkout
-// is, which gateway YAML the environment deploys, and which images it pins.
+// is, which environment it deploys, and which images it pins.
 type deployTarget struct {
-	root          string
-	gatewayConfig string
-	images        string
+	root   string
+	config string
+	images string
 }
 
 func (t *deployTarget) bind(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&t.root, "root", "", "Polypus checkout holding docker-compose.deploy.yml (default: found above the working directory)")
-	cmd.Flags().StringVar(&t.gatewayConfig, "gateway-config", "", "the environment's gateway YAML (required)")
-	cmd.Flags().StringVar(&t.images, "images", "", "the environment's pinned images file (default: this build's release images)")
+	cmd.Flags().StringVar(&t.config, "config", "", "the environment's config.yaml (default: "+envconfig.ConfigEnv+", then ~/.config/polypus/deploy/config.yaml)")
+	cmd.Flags().StringVar(&t.images, "images", "", "a pinned images file (default: the environment's images:, else this build's release images)")
 }
 
 func (t *deployTarget) options() (deploy.Options, error) {
@@ -49,9 +50,17 @@ func (t *deployTarget) options() (deploy.Options, error) {
 	if err != nil {
 		return deploy.Options{}, err
 	}
+	env, err := envconfig.Discover(t.config)
+	if err != nil {
+		return deploy.Options{}, err
+	}
 	opts := deploy.DefaultOptions(root)
-	opts.GatewayConfig = t.gatewayConfig
-	opts.PinsFile = t.images
+	opts.Environment = env
+	opts.GatewayConfig = env.Gateway
+	opts.PinsFile = env.Images
+	if t.images != "" {
+		opts.PinsFile = t.images
+	}
 	opts.Version = buildinfo.Version
 	return opts, nil
 }
@@ -61,7 +70,9 @@ func newDeployCmd() *cobra.Command {
 		Use:   "deploy",
 		Short: "Deploy Polypus with Docker Compose for an environment",
 		Long: `Deploy Polypus, Switchyard, the OTLP collector, Phoenix, HyperDX and Tailscale
-with Docker Compose, from an environment's gateway YAML.
+with Docker Compose, for one environment: a config.yaml that names the environment
+and points at its gateway YAML. polypus deploy init writes a starting one under
+~/.config/polypus/deploy/.
 
 Secrets come from the OS keyring (service "polypus"), never from files in a repo.
 Images default to this build's release; pass --images to pin others.`,
@@ -73,12 +84,58 @@ Images default to this build's release; pass --images to pin others.`,
 			return exitStatus(2)
 		},
 	}
+	cmd.AddCommand(newDeployInitCmd())
 	cmd.AddCommand(newDeployRunCmd())
 	cmd.AddCommand(newDeploySmokeCmd())
 	cmd.AddCommand(newDeploySmokeCollectorCmd())
 	cmd.AddCommand(newDeployVerifyImagesCmd())
 	cmd.AddCommand(newDeployExportEnvCmd())
 	return cmd
+}
+
+func newDeployInitCmd() *cobra.Command {
+	var force, dryRun bool
+	cmd := &cobra.Command{
+		Use:     "init",
+		Short:   "Write a starting environment under ~/.config/polypus/deploy/",
+		GroupID: groupSetup,
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			plan := envconfig.Init
+			if dryRun {
+				plan = envconfig.PlanInit
+			}
+			res, err := plan(force)
+			if err != nil {
+				return err
+			}
+			return writeInitResult(cmd, res, dryRun)
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite config.yaml and gateway.yaml when they exist")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what init would write; write nothing")
+	return cmd
+}
+
+func writeInitResult(cmd *cobra.Command, res envconfig.InitResult, dryRun bool) error {
+	verb := func(wrote bool) string {
+		switch {
+		case wrote && dryRun:
+			return "would write"
+		case wrote:
+			return "wrote"
+		default:
+			return "kept"
+		}
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), `Environment
+  config.yaml:   %s %s
+  gateway.yaml:  %s %s
+
+Next
+  Set tailnet (and identifier) in config.yaml, then: polypus deploy run --dry-run
+`, verb(res.WroteConfig), res.ConfigPath, verb(res.WroteGateway), res.GatewayPath)
+	return err
 }
 
 func newDeployRunCmd() *cobra.Command {
@@ -143,18 +200,16 @@ func newDeploySmokeCmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if o.WithProviders || o.WithSystemOne {
-				gw, err := paths.ResolveGatewayConfig(t.gatewayConfig)
-				if err != nil {
-					return err
-				}
-				o.GatewayConfig = gw
-			}
-			if o.WithProviders && strings.TrimSpace(envDeploy) == "" {
 				opts, err := t.options()
 				if err != nil {
 					return err
 				}
-				envDeploy = opts.EnvDeploy
+				if o.GatewayConfig, err = paths.ResolveGatewayConfig(opts.GatewayConfig); err != nil {
+					return err
+				}
+				if strings.TrimSpace(envDeploy) == "" {
+					envDeploy = opts.EnvDeploy
+				}
 			}
 			o.EnvDeploy = envDeploy
 			o.BaseURL = strings.TrimRight(o.BaseURL, "/")

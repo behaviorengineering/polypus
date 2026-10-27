@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
 )
 
 // Options configures one deploy of an environment.
@@ -21,6 +23,8 @@ type Options struct {
 	ImagesEnv string
 	Version   string
 	EnvDeploy string
+	// Environment is the deploy environment the options came from.
+	Environment envconfig.Environment
 	// GatewayConfig is the environment's gateway YAML, bind-mounted as the Polypus config.
 	GatewayConfig    string
 	App              string
