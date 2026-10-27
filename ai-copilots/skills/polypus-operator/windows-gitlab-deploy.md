@@ -7,7 +7,7 @@ Operator path for **Docker Compose** on a home runner (not Mac `go tool task ser
 - **Deploy repo:** [gitlab.com/xynova/polypus-local](https://gitlab.com/xynova/polypus-local) (private). The GitLab runner checks out this repo each job; you do not maintain a separate manual clone for updates.
 - **Product images:** `ghcr.io/behaviorengineering/polypus` and `polypus-switchyard` on GitHub `v*` tags (semver in GHCR, not `:latest` on homelab).
 - **Image pins:** committed `images.env` in polypus-local (gateway, switchyard, Phoenix, HyperDX). Renovate bumps observability images; deploy bumps Polypus/Switchyard from GitHub releases.
-- **Host config:** `%USERPROFILE%\.config\polypus\config.yaml` (Windows) or `~/.config/polypus/config.yaml` (macOS), seeded once from `internal/deploy/envconfig/gateway.yaml.example` (the gateway YAML `polypus deploy init` writes). Omit `secrets:`; inject `CF_*` via compose env from the OS keychain. Mac `polypus serve` still uses `secrets:` in the same user config path.
+- **Host config:** `%USERPROFILE%\.config\polypus\config.yaml` (Windows) or `~/.config/polypus/config.yaml` (macOS), with the homelab's own backends (Cloudflare among them). New environments start from the Digizoo default instead (OpenRouter only), which `polypus deploy init` writes. Omit `secrets:`; inject `CF_*` via compose env from the OS keychain. Mac `polypus serve` still uses `secrets:` in the same user config path.
 
 ## One-time on the host
 
