@@ -17,6 +17,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/deploy/routers"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
 	"github.com/behaviorengineering/polypus/internal/deploy/smoke"
+	"github.com/behaviorengineering/polypus/internal/deploy/tailnet"
 	"github.com/behaviorengineering/polypus/internal/deploy/tsserve"
 )
 
@@ -146,6 +147,10 @@ func printPlan(opts Options, p plan) {
 	}
 	fmt.Printf("deploy: compose project, tailnet host and keyring service %s\n", opts.Name)
 	fmt.Printf("deploy: gateway config %s\n", p.gatewayPath)
+	fmt.Printf("deploy: health and smoke at %s\n", opts.HealthURL)
+	if opts.Tailnet != "" {
+		fmt.Printf("deploy: checks this machine is on tailnet %s first\n", opts.Tailnet)
+	}
 	if p.pins == "" {
 		fmt.Printf("deploy: images %s\n", p.imagesEnv)
 	} else {
@@ -165,6 +170,12 @@ func printPlan(opts Options, p plan) {
 }
 
 func apply(ctx context.Context, opts Options, p plan) error {
+	if opts.Tailnet != "" {
+		if err := tailnet.Check(ctx, opts.Tailnet, opts.TailnetStatus); err != nil {
+			return fmt.Errorf("deploy: %w", err)
+		}
+		fmt.Printf("deploy: this machine is on tailnet %s\n", opts.Tailnet)
+	}
 	if p.pins != "" {
 		if err := images.WritePins(p.imagesEnv, p.pins); err != nil {
 			return err
