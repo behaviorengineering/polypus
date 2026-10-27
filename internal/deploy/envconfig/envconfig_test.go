@@ -220,3 +220,13 @@ func TestEnvironmentName(t *testing.T) {
 		t.Fatalf("name %q want polypus-work", got)
 	}
 }
+
+func TestEnvironmentGatewayURL(t *testing.T) {
+	env, err := Load(writeConfig(t, t.TempDir(), validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := env.GatewayURL(); got != "https://polypus-work.corp.ts.net" {
+		t.Fatalf("gateway URL %q", got)
+	}
+}

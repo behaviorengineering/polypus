@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
+	"github.com/behaviorengineering/polypus/internal/deploy/tailnet"
 )
 
 // Options configures one deploy of an environment.
@@ -31,11 +32,18 @@ type Options struct {
 	GatewayConfig string
 	// Name is polypus-<identifier>: the compose project, the Tailscale hostname and
 	// the keyring service that holds the environment's secrets.
-	Name             string
-	SecretNames      []string
-	SkipPull         bool
-	DryRun           bool
-	HealthURL        string
+	Name        string
+	SecretNames []string
+	SkipPull    bool
+	DryRun      bool
+	// HealthURL is the gateway's base URL for health and smoke checks: the
+	// environment's tailnet address unless overridden.
+	HealthURL string
+	// Tailnet, when set, is checked before the deploy changes anything: this
+	// machine must be on it to reach HealthURL.
+	Tailnet string
+	// TailnetStatus reads `tailscale status --json`; nil runs the tailscale CLI.
+	TailnetStatus    tailnet.StatusFunc
 	HealthTimeout    time.Duration
 	SkipSmoke        bool
 	SmokeTimeout     time.Duration
@@ -61,7 +69,6 @@ func DefaultOptions(root string) Options {
 		StateDir:      filepath.Join(root, ".deploy"),
 		EnvDeploy:     filepath.Join(root, ".env.deploy"),
 		Name:          "polypus",
-		HealthURL:     "http://127.0.0.1:1320",
 		HealthTimeout: 120 * time.Second,
 		SmokeTimeout:  300 * time.Second,
 	}

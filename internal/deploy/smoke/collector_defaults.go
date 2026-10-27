@@ -8,11 +8,15 @@ import (
 )
 
 // ResolveCollectorOptions fills empty OTLP and observability URLs from operator env.
-// When POLYPUS_BASE_URL points at a remote homelab host, observability UIs use plain
+// gatewayURL is the deployed gateway (empty reads POLYPUS_BASE_URL). When it is a
+// remote host, such as the environment's tailnet address, observability UIs use plain
 // http on tailnet TCP-forwarded ports (6006, 8080) and OTLP HTTP on :4318.
-func ResolveCollectorOptions(in CollectorOptions) CollectorOptions {
+func ResolveCollectorOptions(in CollectorOptions, gatewayURL string) CollectorOptions {
 	out := in
-	remoteHost, isRemote := polypusHomelabHost(os.Getenv("POLYPUS_BASE_URL"))
+	if strings.TrimSpace(gatewayURL) == "" {
+		gatewayURL = os.Getenv("POLYPUS_BASE_URL")
+	}
+	remoteHost, isRemote := polypusHomelabHost(gatewayURL)
 
 	if strings.TrimSpace(out.OTLPEndpoint) == "" {
 		out.OTLPEndpoint = firstNonEmpty(

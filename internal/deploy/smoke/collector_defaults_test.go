@@ -13,7 +13,7 @@ func TestResolveCollectorOptionsRemotePolypusBase(t *testing.T) {
 	t.Setenv("HYPERDX_BASE_URL", "")
 	t.Setenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", "")
 
-	out := ResolveCollectorOptions(CollectorOptions{})
+	out := ResolveCollectorOptions(CollectorOptions{}, "")
 	if out.OTLPEndpoint != "http://polypus.example.ts.net:4318" {
 		t.Fatalf("OTLPEndpoint = %q", out.OTLPEndpoint)
 	}
@@ -39,7 +39,7 @@ func TestResolveCollectorOptionsCoercesHTTPSObservabilityURLs(t *testing.T) {
 	out := ResolveCollectorOptions(CollectorOptions{
 		PhoenixBaseURL: "https://polypus.example.ts.net:6006",
 		HyperDXBaseURL: "https://polypus.example.ts.net:8080",
-	})
+	}, "")
 	if out.PhoenixBaseURL != "http://polypus.example.ts.net:6006" {
 		t.Fatalf("PhoenixBaseURL = %q", out.PhoenixBaseURL)
 	}
@@ -55,7 +55,7 @@ func TestResolveCollectorOptionsLoopbackUnchanged(t *testing.T) {
 	t.Setenv("PHOENIX_BASE_URL", "")
 	t.Setenv("HYPERDX_BASE_URL", "")
 
-	out := ResolveCollectorOptions(CollectorOptions{})
+	out := ResolveCollectorOptions(CollectorOptions{}, "")
 	if out.OTLPEndpoint != "" {
 		t.Fatalf("expected empty OTLP for loopback, got %q", out.OTLPEndpoint)
 	}

@@ -4,14 +4,14 @@
 # environments run side by side on one host.
 # Profiles: routers runs Switchyard; observability runs the OTLP collector, Phoenix and HyperDX.
 # polypus deploy picks them from the gateway YAML and the environment's observability switch.
+# No host ports: everything is reached over the tailnet through the tailscale service
+# (443 to the gateway; 4317, 4318, 6006 and 8080 to the observability services).
 # Usage: docker compose -f docker-compose.deploy.yml -p polypus-<identifier> --env-file .env.images --env-file .env.deploy up -d
 
 services:
   gateway:
     image: ${POLYPUS_IMAGE}
     restart: on-failure:5
-    ports:
-      - "127.0.0.1:1320:1320"
     environment:
       POLYPUS_HOST: "0.0.0.0"
       POLYPUS_PORT: "1320"
@@ -73,8 +73,6 @@ services:
     profiles: ["observability"]
     image: ${PHOENIX_IMAGE}
     restart: unless-stopped
-    ports:
-      - "${PHOENIX_PORT:-6006}:6006"
     environment:
       PHOENIX_WORKING_DIR: /data
     volumes:
@@ -84,8 +82,6 @@ services:
     profiles: ["observability"]
     image: ${HYPERDX_IMAGE}
     restart: unless-stopped
-    ports:
-      - "${HYPERDX_PORT:-8080}:8080"
     environment:
       CUSTOM_OTELCOL_CONFIG_FILE: /etc/otelcol-contrib/custom.config.yaml
     volumes:
@@ -99,9 +95,6 @@ services:
     image: ${OTELCOL_IMAGE}
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yaml"]
-    ports:
-      - "${OTELCOL_OTLP_GRPC_PORT:-4317}:4317"
-      - "${OTELCOL_OTLP_HTTP_PORT:-4318}:4318"
     volumes:
       - ./otelcol.config.yaml:/etc/otelcol/config.yaml:ro
     depends_on:

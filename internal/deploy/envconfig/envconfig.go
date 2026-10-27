@@ -53,6 +53,12 @@ func (e Environment) Name() string {
 	return "polypus-" + e.Identifier
 }
 
+// GatewayURL is the environment's gateway on the tailnet:
+// https://polypus-<identifier>.<tailnet>, served by its Tailscale container.
+func (e Environment) GatewayURL() string {
+	return "https://" + e.Name() + "." + e.Tailnet
+}
+
 type fileConfig struct {
 	Identifier    string `yaml:"identifier"`
 	Tailnet       string `yaml:"tailnet"`

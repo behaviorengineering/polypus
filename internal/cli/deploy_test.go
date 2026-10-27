@@ -67,7 +67,7 @@ func TestDeployRunDryRunWritesNothing(t *testing.T) {
 		t.Fatalf("exit %d want 0\nstdout=%s\nstderr=%s", code, out, errOut)
 	}
 	gateway := filepath.Join(filepath.Dir(config), "gateway.yaml")
-	for _, want := range []string{"deploy: environment work (" + config + ")", "keyring service polypus-work", "deploy: gateway config " + gateway, "deploy: images " + pins, "OPENROUTER_API_KEY", "dry run"} {
+	for _, want := range []string{"deploy: environment work (" + config + ")", "keyring service polypus-work", "health and smoke at https://polypus-work.corp.ts.net", "on tailnet corp.ts.net first", "deploy: gateway config " + gateway, "deploy: images " + pins, "OPENROUTER_API_KEY", "dry run"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, out)
 		}
@@ -173,5 +173,16 @@ func TestDeployRunPinsFollowObservability(t *testing.T) {
 	code, _, errOut = captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config, "--images", minimal})
 	if code != 1 || !strings.Contains(errOut, "PHOENIX_IMAGE") {
 		t.Fatalf("observability on needs the Phoenix pin: exit %d stderr=%s", code, errOut)
+	}
+}
+
+func TestDeployRunHealthURLOverrideSkipsTailnet(t *testing.T) {
+	root, config, pins := deployFixture(t)
+	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config, "--images", pins, "--health-url", "http://127.0.0.1:1320/"})
+	if code != 0 {
+		t.Fatalf("exit %d\nstderr=%s", code, errOut)
+	}
+	if !strings.Contains(out, "health and smoke at http://127.0.0.1:1320\n") || strings.Contains(out, "on tailnet") {
+		t.Fatalf("an explicit --health-url should be used as is, with no tailnet check:\n%s", out)
 	}
 }

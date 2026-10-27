@@ -19,9 +19,9 @@ import (
 )
 
 const (
-	deployJobTimeout    = 2 * time.Minute
-	deployEnsureBudget  = 25 * time.Minute
-	deployDefaultHealth = "http://127.0.0.1:1320"
+	deployJobTimeout   = 2 * time.Minute
+	deployEnsureBudget = 25 * time.Minute
+	healthURLHelp      = "gateway base URL (default: the environment's https://polypus-<identifier>.<tailnet>)"
 )
 
 // deployTarget is the flags every deploy command shares: where the Polypus checkout
@@ -58,6 +58,8 @@ func (t *deployTarget) options() (deploy.Options, error) {
 	opts := deploy.DefaultOptions(root)
 	opts.Environment = env
 	opts.Name = env.Name()
+	opts.HealthURL = env.GatewayURL()
+	opts.Tailnet = env.Tailnet
 	opts.GatewayConfig = env.Gateway
 	opts.PinsFile = env.Images
 	if t.images != "" {
@@ -77,7 +79,8 @@ and points at its gateway YAML. polypus deploy init writes a starting one under
 ~/.config/polypus/deploy/.
 
 Each environment is its own compose project, Tailscale host and keyring service,
-all named polypus-<identifier>. Secrets come from that keyring service, never from
+all named polypus-<identifier>. Nothing publishes host ports: the gateway is reached
+at https://polypus-<identifier>.<tailnet>, so this machine must be on that tailnet. Secrets come from that keyring service, never from
 files in a repo.
 Images default to this build's release; pass --images to pin others.`,
 		Args: cobra.NoArgs,
@@ -157,7 +160,11 @@ func newDeployRunCmd() *cobra.Command {
 			}
 			opts.SkipPull = o.SkipPull
 			opts.DryRun = o.DryRun
-			opts.HealthURL = strings.TrimRight(o.HealthURL, "/")
+			if url := strings.TrimRight(o.HealthURL, "/"); url != "" {
+				// An explicit URL is reached however the operator chose; skip the tailnet check.
+				opts.HealthURL = url
+				opts.Tailnet = ""
+			}
 			opts.HealthTimeout = o.HealthTimeout
 			opts.SkipSmoke = o.SkipSmoke
 			opts.SkipOverlayPrune = o.SkipOverlayPrune
@@ -175,7 +182,7 @@ func newDeployRunCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.BoolVar(&o.DryRun, "dry-run", false, "resolve and print the plan; write nothing and change no containers")
 	f.BoolVar(&o.SkipPull, "skip-pull", false, "skip docker compose pull")
-	f.StringVar(&o.HealthURL, "health-url", deployDefaultHealth, "gateway base URL")
+	f.StringVar(&o.HealthURL, "health-url", "", healthURLHelp)
 	f.DurationVar(&o.HealthTimeout, "health-timeout", 120*time.Second, "health poll timeout")
 	f.BoolVar(&o.SkipSmoke, "skip-smoke", os.Getenv("POLYPUS_DEPLOY_SKIP_SMOKE") == "1", "skip the inference smoke after health (env POLYPUS_DEPLOY_SKIP_SMOKE=1)")
 	f.BoolVar(&o.SkipOverlayPrune, "skip-overlay-prune", os.Getenv("POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE") == "1", "skip the models allow overlay prune before the gateway is recreated (env POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE=1)")
@@ -216,6 +223,13 @@ func newDeploySmokeCmd() *cobra.Command {
 				}
 			}
 			o.EnvDeploy = envDeploy
+			if o.BaseURL == "" {
+				opts, err := t.options()
+				if err != nil {
+					return err
+				}
+				o.BaseURL = opts.HealthURL
+			}
 			o.BaseURL = strings.TrimRight(o.BaseURL, "/")
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
@@ -228,7 +242,7 @@ func newDeploySmokeCmd() *cobra.Command {
 	}
 	t.bind(cmd)
 	f := cmd.Flags()
-	f.StringVar(&o.BaseURL, "health-url", deployDefaultHealth, "gateway base URL")
+	f.StringVar(&o.BaseURL, "health-url", "", healthURLHelp)
 	f.BoolVar(&o.WithRouter, "with-router", os.Getenv("POLYPUS_SWITCHYARD") == "1", "also smoke router/investigator with the selected-leaf check")
 	f.BoolVar(&o.WithSystemOne, "with-systemone", os.Getenv("POLYPUS_SMOKE_SYSTEMONE") == "1", "also smoke /v1/systemone for the gateway YAML's SystemOne backends")
 	f.BoolVar(&o.WithProviders, "with-providers", os.Getenv("POLYPUS_SMOKE_PROVIDERS") == "1", "smoke chat per backend in the gateway YAML (secret names from --env-deploy)")
@@ -248,14 +262,19 @@ func newDeploySmokeCollectorCmd() *cobra.Command {
 		GroupID: groupInspect,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if o.HyperDXContainer == "" {
-				container, err := hyperDXContainer(config)
-				if err != nil {
-					return err
-				}
-				o.HyperDXContainer = container
+			env, found, err := discoverOptional(config)
+			if err != nil {
+				return err
 			}
-			opts := smoke.ResolveCollectorOptions(o)
+			gatewayURL := ""
+			if found {
+				gatewayURL = env.GatewayURL()
+				if o.HyperDXContainer == "" {
+					// compose names it <project>-<service>-1.
+					o.HyperDXContainer = env.Name() + "-hyperdx-1"
+				}
+			}
+			opts := smoke.ResolveCollectorOptions(o, gatewayURL)
 			if withHyperDX {
 				opts.SkipHyperDXVerify = false
 			}
@@ -264,7 +283,7 @@ func newDeploySmokeCollectorCmd() *cobra.Command {
 			if err := smoke.RunCollector(ctx, opts); err != nil {
 				return err
 			}
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), "smoke-collector: ok")
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), "smoke-collector: ok")
 			return err
 		},
 	}
@@ -280,18 +299,17 @@ func newDeploySmokeCollectorCmd() *cobra.Command {
 	return cmd
 }
 
-// hyperDXContainer names the HyperDX container of the environment config finds:
-// compose names it <project>-<service>-1. With no environment it returns "", and
-// the collector smoke keeps its own default.
-func hyperDXContainer(config string) (string, error) {
+// discoverOptional loads the environment when one is found. With none, found is
+// false and the caller keeps its own defaults.
+func discoverOptional(config string) (envconfig.Environment, bool, error) {
 	env, err := envconfig.Discover(config)
 	if errors.Is(err, envconfig.ErrNotFound) {
-		return "", nil
+		return envconfig.Environment{}, false, nil
 	}
 	if err != nil {
-		return "", err
+		return envconfig.Environment{}, false, err
 	}
-	return env.Name() + "-hyperdx-1", nil
+	return env, true, nil
 }
 
 func newDeployVerifyImagesCmd() *cobra.Command {
