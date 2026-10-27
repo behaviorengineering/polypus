@@ -110,10 +110,18 @@ func AllowLists(path string) (map[string][]string, error) {
 	return out, nil
 }
 
-func loadGatewayYAML(path string) (*gatewayYAML, error) {
+func readGatewayYAML(path string) ([]byte, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // G304: path is operator-supplied gateway config from deploy
 	if err != nil {
 		return nil, fmt.Errorf("gatewayconfig: read %q: %w", path, err)
+	}
+	return data, nil
+}
+
+func loadGatewayYAML(path string) (*gatewayYAML, error) {
+	data, err := readGatewayYAML(path)
+	if err != nil {
+		return nil, err
 	}
 	var cfg gatewayYAML
 	if err := yaml.Unmarshal(data, &cfg); err != nil {

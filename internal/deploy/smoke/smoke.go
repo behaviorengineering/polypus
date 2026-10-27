@@ -13,20 +13,13 @@ import (
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
 )
 
-const (
-	defaultChatModel   = polypus.DefaultChatModel
-	defaultRouterModel = "router/investigator"
-	defaultCapable     = "cf_local/@cf/google/gemma-4-26b-a4b-it"
-	defaultEfficient   = "cf_local/@cf/zai-org/glm-4.7-flash"
-)
+const defaultChatModel = polypus.DefaultChatModel
 
 // Options configures homelab post-deploy smoke against a running gateway.
 type Options struct {
-	BaseURL        string
-	ChatModel      string
-	RouterModel    string
-	Capable        string
-	Efficient      string
+	BaseURL   string
+	ChatModel string
+	// WithRouter smokes every chat router in GatewayConfig.
 	WithRouter     bool
 	WithSystemOne  bool
 	SystemOneModel string
@@ -58,8 +51,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	if opts.WithRouter {
-		allowed := []string{opts.Capable, opts.Efficient}
-		if err := runChat(ctx, base, opts.RouterModel, true, allowed); err != nil {
+		if err := runRouterSmokes(ctx, base, opts.GatewayConfig); err != nil {
 			return err
 		}
 	}
@@ -79,15 +71,6 @@ func (o Options) withDefaults() Options {
 	}
 	if strings.TrimSpace(out.ChatModel) == "" {
 		out.ChatModel = envOr("POLYPUS_CHAT_SMOKE_MODEL", defaultChatModel)
-	}
-	if strings.TrimSpace(out.RouterModel) == "" {
-		out.RouterModel = envOr("POLYPUS_ROUTER_SMOKE_MODEL", defaultRouterModel)
-	}
-	if strings.TrimSpace(out.Capable) == "" {
-		out.Capable = envOr("POLYPUS_SMOKE_ROUTER_CAPABLE", defaultCapable)
-	}
-	if strings.TrimSpace(out.Efficient) == "" {
-		out.Efficient = envOr("POLYPUS_SMOKE_ROUTER_EFFICIENT", defaultEfficient)
 	}
 	if strings.TrimSpace(out.SystemOneModel) == "" {
 		out.SystemOneModel = envOr("POLYPUS_SYSTEMONE_SMOKE_MODEL", polypus.DefaultSystemOneModel)
@@ -115,6 +98,32 @@ func runChat(ctx context.Context, baseURL, model string, requireSelected bool, a
 	}
 	if err != nil {
 		return fmt.Errorf("smoke %s: %w", model, err)
+	}
+	return nil
+}
+
+// runRouterSmokes sends one chat through each chat router in the gateway YAML and
+// reports the model that answered. A composed router must answer with one of its
+// leaves; a passthrough router reports the upstream model only.
+func runRouterSmokes(ctx context.Context, base, gatewayConfig string) error {
+	if strings.TrimSpace(gatewayConfig) == "" {
+		return fmt.Errorf("smoke: gateway config required to find its routers")
+	}
+	targets, err := gatewayconfig.RouterSmokeTargets(gatewayConfig)
+	if err != nil {
+		return fmt.Errorf("smoke: routers: %w", err)
+	}
+	if len(targets) == 0 {
+		return fmt.Errorf("smoke: no chat routers in %s", gatewayConfig)
+	}
+	for _, t := range targets {
+		var allowed []string
+		if t.Composed {
+			allowed = t.Leaves
+		}
+		if err := runChat(ctx, base, t.Model, true, allowed); err != nil {
+			return err
+		}
 	}
 	return nil
 }

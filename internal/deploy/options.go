@@ -48,9 +48,6 @@ type Options struct {
 	SkipSmoke        bool
 	SmokeTimeout     time.Duration
 	SmokeChatModel   string
-	SmokeRouterModel string
-	SmokeCapable     string
-	SmokeEfficient   string
 	SkipOverlayPrune bool
 	PruneFunc        func(ctx context.Context, gatewayPath string) error
 }
