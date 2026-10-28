@@ -475,13 +475,9 @@ func TestProxyStreamDropWritesFailureDump(t *testing.T) {
 	}
 }
 
-const dualReasoningOracleSubstr = "both reasoning_content and reasoning"
-
-// TestLLMGoOracleDualReasoningAliasFromBifrostMarshal records the Muse Spark
-// composition failure: Polypus json.Marshal of a Bifrost chat object emits
-// OpenRouter's reasoning_content alias next to reasoning (same string, two
-// keys). The gateway forwards both. llm-go v0.3.5 treats that as malformed
-// and never surfaces content.
+// TestLLMGoOracleDualReasoningAliasFromBifrostMarshal records Muse Spark:
+// Bifrost marshal still emits both spellings, then the gateway drops
+// reasoning_content so llm-go v0.3.5 can parse content.
 func TestLLMGoOracleDualReasoningAliasFromBifrostMarshal(t *testing.T) {
 	reasoning := "hidden"
 	content := "visible"
@@ -512,14 +508,17 @@ func TestLLMGoOracleDualReasoningAliasFromBifrostMarshal(t *testing.T) {
 		t.Fatalf("intervention header=%q", got)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `"reasoning"`) || !strings.Contains(body, `"reasoning_content"`) {
-		t.Fatalf("gateway stripped a reasoning spelling:\n%s", body)
+	if !strings.Contains(body, `"reasoning"`) {
+		t.Fatalf("gateway dropped OpenAI reasoning:\n%s", body)
+	}
+	if strings.Contains(body, `"reasoning_content"`) {
+		t.Fatalf("gateway still emitted reasoning_content alias:\n%s", body)
 	}
 
 	text, _, terminal := parseSSEWithLLMGo(t, body, "")
-	requireOracleMalformed(t, terminal, dualReasoningOracleSubstr)
-	if text != "" {
-		t.Fatalf("llm-go must not surface content after dual-reasoning reject, got %q", text)
+	requireOracleEOF(t, terminal)
+	if text != content {
+		t.Fatalf("llm-go content=%q want %q body=%s", text, content, body)
 	}
 
 	completionJSON, err := json.Marshal(museSparkCompletion(reasoning, content))
@@ -533,10 +532,19 @@ func TestLLMGoOracleDualReasoningAliasFromBifrostMarshal(t *testing.T) {
 	if !choiceHasBothReasoningSpellings(completionJSON) {
 		t.Fatalf("non-stream marshal did not emit both spellings: %s", completionJSON)
 	}
-	genText, genErr := parseJSONWithLLMGo(t, string(completionJSON))
-	requireOracleMalformed(t, genErr, dualReasoningOracleSubstr)
-	if genText != "" {
-		t.Fatalf("Generate must not surface content after dual-reasoning reject, got %q", genText)
+	stripped, ok := stripReasoningAliasJSON(completionJSON)
+	if !ok {
+		t.Fatalf("strip did not rewrite: %s", completionJSON)
+	}
+	if choiceHasBothReasoningSpellings(stripped) {
+		t.Fatalf("strip left both spellings: %s", stripped)
+	}
+	genText, genErr := parseJSONWithLLMGo(t, string(stripped))
+	if genErr != nil {
+		t.Fatalf("llm-go after strip: %v body=%s", genErr, stripped)
+	}
+	if genText != content {
+		t.Fatalf("Generate content=%q want %q", genText, content)
 	}
 }
 
@@ -550,12 +558,15 @@ func TestLLMGoOracleDualReasoningProxyPassthrough(t *testing.T) {
 		"",
 	}, "\n")
 	san := proxySanitizeSSE(upstream)
-	if !strings.Contains(san, `"reasoning"`) || !strings.Contains(san, `"reasoning_content"`) {
-		t.Fatalf("proxy sanitizer stripped a reasoning spelling:\n%s", san)
+	if !strings.Contains(san, `"reasoning"`) {
+		t.Fatalf("proxy sanitizer dropped OpenAI reasoning:\n%s", san)
+	}
+	if strings.Contains(san, `"reasoning_content"`) {
+		t.Fatalf("proxy sanitizer left reasoning_content alias:\n%s", san)
 	}
 	rec := httptest.NewRecorder()
 	ctx := observability.WithInterventionState(context.Background())
-	_, err := copyOpenAIChatStreamWithOpts(ctx, rec, strings.NewReader(san), false, &streamCopyOpts{
+	_, err := copyOpenAIChatStreamWithOpts(ctx, rec, strings.NewReader(upstream), false, &streamCopyOpts{
 		responseWriter:   rec,
 		statusCode:       http.StatusOK,
 		delayWriteHeader: true,
@@ -566,17 +577,17 @@ func TestLLMGoOracleDualReasoningProxyPassthrough(t *testing.T) {
 	if got := rec.Header().Get(config.InterventionHeader); got != "reasoning_alias" {
 		t.Fatalf("proxy intervention header=%q", got)
 	}
-	text, _, terminal := parseSSEWithLLMGo(t, san, "")
-	requireOracleMalformed(t, terminal, dualReasoningOracleSubstr)
-	if text != "" {
-		t.Fatalf("llm-go must not surface content after dual-reasoning reject, got %q", text)
+	text, _, terminal := parseSSEWithLLMGo(t, rec.Body.String(), "")
+	requireOracleEOF(t, terminal)
+	if text != "visible" {
+		t.Fatalf("llm-go content=%q want visible body=%s", text, rec.Body.String())
 	}
 }
 
 // TestLLMGoOracleGemmaThinkingMergeFillsContent records the Gemma thinking
 // rewrite: empty content plus one reasoning_content spelling. Merge copies
-// the answer into content and llm-go can parse. Bifrost marshal of the same
-// thought still emits both spellings, so merge does not fix the alias reject.
+// the answer into content. Bifrost marshal of the same thought still emits
+// both spellings; stripReasoningAliasJSON then lets llm-go parse.
 func TestLLMGoOracleGemmaThinkingMergeFillsContent(t *testing.T) {
 	answer := "visible"
 	t.Run("one_spelling_merge_parses", func(t *testing.T) {
@@ -599,7 +610,7 @@ func TestLLMGoOracleGemmaThinkingMergeFillsContent(t *testing.T) {
 			t.Fatalf("content=%q want %q", got, answer)
 		}
 	})
-	t.Run("bifrost_marshal_still_dual_key_reject", func(t *testing.T) {
+	t.Run("bifrost_marshal_merge_then_strip_parses", func(t *testing.T) {
 		raw, err := json.Marshal(gemmaBifrostEmptyContent(answer))
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -611,13 +622,16 @@ func TestLLMGoOracleGemmaThinkingMergeFillsContent(t *testing.T) {
 		if !changed {
 			t.Fatalf("empty content must still merge: %s", raw)
 		}
-		if !choiceHasBothReasoningSpellings(fixed) {
-			t.Fatalf("merge must leave both spellings: %s", fixed)
+		stripped, ok := stripReasoningAliasJSON(fixed)
+		if !ok {
+			t.Fatalf("strip did not rewrite: %s", fixed)
 		}
-		got, genErr := parseJSONWithLLMGo(t, string(fixed))
-		requireOracleMalformed(t, genErr, dualReasoningOracleSubstr)
-		if got != "" {
-			t.Fatalf("llm-go must not surface merged content after dual-key reject, got %q", got)
+		got, genErr := parseJSONWithLLMGo(t, string(stripped))
+		if genErr != nil {
+			t.Fatalf("llm-go after merge+strip: %v body=%s", genErr, stripped)
+		}
+		if got != answer {
+			t.Fatalf("content=%q want %q", got, answer)
 		}
 	})
 }

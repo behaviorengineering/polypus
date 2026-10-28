@@ -114,6 +114,18 @@ func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtr
 	if fixed, ok := ensureStreamChoiceFinishReasonFromRoot(root); ok {
 		root = fixed
 		changed = true
+		if err := json.Unmarshal(root["choices"], &choices); err != nil {
+			return body, action, true
+		}
+	}
+
+	if stripDualReasoningAlias(choices) {
+		updated, err := json.Marshal(choices)
+		if err != nil {
+			return body, action, true
+		}
+		root["choices"] = updated
+		changed = true
 	}
 
 	if !changed {
@@ -248,6 +260,63 @@ func jsonFieldPresent(obj map[string]json.RawMessage, key string) bool {
 	return !isJSONNull(raw)
 }
 
+// stripReasoningAliasJSON drops reasoning_content when reasoning is also present.
+func stripReasoningAliasJSON(raw []byte) ([]byte, bool) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return raw, false
+	}
+	rawChoices, ok := root["choices"]
+	if !ok {
+		return raw, false
+	}
+	var choices []map[string]json.RawMessage
+	if err := json.Unmarshal(rawChoices, &choices); err != nil {
+		return raw, false
+	}
+	if !stripDualReasoningAlias(choices) {
+		return raw, false
+	}
+	updated, err := json.Marshal(choices)
+	if err != nil {
+		return raw, false
+	}
+	root["choices"] = updated
+	out, err := json.Marshal(root)
+	if err != nil {
+		return raw, false
+	}
+	return out, true
+}
+
+// stripDualReasoningAlias keeps OpenAI "reasoning" and deletes the OpenRouter alias.
+func stripDualReasoningAlias(choices []map[string]json.RawMessage) bool {
+	changed := false
+	for i := range choices {
+		for _, field := range []string{"delta", "message"} {
+			rawObj, ok := choices[i][field]
+			if !ok {
+				continue
+			}
+			var obj map[string]json.RawMessage
+			if err := json.Unmarshal(rawObj, &obj); err != nil {
+				continue
+			}
+			if !jsonFieldPresent(obj, "reasoning") || !jsonFieldPresent(obj, "reasoning_content") {
+				continue
+			}
+			delete(obj, "reasoning_content")
+			updated, err := json.Marshal(obj)
+			if err != nil {
+				continue
+			}
+			choices[i][field] = updated
+			changed = true
+		}
+	}
+	return changed
+}
+
 // streamCopyOpts configures delayed HTTP status for proxy SSE.
 type streamCopyOpts struct {
 	responseWriter   http.ResponseWriter
@@ -346,12 +415,13 @@ func (c *sseCopier) rewriteLine(line string, out *strings.Builder) {
 		return
 	}
 	original := []byte(data)
+	hadAlias := choiceHasBothReasoningSpellings(original)
 	sanitized, action, emit := sanitizeOpenAIStreamChunk(original, c.san, c.strip)
 	if !emit || action == streamSSEDrop {
 		recordProxyStreamChunk(c.ctx, original, action)
 		return
 	}
-	if choiceHasBothReasoningSpellings(sanitized) {
+	if hadAlias {
 		observability.RecordIntervention(c.ctx, observability.InterventionReasoningAlias)
 	}
 	if !c.strip && action == streamSSEForward && openAIStreamJSONEqual(original, sanitized) {

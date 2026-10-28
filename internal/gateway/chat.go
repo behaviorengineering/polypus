@@ -197,6 +197,9 @@ func (d chatDial) writeResponse(w http.ResponseWriter, r *http.Request, resp *ht
 		}
 		if choiceHasBothReasoningSpellings(raw) {
 			setIntervention(w, r.Context(), observability.InterventionReasoningAlias)
+			if stripped, ok := stripReasoningAliasJSON(raw); ok {
+				raw = stripped
+			}
 		}
 		if d.recordRouterSelectedModel {
 			observability.RecordDownstreamModel(r.Context(), extractRouterSelectedModel(resp.Header, raw))
