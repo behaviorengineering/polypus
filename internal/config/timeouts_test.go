@@ -72,6 +72,26 @@ func TestParseTimeoutsFileOverlay(t *testing.T) {
 	}
 }
 
+func TestResolveEmbedDefault(t *testing.T) {
+	to := DefaultTimeouts()
+	if got := to.ResolveEmbed(""); got != 15*time.Second {
+		t.Fatalf("default embed: %s", got)
+	}
+	if got := to.ResolveEmbed("45s"); got != 45*time.Second {
+		t.Fatalf("header: %s", got)
+	}
+	if got := to.ResolveEmbed("1s"); got != 5*time.Second {
+		t.Fatalf("clamp min: %s", got)
+	}
+	omitted, err := parseTimeoutsFile(timeoutsFile{Chat: "90s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if omitted.ResolveEmbed("") != 15*time.Second {
+		t.Fatalf("omitted yaml embed: %s", omitted.ResolveEmbed(""))
+	}
+}
+
 func TestResolveSpeechBucketsAndHeader(t *testing.T) {
 	to := DefaultTimeouts()
 	if got := to.ResolveSpeech(""); got != 180*time.Second {

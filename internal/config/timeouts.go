@@ -10,13 +10,16 @@ import (
 // TimeoutHeader is the optional client override (Go duration or integer seconds).
 const TimeoutHeader = "X-Polypus-Timeout"
 
+// InterventionHeader labels Polypus-owned rewrites or refuses on the response.
+const InterventionHeader = "X-Polypus-Intervention"
+
 const (
 	defaultTimeoutMin          = 5 * time.Second
 	defaultTimeoutMax          = 900 * time.Second
 	defaultTimeoutChat         = 120 * time.Second
 	defaultTimeoutChatThinking = 600 * time.Second
 	defaultTimeoutVision       = 300 * time.Second
-	defaultTimeoutEmbed        = 60 * time.Second
+	defaultTimeoutEmbed        = 15 * time.Second
 	defaultTimeoutSpeech       = 180 * time.Second
 	defaultTimeoutChatCF       = 60 * time.Second
 	// defaultStreamIdle is the longest gap allowed between chunks of a chat stream.

@@ -148,7 +148,7 @@ backends:
 #   chat: 120s
 #   chat_thinking: 600s
 #   vision: 300s
-#   embed: 60s
+#   embed: 15s
 #   speech: 180s
 #   stream_idle: 5m   # longest gap between chunks of a chat stream (also per backend)
 #   backends:

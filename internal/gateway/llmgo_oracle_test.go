@@ -4,9 +4,11 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -14,6 +16,10 @@ import (
 
 	llm "github.com/XiaoConstantine/llm-go"
 	"github.com/XiaoConstantine/llm-go/openai"
+	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
+	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/maximhq/bifrost/core/schemas"
 )
 
 func TestLLMGoModuleIsOfficialV035(t *testing.T) {
@@ -467,4 +473,280 @@ func TestProxyStreamDropWritesFailureDump(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 dump file, got %d", len(entries))
 	}
+}
+
+const dualReasoningOracleSubstr = "both reasoning_content and reasoning"
+
+// TestLLMGoOracleDualReasoningAliasFromBifrostMarshal records the Muse Spark
+// composition failure: Polypus json.Marshal of a Bifrost chat object emits
+// OpenRouter's reasoning_content alias next to reasoning (same string, two
+// keys). The gateway forwards both. llm-go v0.3.5 treats that as malformed
+// and never surfaces content.
+func TestLLMGoOracleDualReasoningAliasFromBifrostMarshal(t *testing.T) {
+	reasoning := "hidden"
+	content := "visible"
+	streamJSON, err := json.Marshal(museSparkStreamChunk(reasoning, content))
+	if err != nil {
+		t.Fatalf("marshal stream: %v", err)
+	}
+	if !choiceHasBothReasoningSpellings(streamJSON) {
+		t.Fatalf("Bifrost stream marshal did not emit both spellings: %s", streamJSON)
+	}
+
+	chunks := make(chan router.ChatStreamChunk, 2)
+	errCh := make(chan error, 1)
+	chunks <- router.ChatStreamChunk{OpenAIJSON: streamJSON}
+	stopJSON, err := json.Marshal(museSparkStreamStop())
+	if err != nil {
+		t.Fatalf("marshal stop: %v", err)
+	}
+	chunks <- router.ChatStreamChunk{OpenAIJSON: stopJSON}
+	close(chunks)
+	close(errCh)
+	rec := httptest.NewRecorder()
+	ctx := observability.WithInterventionState(context.Background())
+	if err := writeBifrostChatSSE(ctx, rec, chunks, errCh); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got := rec.Header().Get(config.InterventionHeader); got != "reasoning_alias" {
+		t.Fatalf("intervention header=%q", got)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"reasoning"`) || !strings.Contains(body, `"reasoning_content"`) {
+		t.Fatalf("gateway stripped a reasoning spelling:\n%s", body)
+	}
+
+	text, _, terminal := parseSSEWithLLMGo(t, body, "")
+	requireOracleMalformed(t, terminal, dualReasoningOracleSubstr)
+	if text != "" {
+		t.Fatalf("llm-go must not surface content after dual-reasoning reject, got %q", text)
+	}
+
+	completionJSON, err := json.Marshal(museSparkCompletion(reasoning, content))
+	if err != nil {
+		t.Fatalf("marshal completion: %v", err)
+	}
+	fixed, changed := mergeReasoningIntoContent(completionJSON)
+	if changed {
+		t.Fatalf("content was already set; merge must not rewrite: %s", fixed)
+	}
+	if !choiceHasBothReasoningSpellings(completionJSON) {
+		t.Fatalf("non-stream marshal did not emit both spellings: %s", completionJSON)
+	}
+	genText, genErr := parseJSONWithLLMGo(t, string(completionJSON))
+	requireOracleMalformed(t, genErr, dualReasoningOracleSubstr)
+	if genText != "" {
+		t.Fatalf("Generate must not surface content after dual-reasoning reject, got %q", genText)
+	}
+}
+
+func TestLLMGoOracleDualReasoningProxyPassthrough(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"id":"chat","model":"model","choices":[{"index":0,"delta":{"reasoning":"hidden","reasoning_content":"hidden","content":"visible"},"finish_reason":null}]}`,
+		"",
+		`data: {"id":"chat","model":"model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	san := proxySanitizeSSE(upstream)
+	if !strings.Contains(san, `"reasoning"`) || !strings.Contains(san, `"reasoning_content"`) {
+		t.Fatalf("proxy sanitizer stripped a reasoning spelling:\n%s", san)
+	}
+	rec := httptest.NewRecorder()
+	ctx := observability.WithInterventionState(context.Background())
+	_, err := copyOpenAIChatStreamWithOpts(ctx, rec, strings.NewReader(san), false, &streamCopyOpts{
+		responseWriter:   rec,
+		statusCode:       http.StatusOK,
+		delayWriteHeader: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Header().Get(config.InterventionHeader); got != "reasoning_alias" {
+		t.Fatalf("proxy intervention header=%q", got)
+	}
+	text, _, terminal := parseSSEWithLLMGo(t, san, "")
+	requireOracleMalformed(t, terminal, dualReasoningOracleSubstr)
+	if text != "" {
+		t.Fatalf("llm-go must not surface content after dual-reasoning reject, got %q", text)
+	}
+}
+
+// TestLLMGoOracleGemmaThinkingMergeFillsContent records the Gemma thinking
+// rewrite: empty content plus one reasoning_content spelling. Merge copies
+// the answer into content and llm-go can parse. Bifrost marshal of the same
+// thought still emits both spellings, so merge does not fix the alias reject.
+func TestLLMGoOracleGemmaThinkingMergeFillsContent(t *testing.T) {
+	answer := "visible"
+	t.Run("one_spelling_merge_parses", func(t *testing.T) {
+		raw := gemmaThinkingCompletionJSON(t, answer)
+		if choiceHasBothReasoningSpellings(raw) {
+			t.Fatalf("Gemma fixture must not emit both spellings: %s", raw)
+		}
+		fixed, changed := mergeReasoningIntoContent(raw)
+		if !changed {
+			t.Fatalf("empty content must merge from reasoning_content: %s", raw)
+		}
+		if choiceHasBothReasoningSpellings(fixed) {
+			t.Fatalf("merge must not add a second spelling: %s", fixed)
+		}
+		got, err := parseJSONWithLLMGo(t, string(fixed))
+		if err != nil {
+			t.Fatalf("llm-go after Gemma merge: %v body=%s", err, fixed)
+		}
+		if got != answer {
+			t.Fatalf("content=%q want %q", got, answer)
+		}
+	})
+	t.Run("bifrost_marshal_still_dual_key_reject", func(t *testing.T) {
+		raw, err := json.Marshal(gemmaBifrostEmptyContent(answer))
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !choiceHasBothReasoningSpellings(raw) {
+			t.Fatalf("Bifrost marshal must emit both spellings: %s", raw)
+		}
+		fixed, changed := mergeReasoningIntoContent(raw)
+		if !changed {
+			t.Fatalf("empty content must still merge: %s", raw)
+		}
+		if !choiceHasBothReasoningSpellings(fixed) {
+			t.Fatalf("merge must leave both spellings: %s", fixed)
+		}
+		got, genErr := parseJSONWithLLMGo(t, string(fixed))
+		requireOracleMalformed(t, genErr, dualReasoningOracleSubstr)
+		if got != "" {
+			t.Fatalf("llm-go must not surface merged content after dual-key reject, got %q", got)
+		}
+	})
+}
+
+func gemmaThinkingCompletionJSON(t *testing.T, answer string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"id":     "chat",
+		"object": "chat.completion",
+		"model":  "cf_local/@cf/google/gemma-4-26b-a4b-it",
+		"choices": []map[string]any{{
+			"index": 0,
+			"message": map[string]any{
+				"role":              "assistant",
+				"content":           "",
+				"reasoning_content": answer,
+			},
+			"finish_reason": "stop",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal Gemma fixture: %v", err)
+	}
+	return raw
+}
+
+func gemmaBifrostEmptyContent(answer string) *schemas.BifrostChatResponse {
+	empty := ""
+	stop := "stop"
+	return &schemas.BifrostChatResponse{
+		ID:     "chat",
+		Object: "chat.completion",
+		Model:  "cf_local/@cf/google/gemma-4-26b-a4b-it",
+		Choices: []schemas.BifrostResponseChoice{{
+			Index:        0,
+			FinishReason: &stop,
+			ChatNonStreamResponseChoice: &schemas.ChatNonStreamResponseChoice{
+				Message: &schemas.ChatMessage{
+					Role:    schemas.ChatMessageRoleAssistant,
+					Content: &schemas.ChatMessageContent{ContentStr: &empty},
+					ChatAssistantMessage: &schemas.ChatAssistantMessage{
+						Reasoning: &answer,
+					},
+				},
+			},
+		}},
+	}
+}
+
+func museSparkStreamChunk(reasoning, content string) *schemas.BifrostChatResponse {
+	return &schemas.BifrostChatResponse{
+		ID:     "chat",
+		Object: "chat.completion.chunk",
+		Model:  "openrouter/meta/muse-spark-1.3",
+		Choices: []schemas.BifrostResponseChoice{{
+			Index: 0,
+			ChatStreamResponseChoice: &schemas.ChatStreamResponseChoice{
+				Delta: &schemas.ChatStreamResponseChoiceDelta{
+					Reasoning: &reasoning,
+					Content:   &content,
+				},
+			},
+		}},
+	}
+}
+
+func museSparkStreamStop() *schemas.BifrostChatResponse {
+	stop := "stop"
+	return &schemas.BifrostChatResponse{
+		ID:     "chat",
+		Object: "chat.completion.chunk",
+		Model:  "openrouter/meta/muse-spark-1.3",
+		Choices: []schemas.BifrostResponseChoice{{
+			Index:        0,
+			FinishReason: &stop,
+			ChatStreamResponseChoice: &schemas.ChatStreamResponseChoice{
+				Delta: &schemas.ChatStreamResponseChoiceDelta{},
+			},
+		}},
+	}
+}
+
+func museSparkCompletion(reasoning, content string) *schemas.BifrostChatResponse {
+	stop := "stop"
+	return &schemas.BifrostChatResponse{
+		ID:     "chat",
+		Object: "chat.completion",
+		Model:  "openrouter/meta/muse-spark-1.3",
+		Choices: []schemas.BifrostResponseChoice{{
+			Index:        0,
+			FinishReason: &stop,
+			ChatNonStreamResponseChoice: &schemas.ChatNonStreamResponseChoice{
+				Message: &schemas.ChatMessage{
+					Role:    schemas.ChatMessageRoleAssistant,
+					Content: &schemas.ChatMessageContent{ContentStr: &content},
+					ChatAssistantMessage: &schemas.ChatAssistantMessage{
+						Reasoning: &reasoning,
+					},
+				},
+			},
+		}},
+	}
+}
+
+func parseJSONWithLLMGo(t *testing.T, body string) (text string, terminal error) {
+	t.Helper()
+	client, err := openai.New(openai.Config{
+		Model:   "model",
+		BaseURL: "http://example.com/v1",
+		HTTPClient: &http.Client{Transport: staticStreamRoundTrip{
+			status:      http.StatusOK,
+			contentType: "application/json",
+			body:        body,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("openai.New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.Generate(ctx, llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.Part{{Text: "hi"}}}},
+	})
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, part := range resp.Message.Content {
+		b.WriteString(part.Text)
+	}
+	return b.String(), nil
 }

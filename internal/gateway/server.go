@@ -28,6 +28,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // shared holds dependencies used by capability handlers.
@@ -550,11 +551,16 @@ func (s *shared) writeErrorJSON(w http.ResponseWriter, status int, err error, pr
 	if status >= http.StatusInternalServerError {
 		s.log.Warn("polypus: request failed", "status", status, "err", err)
 	}
-	s.writeJSON(w, status, openaiErrorBody{Error: openaiError{
+	body := openaiErrorBody{Error: openaiError{
 		Message: prefix + derrors.PublicMessage(err),
 		Type:    openaiErrorType(status),
 		Code:    string(derrors.CodeOf(err)),
-	}})
+	}}
+	if intervention := derrors.Field(err, derrors.FieldIntervention); intervention != "" {
+		joinInterventionHeader(w, intervention)
+		body.Polypus = &polypusFailureBody{Intervention: intervention}
+	}
+	s.writeJSON(w, status, body)
 }
 
 // openaiErrorType maps a status to the OpenAI error type clients switch on.
@@ -595,6 +601,7 @@ func (s *shared) writeUpstreamDialError(w http.ResponseWriter, err error, prefix
 }
 
 func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
+	var dialUpstream string
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, embedMaxBody))
 	if err != nil {
 		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "read body"))
@@ -606,14 +613,24 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", observability.LLMSpanAttrs{
+		Model: model,
+	})
+	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
+	r = r.WithContext(ctx)
+
 	reg := h.router.Registry()
 	cfg := reg.Config()
 	if cfg.EffectiveEmbedBackend() == "" {
-		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveEmbeddings", "no embed backend configured"))
+		err = derrors.New(derrors.CodeNotReady, "gateway.serveEmbeddings", "no embed backend configured").
+			With(derrors.FieldIntervention, string(observability.InterventionEmbedCapabilityMissing))
+		recordInterventionFromError(ctx, err)
+		h.writeHandlerError(w, err)
 		return
 	}
 	backendID, downstream, err := reg.ResolveEmbed(model)
 	if err != nil {
+		recordInterventionFromError(ctx, err)
 		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "resolve backend"))
 		return
 	}
@@ -627,17 +644,17 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	backendURL := t.url
+	span.SetAttributes(
+		attribute.String("polypus.backend_id", backendID),
+		attribute.String("polypus.backend_url", backendURL),
+		attribute.String("polypus.downstream_model", downstream),
+	)
 	rewritten, err := withBodyModel("gateway.serveEmbeddings", body, downstream)
 	if err != nil {
 		h.writeHandlerError(w, err)
 		return
 	}
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", observability.LLMSpanAttrs{
-		Model: model, BackendID: backendID, BackendURL: backendURL, Downstream: downstream,
-	})
-	dialUpstream := backendID
-	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
-	r = r.WithContext(ctx)
+	dialUpstream = backendID
 	hop := h.timeouts.ResolveEmbed(r.Header.Get(config.TimeoutHeader))
 	err = h.upstreams.Execute(backendID, func() error {
 		if h.router.UsesBifrost(backendID) {

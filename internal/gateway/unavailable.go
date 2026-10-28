@@ -8,8 +8,9 @@ import (
 )
 
 type polypusFailureBody struct {
-	Failure        polypusFailureMeta  `json:"failure"`
+	Failure        *polypusFailureMeta `json:"failure,omitempty"`
 	CircuitBreaker *polypusBreakerMeta `json:"circuit_breaker,omitempty"`
+	Intervention   string              `json:"intervention,omitempty"`
 }
 
 type polypusFailureMeta struct {
@@ -33,7 +34,7 @@ func (s *shared) writeUnavailableError(w http.ResponseWriter, err error, message
 			Code:    cls.Layer,
 		},
 		Polypus: &polypusFailureBody{
-			Failure: polypusFailureMeta{
+			Failure: &polypusFailureMeta{
 				Layer:    cls.Layer,
 				Upstream: cls.Upstream,
 			},

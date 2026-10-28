@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 // streamSSEAction describes how the gateway treated one OpenAI chat stream chunk.
@@ -200,16 +203,73 @@ func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action strea
 	if action != streamSSEDrop {
 		return
 	}
+	observability.RecordIntervention(ctx, observability.InterventionSSEDrop)
 	idx := nextStreamChunkIndex(ctx)
 	dumpIllegalStreamChunk(ctx, idx, openaiJSON, nil)
 }
 
+// choiceHasBothReasoningSpellings reports OpenAI JSON with both reasoning keys on a delta or message.
+func choiceHasBothReasoningSpellings(raw []byte) bool {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return false
+	}
+	rawChoices, ok := root["choices"]
+	if !ok {
+		return false
+	}
+	var choices []map[string]json.RawMessage
+	if err := json.Unmarshal(rawChoices, &choices); err != nil {
+		return false
+	}
+	for _, ch := range choices {
+		for _, field := range []string{"delta", "message"} {
+			rawObj, ok := ch[field]
+			if !ok {
+				continue
+			}
+			var obj map[string]json.RawMessage
+			if err := json.Unmarshal(rawObj, &obj); err != nil {
+				continue
+			}
+			if jsonFieldPresent(obj, "reasoning") && jsonFieldPresent(obj, "reasoning_content") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func jsonFieldPresent(obj map[string]json.RawMessage, key string) bool {
+	raw, ok := obj[key]
+	if !ok {
+		return false
+	}
+	return !isJSONNull(raw)
+}
+
+// streamCopyOpts configures delayed HTTP status for proxy SSE.
+type streamCopyOpts struct {
+	responseWriter   http.ResponseWriter
+	statusCode       int
+	delayWriteHeader bool
+}
+
 // copyOpenAIChatStream applies sanitizeOpenAIStreamChunk to each SSE data frame from src.
 func copyOpenAIChatStream(ctx context.Context, dst io.Writer, src io.Reader, stripExtraFields bool) (int64, error) {
+	return copyOpenAIChatStreamWithOpts(ctx, dst, src, stripExtraFields, nil)
+}
+
+func copyOpenAIChatStreamWithOpts(ctx context.Context, dst io.Writer, src io.Reader, stripExtraFields bool, opts *streamCopyOpts) (int64, error) {
 	if ctx == nil {
 		return 0, derrors.New(derrors.CodeInvalid, "gateway.copyOpenAIChatStream", "context required")
 	}
 	c := &sseCopier{ctx: ctx, dst: dst, san: newOpenAIStreamSanitizer(), strip: stripExtraFields}
+	if opts != nil {
+		c.httpWriter = opts.responseWriter
+		c.statusCode = opts.statusCode
+		c.delayWriteHeader = opts.delayWriteHeader
+	}
 	br := bufio.NewReader(src)
 	var event bytes.Buffer
 	for {
@@ -238,12 +298,16 @@ func copyOpenAIChatStream(ctx context.Context, dst io.Writer, src io.Reader, str
 
 // sseCopier rewrites one OpenAI SSE stream event by event.
 type sseCopier struct {
-	ctx      context.Context
-	dst      io.Writer
-	san      *openAIStreamSanitizer
-	strip    bool
-	written  int64
-	seenDone bool
+	ctx              context.Context
+	dst              io.Writer
+	san              *openAIStreamSanitizer
+	strip            bool
+	written          int64
+	seenDone         bool
+	httpWriter       http.ResponseWriter
+	statusCode       int
+	delayWriteHeader bool
+	headersStarted   bool
 }
 
 // flush rewrites the buffered event and writes it; an event that ends up empty is dropped.
@@ -287,6 +351,9 @@ func (c *sseCopier) rewriteLine(line string, out *strings.Builder) {
 		recordProxyStreamChunk(c.ctx, original, action)
 		return
 	}
+	if choiceHasBothReasoningSpellings(sanitized) {
+		observability.RecordIntervention(c.ctx, observability.InterventionReasoningAlias)
+	}
 	if !c.strip && action == streamSSEForward && openAIStreamJSONEqual(original, sanitized) {
 		sanitized = original
 	}
@@ -302,12 +369,27 @@ func (c *sseCopier) finish(event *bytes.Buffer) error {
 		return c.flush(event)
 	}
 	if !c.seenDone && c.san.hasAnyFinished() {
+		c.ensureResponseStarted()
 		return c.write("data: [DONE]\n\n")
 	}
 	return nil
 }
 
+func (c *sseCopier) ensureResponseStarted() {
+	if !c.delayWriteHeader || c.httpWriter == nil || c.headersStarted {
+		return
+	}
+	if joined := observability.InterventionJoined(c.ctx); joined != "" {
+		c.httpWriter.Header().Set(config.InterventionHeader, joined)
+	}
+	c.httpWriter.WriteHeader(c.statusCode)
+	c.headersStarted = true
+}
+
 func (c *sseCopier) write(s string) error {
+	if strings.TrimSpace(s) != "" {
+		c.ensureResponseStarted()
+	}
 	n, err := io.WriteString(c.dst, s)
 	c.written += int64(n)
 	return err

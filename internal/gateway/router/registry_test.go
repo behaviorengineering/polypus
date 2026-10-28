@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func testRegistry(t *testing.T) *Registry {
@@ -194,6 +195,35 @@ func TestResolveEmbedPrefixBackend(t *testing.T) {
 	}
 	if id != "lm_studio" || model != "text-embedding-nomic-embed-text-v1.5" {
 		t.Fatalf("got %s %q", id, model)
+	}
+}
+
+func TestResolveEmbedPrefixRejectsBackendWithoutEmbed(t *testing.T) {
+	cfg := config.RouterConfig{
+		Embed: config.CapabilityBackend{Enabled: true, Default: "lm_studio"},
+		Backends: map[string]config.BackendDef{
+			"mlx_local": {
+				ID:           "mlx_local",
+				BaseURL:      "http://127.0.0.1:1322",
+				Capabilities: []config.Capability{config.CapTTS, config.CapSTT},
+			},
+			"lm_studio": {
+				ID:           "lm_studio",
+				BaseURL:      "http://127.0.0.1:1234/v1",
+				Capabilities: []config.Capability{config.CapChat, config.CapEmbed},
+			},
+		},
+	}
+	reg, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = reg.ResolveEmbed("mlx_local/some-model")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := derrors.Field(err, derrors.FieldIntervention); got != "embed_capability_missing" {
+		t.Fatalf("intervention=%q", got)
 	}
 }
 

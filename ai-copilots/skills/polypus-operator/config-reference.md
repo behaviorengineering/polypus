@@ -76,7 +76,7 @@ timeouts:
   chat: 120s
   chat_thinking: 600s
   vision: 300s
-  embed: 60s
+  embed: 15s
   speech: 180s
   backends:
     cf_local:
