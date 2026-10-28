@@ -61,7 +61,7 @@ func TestComposeProfiles(t *testing.T) {
 }
 
 func TestRunStopsOffTailnetBeforeWriting(t *testing.T) {
-	root := t.TempDir()
+	state := filepath.Join(t.TempDir(), "state")
 	env := t.TempDir()
 	gateway := filepath.Join(env, "gateway.yaml")
 	pins := filepath.Join(env, "images.env")
@@ -74,7 +74,7 @@ func TestRunStopsOffTailnetBeforeWriting(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	opts := DefaultOptions(root)
+	opts := DefaultOptions(state)
 	opts.Name = "polypus-work"
 	opts.GatewayConfig = gateway
 	opts.PinsFile = pins
@@ -89,9 +89,26 @@ func TestRunStopsOffTailnetBeforeWriting(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "home.ts.net") {
 		t.Fatalf("err = %v, want the wrong tailnet named", err)
 	}
-	for _, p := range []string{opts.EnvDeploy, opts.StateDir} {
+	for _, p := range []string{opts.EnvDeployPath(), opts.StateDir} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Fatalf("deploy wrote %s before the tailnet check (stat err %v)", p, err)
 		}
+	}
+}
+
+func TestDefaultStateDirOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(StateDirEnv, dir)
+	got, err := DefaultStateDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != dir {
+		t.Fatalf("state dir %q want %q", got, dir)
+	}
+	opts := DefaultOptions(got)
+	opts.Name = "polypus-work"
+	if want := filepath.Join(dir, "polypus-work", ".env.deploy"); opts.EnvDeployPath() != want {
+		t.Fatalf("env deploy %q want %q", opts.EnvDeployPath(), want)
 	}
 }

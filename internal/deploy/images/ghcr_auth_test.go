@@ -52,3 +52,20 @@ func TestRegistryBearerTokenUsesBasicAuth(t *testing.T) {
 		t.Fatal("missing Authorization")
 	}
 }
+
+func TestRegistryBearerTokenAnonymous(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"token":"anon-jwt"}`))
+	}))
+	t.Cleanup(srv.Close)
+	repo := imageRepo{Registry: srv.URL[len("http://"):], Name: "acme/widget"}
+	tok, err := registryBearerToken(testContext(t), srv.Client(), repo, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok != "anon-jwt" || gotAuth != "" {
+		t.Fatalf("token %q, authorization %q; want an anonymous request", tok, gotAuth)
+	}
+}

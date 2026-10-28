@@ -17,12 +17,11 @@ type ghcrTokenResponse struct {
 	Token string `json:"token"`
 }
 
-// registryBearerToken returns a Bearer token for manifest GET (GHCR OAuth exchange when needed).
+// registryBearerToken returns a Bearer token for manifest GET from the registry's
+// token endpoint. With a PAT it authenticates (private packages); without one it asks
+// for an anonymous pull token, which is how public packages are read.
 func registryBearerToken(ctx context.Context, client *http.Client, repo imageRepo, pat string) (string, error) {
 	pat = strings.TrimSpace(pat)
-	if pat == "" {
-		return "", fmt.Errorf("images: empty registry token")
-	}
 	scope := fmt.Sprintf("repository:%s:pull", repo.Name)
 	tokenURL := fmt.Sprintf("%s://%s/token?service=%s&scope=%s",
 		registryScheme(repo.Registry),
@@ -34,8 +33,10 @@ func registryBearerToken(ctx context.Context, client *http.Client, repo imageRep
 	if err != nil {
 		return "", err
 	}
-	// GHCR expects docker-login style Basic auth (username + PAT), not Bearer PAT on /token.
-	req.SetBasicAuth(registryBasicUser(), pat)
+	if pat != "" {
+		// GHCR expects docker-login style Basic auth (username + PAT), not Bearer PAT on /token.
+		req.SetBasicAuth(registryBasicUser(), pat)
+	}
 	resp, err := outbound.Do(ctx, outbound.DepGHCR, client, req)
 	if err != nil {
 		return "", err

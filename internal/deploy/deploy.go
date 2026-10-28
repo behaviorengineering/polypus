@@ -17,6 +17,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/deploy/routers"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
 	"github.com/behaviorengineering/polypus/internal/deploy/smoke"
+	"github.com/behaviorengineering/polypus/internal/deploy/stack"
 	"github.com/behaviorengineering/polypus/internal/deploy/tailnet"
 	"github.com/behaviorengineering/polypus/internal/deploy/tsserve"
 )
@@ -85,12 +86,6 @@ func resolvePlan(opts Options) (plan, error) {
 	if p.secretNames, err = ExportSecretNames(opts); err != nil {
 		return p, fmt.Errorf("deploy: gateway secrets: %w", err)
 	}
-	if p.services.Observability {
-		otelCfg := filepath.Join(opts.Root, "otelcol.config.yaml")
-		if _, err := os.Stat(otelCfg); err != nil {
-			return p, fmt.Errorf("deploy: missing otel collector config at %s", otelCfg)
-		}
-	}
 	return p, nil
 }
 
@@ -117,14 +112,14 @@ func resolvePins(opts Options, svc images.Services) (path, pins string, err erro
 		}
 		return opts.PinsFile, "", nil
 	}
-	pins, err = images.VersionPins(opts.RepoPins, opts.Version)
+	pins, err = images.VersionPins(stack.ImagePins(), opts.Version)
 	if err != nil {
 		return "", "", err
 	}
-	if err := images.VerifyPins(pins, opts.RepoPins, svc); err != nil {
+	if err := images.VerifyPins(pins, "the embedded images.env", svc); err != nil {
 		return "", "", err
 	}
-	return opts.ImagesEnv, pins, nil
+	return opts.ImagesEnvPath(), pins, nil
 }
 
 func smokeSystemOne(gatewayPath string) (bool, error) {
@@ -147,6 +142,7 @@ func printPlan(opts Options, p plan) {
 	}
 	fmt.Printf("deploy: compose project, tailnet host and keyring service %s\n", opts.Name)
 	fmt.Printf("deploy: gateway config %s\n", p.gatewayPath)
+	fmt.Printf("deploy: writes the stack, pins and secrets to %s\n", opts.Dir())
 	fmt.Printf("deploy: health and smoke at %s\n", opts.HealthURL)
 	if opts.Tailnet != "" {
 		fmt.Printf("deploy: checks this machine is on tailnet %s first\n", opts.Tailnet)
@@ -176,6 +172,10 @@ func apply(ctx context.Context, opts Options, p plan) error {
 		}
 		fmt.Printf("deploy: this machine is on tailnet %s\n", opts.Tailnet)
 	}
+	composeFile, err := stack.Write(opts.Dir())
+	if err != nil {
+		return err
+	}
 	if p.pins != "" {
 		if err := images.WritePins(p.imagesEnv, p.pins); err != nil {
 			return err
@@ -188,7 +188,7 @@ func apply(ctx context.Context, opts Options, p plan) error {
 	}); err != nil {
 		return err
 	}
-	serveDir := filepath.Join(opts.StateDir, opts.Name, "tailscale")
+	serveDir := filepath.Join(opts.Dir(), "tailscale")
 	servePath, err := tsserve.Write(serveDir, p.services.Observability)
 	if err != nil {
 		return err
@@ -202,15 +202,15 @@ func apply(ctx context.Context, opts Options, p plan) error {
 			return err
 		}
 	}
-	if err := secrets.Export(opts.Name, p.secretNames, opts.EnvDeploy); err != nil {
-		return err
+	if err := secrets.Export(opts.Name, p.secretNames, opts.EnvDeployPath()); err != nil {
+		return fmt.Errorf("%w (store each with: polypus deploy secret set <ENV>)", err)
 	}
-	fmt.Printf("export-env: wrote %s\n", opts.EnvDeploy)
+	fmt.Printf("export-env: wrote %s\n", opts.EnvDeployPath())
 
 	cc := compose.Client{
 		Project:     opts.Name,
-		ComposeFile: opts.ComposeFile,
-		EnvFiles:    []string{p.imagesEnv, opts.EnvDeploy},
+		ComposeFile: composeFile,
+		EnvFiles:    []string{p.imagesEnv, opts.EnvDeployPath()},
 	}
 	if err := startStack(ctx, opts, p, cc); err != nil {
 		health.DumpGateway(cc)
@@ -335,7 +335,7 @@ func runSmoke(ctx context.Context, opts Options, p plan) error {
 		WithSystemOne: p.smokeSystemOne,
 		WithProviders: withProviders,
 		GatewayConfig: p.gatewayPath,
-		EnvDeploy:     opts.EnvDeploy,
+		EnvDeploy:     opts.EnvDeployPath(),
 		APIKey:        clientKey,
 	})
 }

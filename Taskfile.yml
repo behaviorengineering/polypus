@@ -206,6 +206,13 @@ tasks:
     cmds:
       - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeOtelFanout$'
 
+  sync-deploy-stack:
+    desc: Copy the shared collector config and images.env into the deploy's embedded stack
+    summary: "Copies otelcol.config.yaml and images.env into internal/deploy/stack/, which polypus deploy embeds; a unit test fails when they drift."
+    cmds:
+      - cp otelcol.config.yaml internal/deploy/stack/otelcol.config.yaml
+      - cp images.env internal/deploy/stack/images.env
+
   sync-config-example:
     internal: true
     cmds:
