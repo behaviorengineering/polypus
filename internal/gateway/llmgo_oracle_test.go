@@ -573,6 +573,100 @@ func TestLLMGoOracleDualReasoningProxyPassthrough(t *testing.T) {
 	}
 }
 
+// TestLLMGoOracleGemmaThinkingMergeFillsContent records the Gemma thinking
+// rewrite: empty content plus one reasoning_content spelling. Merge copies
+// the answer into content and llm-go can parse. Bifrost marshal of the same
+// thought still emits both spellings, so merge does not fix the alias reject.
+func TestLLMGoOracleGemmaThinkingMergeFillsContent(t *testing.T) {
+	answer := "visible"
+	t.Run("one_spelling_merge_parses", func(t *testing.T) {
+		raw := gemmaThinkingCompletionJSON(t, answer)
+		if choiceHasBothReasoningSpellings(raw) {
+			t.Fatalf("Gemma fixture must not emit both spellings: %s", raw)
+		}
+		fixed, changed := mergeReasoningIntoContent(raw)
+		if !changed {
+			t.Fatalf("empty content must merge from reasoning_content: %s", raw)
+		}
+		if choiceHasBothReasoningSpellings(fixed) {
+			t.Fatalf("merge must not add a second spelling: %s", fixed)
+		}
+		got, err := parseJSONWithLLMGo(t, string(fixed))
+		if err != nil {
+			t.Fatalf("llm-go after Gemma merge: %v body=%s", err, fixed)
+		}
+		if got != answer {
+			t.Fatalf("content=%q want %q", got, answer)
+		}
+	})
+	t.Run("bifrost_marshal_still_dual_key_reject", func(t *testing.T) {
+		raw, err := json.Marshal(gemmaBifrostEmptyContent(answer))
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !choiceHasBothReasoningSpellings(raw) {
+			t.Fatalf("Bifrost marshal must emit both spellings: %s", raw)
+		}
+		fixed, changed := mergeReasoningIntoContent(raw)
+		if !changed {
+			t.Fatalf("empty content must still merge: %s", raw)
+		}
+		if !choiceHasBothReasoningSpellings(fixed) {
+			t.Fatalf("merge must leave both spellings: %s", fixed)
+		}
+		got, genErr := parseJSONWithLLMGo(t, string(fixed))
+		requireOracleMalformed(t, genErr, dualReasoningOracleSubstr)
+		if got != "" {
+			t.Fatalf("llm-go must not surface merged content after dual-key reject, got %q", got)
+		}
+	})
+}
+
+func gemmaThinkingCompletionJSON(t *testing.T, answer string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"id":     "chat",
+		"object": "chat.completion",
+		"model":  "cf_local/@cf/google/gemma-4-26b-a4b-it",
+		"choices": []map[string]any{{
+			"index": 0,
+			"message": map[string]any{
+				"role":              "assistant",
+				"content":           "",
+				"reasoning_content": answer,
+			},
+			"finish_reason": "stop",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal Gemma fixture: %v", err)
+	}
+	return raw
+}
+
+func gemmaBifrostEmptyContent(answer string) *schemas.BifrostChatResponse {
+	empty := ""
+	stop := "stop"
+	return &schemas.BifrostChatResponse{
+		ID:     "chat",
+		Object: "chat.completion",
+		Model:  "cf_local/@cf/google/gemma-4-26b-a4b-it",
+		Choices: []schemas.BifrostResponseChoice{{
+			Index:        0,
+			FinishReason: &stop,
+			ChatNonStreamResponseChoice: &schemas.ChatNonStreamResponseChoice{
+				Message: &schemas.ChatMessage{
+					Role:    schemas.ChatMessageRoleAssistant,
+					Content: &schemas.ChatMessageContent{ContentStr: &empty},
+					ChatAssistantMessage: &schemas.ChatAssistantMessage{
+						Reasoning: &answer,
+					},
+				},
+			},
+		}},
+	}
+}
+
 func museSparkStreamChunk(reasoning, content string) *schemas.BifrostChatResponse {
 	return &schemas.BifrostChatResponse{
 		ID:     "chat",
