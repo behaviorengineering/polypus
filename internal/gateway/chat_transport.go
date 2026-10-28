@@ -84,6 +84,9 @@ func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request,
 	}
 	if choiceHasBothReasoningSpellings(raw) {
 		setIntervention(w, r.Context(), observability.InterventionReasoningAlias)
+		if stripped, ok := stripReasoningAliasJSON(raw); ok {
+			raw = stripped
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
@@ -124,8 +127,10 @@ func writeBifrostChatSSE(ctx context.Context, w http.ResponseWriter, chunks <-ch
 			}
 			return derrors.Wrap(ctx.Err(), derrors.CodeCanceled, "gateway.writeBifrostChatSSE", "context done")
 		}
-		start()
 		raw := chunk.OpenAIJSON
+		if choiceHasBothReasoningSpellings(raw) {
+			setIntervention(w, ctx, observability.InterventionReasoningAlias)
+		}
 		out, action, emit := sanitizeOpenAIStreamChunk(raw, san, true)
 		recordBifrostStreamChunk(ctx, chunk, action, emit)
 		if !emit {
@@ -134,9 +139,7 @@ func writeBifrostChatSSE(ctx context.Context, w http.ResponseWriter, chunks <-ch
 			}
 			continue
 		}
-		if choiceHasBothReasoningSpellings(out) {
-			setIntervention(w, ctx, observability.InterventionReasoningAlias)
-		}
+		start()
 		raw = out
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
 			return afterHeaders(ctx, err, true, "gateway.writeBifrostChatSSE", "write stream")
