@@ -179,7 +179,7 @@ func StartRouterSpan(ctx context.Context, operation string, a LLMSpanAttrs) (con
 		attribute.String("polypus.backend_url", a.BackendURL),
 		attribute.String("polypus.router_name", a.Router),
 	)
-	return ctx, span
+	return WithInterventionState(ctx), span
 }
 
 // StartLLMSpan starts an OpenInference LLM span for a routed inference call.
@@ -193,7 +193,7 @@ func StartLLMSpan(ctx context.Context, operation string, a LLMSpanAttrs) (contex
 		attribute.String("polypus.backend_url", a.BackendURL),
 		attribute.String("polypus.downstream_model", a.Downstream),
 	)
-	return ctx, span
+	return WithInterventionState(ctx), span
 }
 
 // endSpan records err on the span and ends it.

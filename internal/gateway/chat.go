@@ -193,6 +193,10 @@ func (d chatDial) writeResponse(w http.ResponseWriter, r *http.Request, resp *ht
 	} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if fixed, changed := mergeReasoningIntoContent(raw); changed {
 			raw = fixed
+			setIntervention(w, r.Context(), observability.InterventionMergeReasoningIntoContent)
+		}
+		if choiceHasBothReasoningSpellings(raw) {
+			setIntervention(w, r.Context(), observability.InterventionReasoningAlias)
 		}
 		if d.recordRouterSelectedModel {
 			observability.RecordDownstreamModel(r.Context(), extractRouterSelectedModel(resp.Header, raw))
@@ -231,8 +235,12 @@ func (d chatDial) writeStreamResponse(w http.ResponseWriter, r *http.Request, re
 		return upstream.StatusFailure(status)
 	}
 	copyChatResponseHeaders(w, resp.Header)
-	w.WriteHeader(resp.StatusCode)
-	n, err := copyOpenAIChatStream(withStreamChunkCounter(r.Context(), log, d.dumpDir), w, io.LimitReader(resp.Body, chatMaxBody), false)
+	ctx := withStreamChunkCounter(r.Context(), log, d.dumpDir)
+	n, err := copyOpenAIChatStreamWithOpts(ctx, w, io.LimitReader(resp.Body, chatMaxBody), false, &streamCopyOpts{
+		responseWriter:   w,
+		statusCode:       resp.StatusCode,
+		delayWriteHeader: true,
+	})
 	observability.RecordProxyIO(r.Context(), target, streaming, resp.StatusCode, int(n))
 	if err != nil {
 		return afterHeaders(r.Context(), err, false, "gateway.proxyChat", "copy stream")

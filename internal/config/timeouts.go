@@ -10,6 +10,9 @@ import (
 // TimeoutHeader is the optional client override (Go duration or integer seconds).
 const TimeoutHeader = "X-Polypus-Timeout"
 
+// InterventionHeader labels Polypus-owned rewrites or refuses on the response.
+const InterventionHeader = "X-Polypus-Intervention"
+
 const (
 	defaultTimeoutMin          = 5 * time.Second
 	defaultTimeoutMax          = 900 * time.Second

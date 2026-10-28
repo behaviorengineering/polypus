@@ -9,6 +9,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
@@ -126,8 +127,8 @@ func resolveCapability(cfg config.RouterConfig, cap config.Capability, defaultBa
 		prefix := model[:i]
 		if b, ok := cfg.Backends[prefix]; ok {
 			if !b.HasCapability(cap) {
-				return "", "", derrors.New(derrors.CodeInvalid, op, fmt.Sprintf("backend %q does not support %s", prefix, cap)).
-					With("backend", prefix)
+				return "", "", withEmbedIntervention(cap, derrors.New(derrors.CodeInvalid, op, fmt.Sprintf("backend %q does not support %s", prefix, cap)).
+					With("backend", prefix))
 			}
 			rest := strings.TrimSpace(model[i+1:])
 			if rest == "" {
@@ -146,16 +147,23 @@ func resolveCapability(cfg config.RouterConfig, cap config.Capability, defaultBa
 func checkDefaultBackend(cfg config.RouterConfig, cap config.Capability, defaultBackend string) error {
 	const op = "router.resolve"
 	if defaultBackend == "" {
-		return derrors.New(derrors.CodeInvalid, op, fmt.Sprintf("no default backend for %s; prefix the model with a backend id", cap))
+		return withEmbedIntervention(cap, derrors.New(derrors.CodeInvalid, op, fmt.Sprintf("no default backend for %s; prefix the model with a backend id", cap)))
 	}
 	b, ok := cfg.Backends[defaultBackend]
 	if !ok {
-		return derrors.New(derrors.CodeNotReady, op, fmt.Sprintf("default backend %q not found", defaultBackend))
+		return withEmbedIntervention(cap, derrors.New(derrors.CodeNotReady, op, fmt.Sprintf("default backend %q not found", defaultBackend)))
 	}
 	if !b.HasCapability(cap) {
-		return derrors.New(derrors.CodeNotReady, op, fmt.Sprintf("default backend %q does not support %s", defaultBackend, cap))
+		return withEmbedIntervention(cap, derrors.New(derrors.CodeNotReady, op, fmt.Sprintf("default backend %q does not support %s", defaultBackend, cap)))
 	}
 	return nil
+}
+
+func withEmbedIntervention(cap config.Capability, err *derrors.Error) *derrors.Error {
+	if cap != config.CapEmbed || err == nil {
+		return err
+	}
+	return err.With(derrors.FieldIntervention, string(observability.InterventionEmbedCapabilityMissing))
 }
 
 // BackendURL returns the base URL for a backend id.

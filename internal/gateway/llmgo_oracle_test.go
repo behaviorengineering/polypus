@@ -16,7 +16,9 @@ import (
 
 	llm "github.com/XiaoConstantine/llm-go"
 	"github.com/XiaoConstantine/llm-go/openai"
+	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
+	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
@@ -487,7 +489,7 @@ func TestLLMGoOracleDualReasoningAliasFromBifrostMarshal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal stream: %v", err)
 	}
-	if !openaiChoiceHasBothReasoningSpellings(t, streamJSON, "delta") {
+	if !choiceHasBothReasoningSpellings(streamJSON) {
 		t.Fatalf("Bifrost stream marshal did not emit both spellings: %s", streamJSON)
 	}
 
@@ -502,8 +504,12 @@ func TestLLMGoOracleDualReasoningAliasFromBifrostMarshal(t *testing.T) {
 	close(chunks)
 	close(errCh)
 	rec := httptest.NewRecorder()
-	if err := writeBifrostChatSSE(context.Background(), rec, chunks, errCh); err != nil {
+	ctx := observability.WithInterventionState(context.Background())
+	if err := writeBifrostChatSSE(ctx, rec, chunks, errCh); err != nil {
 		t.Fatalf("write: %v", err)
+	}
+	if got := rec.Header().Get(config.InterventionHeader); got != "reasoning_alias" {
+		t.Fatalf("intervention header=%q", got)
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, `"reasoning"`) || !strings.Contains(body, `"reasoning_content"`) {
@@ -524,7 +530,7 @@ func TestLLMGoOracleDualReasoningAliasFromBifrostMarshal(t *testing.T) {
 	if changed {
 		t.Fatalf("content was already set; merge must not rewrite: %s", fixed)
 	}
-	if !openaiChoiceHasBothReasoningSpellings(t, completionJSON, "message") {
+	if !choiceHasBothReasoningSpellings(completionJSON) {
 		t.Fatalf("non-stream marshal did not emit both spellings: %s", completionJSON)
 	}
 	genText, genErr := parseJSONWithLLMGo(t, string(completionJSON))
@@ -546,6 +552,19 @@ func TestLLMGoOracleDualReasoningProxyPassthrough(t *testing.T) {
 	san := proxySanitizeSSE(upstream)
 	if !strings.Contains(san, `"reasoning"`) || !strings.Contains(san, `"reasoning_content"`) {
 		t.Fatalf("proxy sanitizer stripped a reasoning spelling:\n%s", san)
+	}
+	rec := httptest.NewRecorder()
+	ctx := observability.WithInterventionState(context.Background())
+	_, err := copyOpenAIChatStreamWithOpts(ctx, rec, strings.NewReader(san), false, &streamCopyOpts{
+		responseWriter:   rec,
+		statusCode:       http.StatusOK,
+		delayWriteHeader: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Header().Get(config.InterventionHeader); got != "reasoning_alias" {
+		t.Fatalf("proxy intervention header=%q", got)
 	}
 	text, _, terminal := parseSSEWithLLMGo(t, san, "")
 	requireOracleMalformed(t, terminal, dualReasoningOracleSubstr)
@@ -607,25 +626,6 @@ func museSparkCompletion(reasoning, content string) *schemas.BifrostChatResponse
 			},
 		}},
 	}
-}
-
-func openaiChoiceHasBothReasoningSpellings(t *testing.T, raw []byte, field string) bool {
-	t.Helper()
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &root); err != nil {
-		t.Fatalf("root: %v", err)
-	}
-	var choices []map[string]json.RawMessage
-	if err := json.Unmarshal(root["choices"], &choices); err != nil || len(choices) == 0 {
-		t.Fatalf("choices: %v len=%d", err, len(choices))
-	}
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(choices[0][field], &obj); err != nil {
-		t.Fatalf("%s: %v body=%s", field, err, raw)
-	}
-	_, hasReasoning := obj["reasoning"]
-	_, hasContent := obj["reasoning_content"]
-	return hasReasoning && hasContent
 }
 
 func parseJSONWithLLMGo(t *testing.T, body string) (text string, terminal error) {

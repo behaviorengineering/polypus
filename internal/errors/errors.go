@@ -49,6 +49,9 @@ const (
 // StatusClientClosedRequest is nginx 499 (client closed the request).
 const StatusClientClosedRequest = 499
 
+// FieldIntervention is the stable Polypus intervention code on domain errors.
+const FieldIntervention = "intervention"
+
 // Sentinel values for errors.Is. Match by Code only.
 var (
 	ErrInvalid            = &Error{code: CodeInvalid, message: "invalid argument"}
