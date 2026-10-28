@@ -317,6 +317,13 @@ func runSmoke(ctx context.Context, opts Options, p plan) error {
 	}
 	smokeCtx, smokeCancel := context.WithTimeout(ctx, smokeTimeout)
 	defer smokeCancel()
+	clientKey, err := secrets.Lookup(opts.Keyring, opts.Name, secrets.ClientKeyName)
+	if err != nil {
+		return err
+	}
+	if clientKey != "" {
+		fmt.Printf("deploy: smoke sends the client key (%s)\n", secrets.ClientKeyName)
+	}
 	withProviders := os.Getenv("POLYPUS_SMOKE_PROVIDERS") != "0"
 	if withProviders {
 		fmt.Println("deploy: provider chat smoke enabled (POLYPUS_SMOKE_PROVIDERS=0 to disable)")
@@ -329,6 +336,7 @@ func runSmoke(ctx context.Context, opts Options, p plan) error {
 		WithProviders: withProviders,
 		GatewayConfig: p.gatewayPath,
 		EnvDeploy:     opts.EnvDeploy,
+		APIKey:        clientKey,
 	})
 }
 

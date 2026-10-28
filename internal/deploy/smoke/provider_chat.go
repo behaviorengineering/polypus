@@ -13,17 +13,20 @@ import (
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
-func runProviderChat(ctx context.Context, baseURL, model, reasoningEffort string) error {
+func runProviderChat(ctx context.Context, ep endpoint, model, reasoningEffort string) error {
 	start := time.Now()
 	body, err := providerChatBody(model, reasoningEffort, 64, 0.2)
 	if err != nil {
 		return fmt.Errorf("smoke %s: %w", model, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep.url+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("smoke %s: %w", model, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if ep.key != "" {
+		req.Header.Set("Authorization", "Bearer "+ep.key)
+	}
 	resp, err := outbound.DoOnce(ctx, outbound.DepSmoke, http.DefaultClient, req)
 	if err != nil {
 		return fmt.Errorf("smoke %s: %w", model, err)
