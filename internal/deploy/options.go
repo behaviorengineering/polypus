@@ -2,7 +2,10 @@ package deploy
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
@@ -13,21 +16,12 @@ import (
 
 // Options configures one deploy of an environment.
 type Options struct {
-	// Root is the Polypus checkout that holds the compose file, collector config
-	// and repository image pins.
-	Root        string
-	ComposeFile string
-	// RepoPins is the repository's images.env (observability and Tailscale pins).
-	RepoPins string
 	// PinsFile is an environment's own images file. Empty pins the Polypus and
-	// Switchyard images of Version on top of RepoPins.
+	// Switchyard images of Version on top of the embedded stack's images.env.
 	PinsFile string
-	// ImagesEnv is where the deploy writes the resolved pins when PinsFile is empty.
-	ImagesEnv string
-	// StateDir holds files the deploy renders per environment, under <StateDir>/<Name>/.
-	StateDir  string
-	Version   string
-	EnvDeploy string
+	// StateDir holds what each deploy writes, one folder per environment: see Dir.
+	StateDir string
+	Version  string
 	// Environment is the deploy environment the options came from.
 	Environment envconfig.Environment
 	// GatewayConfig is the environment's gateway YAML, bind-mounted as the Polypus config.
@@ -56,21 +50,45 @@ type Options struct {
 	PruneFunc        func(ctx context.Context, gatewayPath string) error
 }
 
-// DefaultOptions resolves paths under the Polypus checkout at root.
-func DefaultOptions(root string) Options {
-	if root == "" {
-		root = "."
+// StateDirEnv overrides where deploys write their per-environment folders.
+const StateDirEnv = "POLYPUS_DEPLOY_STATE_DIR"
+
+// DefaultStateDir is POLYPUS_DEPLOY_STATE_DIR, else polypus/deploy under the user
+// cache folder (~/Library/Caches on macOS, ~/.cache on Linux, %LocalAppData% on
+// Windows). Nothing there needs keeping: each deploy rewrites it.
+func DefaultStateDir() (string, error) {
+	if dir := strings.TrimSpace(os.Getenv(StateDirEnv)); dir != "" {
+		return filepath.Abs(dir)
 	}
-	root = filepath.Clean(root)
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("deploy: user cache folder: %w (set %s)", err, StateDirEnv)
+	}
+	return filepath.Join(cache, "polypus", "deploy"), nil
+}
+
+// DefaultOptions returns deploy defaults writing under stateDir.
+func DefaultOptions(stateDir string) Options {
 	return Options{
-		Root:          root,
-		ComposeFile:   filepath.Join(root, "docker-compose.deploy.yml"),
-		RepoPins:      filepath.Join(root, "images.env"),
-		ImagesEnv:     filepath.Join(root, ".env.images"),
-		StateDir:      filepath.Join(root, ".deploy"),
-		EnvDeploy:     filepath.Join(root, ".env.deploy"),
+		StateDir:      filepath.Clean(stateDir),
 		Name:          "polypus",
 		HealthTimeout: 120 * time.Second,
 		SmokeTimeout:  300 * time.Second,
 	}
+}
+
+// Dir is the environment's folder: the stack, serve.json, image pins and resolved
+// secrets the deploy writes, so two environments share nothing.
+func (o Options) Dir() string {
+	return filepath.Join(o.StateDir, o.Name)
+}
+
+// ImagesEnvPath is where the deploy writes the resolved image pins.
+func (o Options) ImagesEnvPath() string {
+	return filepath.Join(o.Dir(), ".env.images")
+}
+
+// EnvDeployPath is where the deploy writes the resolved secrets (mode 0600).
+func (o Options) EnvDeployPath() string {
+	return filepath.Join(o.Dir(), ".env.deploy")
 }

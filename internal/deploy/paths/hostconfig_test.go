@@ -38,29 +38,3 @@ func TestResolveGatewayConfigDirectory(t *testing.T) {
 		t.Fatal("expected error for a directory")
 	}
 }
-
-func TestFindRepoRoot(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{"go.mod", ComposeFileName} {
-		if err := os.WriteFile(filepath.Join(root, name), nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	nested := filepath.Join(root, "internal", "deploy")
-	if err := os.MkdirAll(nested, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	got, err := FindRepoRoot(nested)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != root {
-		t.Fatalf("got %q want %q", got, root)
-	}
-}
-
-func TestFindRepoRootMissing(t *testing.T) {
-	if _, err := FindRepoRoot(t.TempDir()); err == nil {
-		t.Fatal("expected error without a compose file")
-	}
-}
