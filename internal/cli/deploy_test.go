@@ -6,24 +6,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/behaviorengineering/polypus/internal/deploy"
 	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
 )
 
-// deployFixture lays out a minimal Polypus checkout and environment: the files a
-// deploy plan reads, with no keyring or Docker involved. The user config dir is
+// deployFixture lays out an isolated deploy state folder and an environment: the
+// files a deploy plan reads, with no keyring or Docker involved. The user config dir is
 // isolated so no test reads the developer's own environment.
 func deployFixture(t *testing.T) (root, config, pins string) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv(envconfig.ConfigEnv, "")
 	root = t.TempDir()
-	files := map[string]string{
-		"go.mod":                    "module example.com/polypus\n",
-		"docker-compose.deploy.yml": "services: {}\n",
-		"otelcol.config.yaml":       "receivers: {}\n",
-		"images.env":                "PHOENIX_IMAGE=arizephoenix/phoenix:version-5.8.0\n",
-	}
-	writeFiles(t, root, files)
+	t.Setenv(deploy.StateDirEnv, root)
 	env := t.TempDir()
 	pins = filepath.Join(env, "images.env")
 	writeFiles(t, env, map[string]string{
@@ -62,7 +57,7 @@ func TestDeployBareShowsHelpExit2(t *testing.T) {
 
 func TestDeployRunDryRunWritesNothing(t *testing.T) {
 	root, config, pins := deployFixture(t)
-	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config, "--images", pins})
+	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--config", config, "--images", pins})
 	if code != 0 {
 		t.Fatalf("exit %d want 0\nstdout=%s\nstderr=%s", code, out, errOut)
 	}
@@ -73,16 +68,16 @@ func TestDeployRunDryRunWritesNothing(t *testing.T) {
 		}
 	}
 	for _, name := range []string{".env.deploy", ".env.images"} {
-		if _, err := os.Stat(filepath.Join(root, name)); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(root, "polypus-work", name)); !os.IsNotExist(err) {
 			t.Fatalf("dry run wrote %s (stat err %v)", name, err)
 		}
 	}
 }
 
 func TestDeployRunFindsEnvironmentFromEnv(t *testing.T) {
-	root, config, pins := deployFixture(t)
+	_, config, pins := deployFixture(t)
 	t.Setenv(envconfig.ConfigEnv, config)
-	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--images", pins})
+	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--images", pins})
 	if code != 0 {
 		t.Fatalf("exit %d want 0\nstderr=%s", code, errOut)
 	}
@@ -92,8 +87,8 @@ func TestDeployRunFindsEnvironmentFromEnv(t *testing.T) {
 }
 
 func TestDeployRunDevBuildNeedsImages(t *testing.T) {
-	root, config, _ := deployFixture(t)
-	code, _, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config})
+	_, config, _ := deployFixture(t)
+	code, _, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--config", config})
 	if code != 1 {
 		t.Fatalf("exit %d want 1", code)
 	}
@@ -103,8 +98,8 @@ func TestDeployRunDevBuildNeedsImages(t *testing.T) {
 }
 
 func TestDeployRunNeedsEnvironment(t *testing.T) {
-	root, _, pins := deployFixture(t)
-	code, _, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--images", pins})
+	_, _, pins := deployFixture(t)
+	code, _, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--images", pins})
 	if code != 1 {
 		t.Fatalf("exit %d want 1", code)
 	}
@@ -115,14 +110,14 @@ func TestDeployRunNeedsEnvironment(t *testing.T) {
 
 func TestDeployExportEnvDryRun(t *testing.T) {
 	root, config, _ := deployFixture(t)
-	code, out, errOut := captureRun([]string{"deploy", "export-env", "--dry-run", "--root", root, "--config", config})
+	code, out, errOut := captureRun([]string{"deploy", "export-env", "--dry-run", "--config", config})
 	if code != 0 {
 		t.Fatalf("exit %d want 0\nstderr=%s", code, errOut)
 	}
 	if !strings.Contains(out, "OPENROUTER_API_KEY") {
 		t.Fatalf("stdout missing secret name: %q", out)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".env.deploy")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "polypus-work", ".env.deploy")); !os.IsNotExist(err) {
 		t.Fatalf("dry run wrote .env.deploy (stat err %v)", err)
 	}
 }
@@ -154,12 +149,12 @@ func TestDeployInit(t *testing.T) {
 }
 
 func TestDeployRunPinsFollowObservability(t *testing.T) {
-	root, config, _ := deployFixture(t)
+	_, config, _ := deployFixture(t)
 	minimal := filepath.Join(filepath.Dir(config), "minimal.env")
 	writeFiles(t, filepath.Dir(config), map[string]string{
 		"minimal.env": "POLYPUS_IMAGE=ghcr.io/behaviorengineering/polypus:0.3.0\nTAILSCALE_IMAGE=tailscale/tailscale:v1.102.4\n",
 	})
-	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config, "--images", minimal})
+	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--config", config, "--images", minimal})
 	if code != 0 {
 		t.Fatalf("observability off with minimal pins: exit %d\nstderr=%s", code, errOut)
 	}
@@ -170,15 +165,15 @@ func TestDeployRunPinsFollowObservability(t *testing.T) {
 	writeFiles(t, filepath.Dir(config), map[string]string{
 		"config.yaml": "identifier: work\ntailnet: corp.ts.net\nobservability: true\n",
 	})
-	code, _, errOut = captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config, "--images", minimal})
+	code, _, errOut = captureRun([]string{"deploy", "run", "--dry-run", "--config", config, "--images", minimal})
 	if code != 1 || !strings.Contains(errOut, "PHOENIX_IMAGE") {
 		t.Fatalf("observability on needs the Phoenix pin: exit %d stderr=%s", code, errOut)
 	}
 }
 
 func TestDeployRunHealthURLOverrideSkipsTailnet(t *testing.T) {
-	root, config, pins := deployFixture(t)
-	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--root", root, "--config", config, "--images", pins, "--health-url", "http://127.0.0.1:1320/"})
+	_, config, pins := deployFixture(t)
+	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--config", config, "--images", pins, "--health-url", "http://127.0.0.1:1320/"})
 	if code != 0 {
 		t.Fatalf("exit %d\nstderr=%s", code, errOut)
 	}

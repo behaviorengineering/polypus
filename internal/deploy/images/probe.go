@@ -68,11 +68,12 @@ func probeOnce(ctx context.Context, client *http.Client, repo imageRepo, manifes
 		if pat == "" {
 			pat = registryToken()
 		}
-		if pat == "" {
-			return fmt.Errorf("%w: set GHCR_TOKEN or GITHUB_TOKEN with read:packages", ErrRegistryUnauthorized)
-		}
 		bearer, err := registryBearerToken(ctx, client, repo, pat)
-		if err != nil {
+		switch {
+		case err == nil:
+		case pat == "":
+			return fmt.Errorf("%w: no anonymous pull token (%w); set GHCR_TOKEN or GITHUB_TOKEN with read:packages for private packages", ErrRegistryUnauthorized, err)
+		default:
 			// Fall back to PAT-as-Bearer for hosts that accept it directly.
 			bearer = pat
 		}

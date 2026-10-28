@@ -15,6 +15,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/deploy/paths"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
 	"github.com/behaviorengineering/polypus/internal/deploy/smoke"
+	"github.com/behaviorengineering/polypus/internal/deploy/stack"
 	"github.com/spf13/cobra"
 )
 
@@ -24,30 +25,20 @@ const (
 	healthURLHelp      = "gateway base URL (default: the environment's https://polypus-<identifier>.<tailnet>)"
 )
 
-// deployTarget is the flags every deploy command shares: where the Polypus checkout
-// is, which environment it deploys, and which images it pins.
+// deployTarget is the flags every deploy command shares: which environment it
+// deploys, and which images it pins.
 type deployTarget struct {
-	root   string
 	config string
 	images string
 }
 
 func (t *deployTarget) bind(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&t.root, "root", "", "Polypus checkout holding docker-compose.deploy.yml (default: found above the working directory)")
 	cmd.Flags().StringVar(&t.config, "config", "", "the environment's config.yaml (default: "+envconfig.ConfigEnv+", then ~/.config/polypus/deploy/config.yaml)")
 	cmd.Flags().StringVar(&t.images, "images", "", "a pinned images file (default: the environment's images:, else this build's release images)")
 }
 
 func (t *deployTarget) options() (deploy.Options, error) {
-	start := t.root
-	if start == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return deploy.Options{}, fmt.Errorf("deploy: working directory: %w", err)
-		}
-		start = wd
-	}
-	root, err := paths.FindRepoRoot(start)
+	stateDir, err := deploy.DefaultStateDir()
 	if err != nil {
 		return deploy.Options{}, err
 	}
@@ -55,7 +46,7 @@ func (t *deployTarget) options() (deploy.Options, error) {
 	if err != nil {
 		return deploy.Options{}, err
 	}
-	opts := deploy.DefaultOptions(root)
+	opts := deploy.DefaultOptions(stateDir)
 	opts.Environment = env
 	opts.Name = env.Name()
 	opts.HealthURL = env.GatewayURL()
@@ -225,7 +216,7 @@ func newDeploySmokeCmd() *cobra.Command {
 					return err
 				}
 				if strings.TrimSpace(envDeploy) == "" {
-					envDeploy = opts.EnvDeploy
+					envDeploy = opts.EnvDeployPath()
 				}
 			}
 			o.EnvDeploy = envDeploy
@@ -252,7 +243,7 @@ func newDeploySmokeCmd() *cobra.Command {
 	f.BoolVar(&o.WithRouter, "with-router", os.Getenv("POLYPUS_SWITCHYARD") == "1", "also smoke each chat router in the gateway YAML, reporting the model that answered")
 	f.BoolVar(&o.WithSystemOne, "with-systemone", os.Getenv("POLYPUS_SMOKE_SYSTEMONE") == "1", "also smoke /v1/systemone for the gateway YAML's SystemOne backends")
 	f.BoolVar(&o.WithProviders, "with-providers", os.Getenv("POLYPUS_SMOKE_PROVIDERS") == "1", "smoke chat per backend in the gateway YAML (secret names from --env-deploy)")
-	f.StringVar(&envDeploy, "env-deploy", "", "dotenv with secret names for --with-providers (default: .env.deploy in the checkout)")
+	f.StringVar(&envDeploy, "env-deploy", "", "dotenv with secret names for --with-providers (default: .env.deploy in the environment's state folder)")
 	bindSmokeModelFlags(cmd, &timeout, &o.ChatModel)
 	return cmd
 }
@@ -367,11 +358,11 @@ func verifyImagesFile(opts deploy.Options, svc images.Services) (string, error) 
 	if strings.TrimSpace(opts.PinsFile) != "" {
 		return opts.PinsFile, images.Verify(opts.PinsFile, svc)
 	}
-	pins, err := images.VersionPins(opts.RepoPins, opts.Version)
+	pins, err := images.VersionPins(stack.ImagePins(), opts.Version)
 	if err != nil {
 		return "", err
 	}
-	if err := images.VerifyPins(pins, opts.RepoPins, svc); err != nil {
+	if err := images.VerifyPins(pins, "the embedded images.env", svc); err != nil {
 		return "", err
 	}
 	f, err := os.CreateTemp("", "polypus-images-*.env")
@@ -400,7 +391,7 @@ func newDeployExportEnvCmd() *cobra.Command {
 				return err
 			}
 			if out == "" {
-				out = opts.EnvDeploy
+				out = opts.EnvDeployPath()
 			}
 			if csv := strings.TrimSpace(secretCSV); csv != "" {
 				opts.SecretNames = splitCSV(csv)
@@ -426,7 +417,7 @@ func newDeployExportEnvCmd() *cobra.Command {
 	t.bind(cmd)
 	f := cmd.Flags()
 	f.StringVar(&app, "app", "", "keyring service (default: polypus-<identifier>)")
-	f.StringVar(&out, "out", "", "dotenv path (default: .env.deploy in the checkout)")
+	f.StringVar(&out, "out", "", "dotenv path (default: .env.deploy in the environment's state folder)")
 	f.StringVar(&secretCSV, "secrets", "", "comma-separated env names (default: from the gateway YAML)")
 	f.BoolVar(&dryRun, "dry-run", false, "print the path and secret names; write nothing")
 	return cmd

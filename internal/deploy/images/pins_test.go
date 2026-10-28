@@ -1,19 +1,13 @@
 package images
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestVersionPins(t *testing.T) {
-	repo := filepath.Join(t.TempDir(), "images.env")
 	body := "# observability\nPHOENIX_IMAGE=arizephoenix/phoenix:version-5.8.0\nPOLYPUS_IMAGE=ghcr.io/x/polypus:0.0.1\nTAILSCALE_IMAGE=tailscale/tailscale:v1.102.4\n"
-	if err := os.WriteFile(repo, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := VersionPins(repo, "v0.4.0")
+	got, err := VersionPins([]byte(body), "v0.4.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +27,7 @@ func TestVersionPins(t *testing.T) {
 }
 
 func TestVersionPinsDevBuild(t *testing.T) {
-	if _, err := VersionPins(filepath.Join(t.TempDir(), "images.env"), "dev"); err == nil {
+	if _, err := VersionPins(nil, "dev"); err == nil {
 		t.Fatal("expected a dev build to need a pinned images file")
 	}
 }
