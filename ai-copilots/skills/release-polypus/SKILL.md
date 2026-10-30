@@ -16,7 +16,7 @@ Tag-triggered and auto-patch releases via GoReleaser (`.goreleaser.yaml`).
 - Default bump on merge is **patch** (`auto-patch-release.yml` on push to `main`).
 - Use **minor** or **major** only via workflow_dispatch or an explicit user request.
 - Skip auto release for docs/chore/ci-only commits, agent-harness-only diffs (`.cursor/`, `lefthook.yml`), or `[skip release]` in the push subject (`auto-patch-decide.sh`).
-- Manual tag path: annotated `vMAJOR.MINOR.PATCH`, `git push origin vX.Y.Z` (triggers `release.yml` and tag-push `docker-release.yml`).
+- MUST NOT push a `v*` tag by hand: no workflow runs on a tag push, so it would publish no binaries and no images. Every manual release goes through `auto-patch-release.yml` with `workflow_dispatch` (`bump=patch|minor|major`).
 - Confirm the GitHub Release has multi-platform binaries, `checksums.txt`, and changelog groups.
 - Confirm GHCR tags `ghcr.io/behaviorengineering/polypus:<semver>` and `polypus-switchyard:<semver>` after auto-patch (same workflow via `workflow_call`).
 
@@ -47,15 +47,10 @@ gh run watch
 gh release view vX.Y.Z
 ```
 
-## Manual tag (fallback)
+## Check the GoReleaser config
 
 ```bash
-git checkout main && git pull --ff-only && git status
-git tag -a v0.2.1 -m "v0.2.1"
-git push origin v0.2.1
-gh run watch --workflow=release.yml
-gh release view v0.2.1
-goreleaser check   # local config validation only
+goreleaser check   # local config validation only; releases come from auto-patch-release.yml
 ```
 
 ## Install note for users
