@@ -4,7 +4,7 @@
 # plus GHCR images, unless decide script skips (docs/chore/ci, harness-only, [skip release]).
 #
 # Manual bump (minor/major/patch): workflow_dispatch.
-# release.yml still runs if a human pushes a v* tag that triggers workflows.
+# No other workflow releases: a hand-pushed v* tag builds no binaries or images.
 
 name: Auto patch release
 
