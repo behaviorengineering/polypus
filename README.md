@@ -10,6 +10,7 @@ Runtime today: a **Go binary** (`polypus`) that serves the gateway, plus an **NV
 
 ---
 
+**Run your own:** [docs/setup.md](docs/setup.md) sets up Polypus on your own machine and tailnet.  
 **Agents:** start at [AGENTS.md](AGENTS.md).  
 **Routers:** [docs/switchyard/](docs/switchyard/) explains each routing type and when to use it.
 
