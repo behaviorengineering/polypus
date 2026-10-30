@@ -87,8 +87,11 @@ routers:
   r1:
     capability: chat
     route:
-      type: passthrough
-      target: leaf/m
+      type: stage_router
+      picker: efficient_first
+      confidence_threshold: 0.5
+      capable: leaf/m
+      efficient: leaf/m
 `
 	writeConfig(t, dir, content)
 

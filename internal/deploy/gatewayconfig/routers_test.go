@@ -59,6 +59,35 @@ func TestRouterSmokeTargets(t *testing.T) {
 	}
 }
 
+func TestHasComposedRouters(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"no routers", "chat_backend:\n  default: openrouter\n", false},
+		{"passthrough only", "routers:\n  turno:\n    capability: chat\n    route:\n      type: passthrough\n      target: openrouter/anthropic/claude-sonnet-5.5\n", false},
+		{"stage router", "routers:\n  investigator:\n    capability: chat\n    route:\n      type: stage_router\n      capable: cf_local/big\n      efficient: cf_local/small\n", true},
+		{"fallback beside passthrough", "routers:\n  turno:\n    route:\n      type: passthrough\n      target: openrouter/x\n  backup:\n    route:\n      type: fallback\n      targets: [claude_team/y, openrouter/y]\n", true},
+		{"non-chat classifier", "routers:\n  voice:\n    capability: tts\n    route:\n      type: llm_classifier\n      targets:\n        fast: openrouter/small\n", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "gateway.yaml")
+			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := HasComposedRouters(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("HasComposedRouters = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRouterSmokeTargetsHomelab(t *testing.T) {
 	got, err := RouterSmokeTargets(homelabFixture)
 	if err != nil {

@@ -42,3 +42,25 @@ func TestWriteConfigIfNeededSkipsEmpty(t *testing.T) {
 		t.Fatalf("expected skip, got path %q", path)
 	}
 }
+
+func TestWriteConfigIfNeededSkipsPassthroughOnly(t *testing.T) {
+	custom := filepath.Join(t.TempDir(), "routes.toml")
+	cfg := config.RouterConfig{
+		Switchyard: config.SwitchyardConfig{ConfigPath: custom},
+		Routers: map[string]config.NamedRouter{
+			"turno": {Name: "turno", Capability: config.CapChat, Route: config.RouterRoute{
+				Type: config.RoutePassthrough, Target: "openrouter/anthropic/claude-sonnet-5.5",
+			}},
+		},
+	}
+	path, err := WriteConfigIfNeeded(cfg, "http://127.0.0.1:1320")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "" {
+		t.Fatalf("expected skip, got path %q", path)
+	}
+	if _, err := os.Stat(custom); !os.IsNotExist(err) {
+		t.Fatalf("routes.toml written for passthrough-only routers: %v", err)
+	}
+}

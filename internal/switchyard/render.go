@@ -189,10 +189,11 @@ func addLLMClassifier(file *routesFile, name string, router config.NamedRouter) 
 	return nil
 }
 
-// WriteConfigIfNeeded renders and writes Switchyard TOML when routers are configured.
-// Returns ("", nil) when there is nothing to emit (no routers).
+// WriteConfigIfNeeded renders and writes Switchyard TOML when composed routers are
+// configured. Returns ("", nil) when there is nothing to emit (no routers, or only
+// passthrough routers, which the gateway serves itself).
 func WriteConfigIfNeeded(cfg config.RouterConfig, polypusBaseURL string) (string, error) {
-	if len(cfg.Routers) == 0 {
+	if !cfg.HasComposedRouters() {
 		return "", nil
 	}
 	return WriteConfig(cfg, polypusBaseURL)
