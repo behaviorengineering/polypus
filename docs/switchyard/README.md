@@ -1,8 +1,8 @@
-# Switchyard routing
+# Choosing a Switchyard routing type
 
-Switchyard sits between the client and the leaf models. The client always sends one route `id` as the model name. Switchyard picks a **target** (a concrete model) for that turn.
+Switchyard sits between the client and the leaf models. The client always sends one route `id` as the model name, and Switchyard picks a **target** (a concrete model) for each turn.
 
-This folder is about Switchyard's routing types and when to use each one. Upstream algorithm pages live in `providers/switchyard/docs/routing_algorithms/`.
+Each page in this folder covers one routing type and when to use it. The upstream algorithm pages live in `providers/switchyard/docs/routing_algorithms/`.
 
 | Type | Page | Use when |
 |------|------|----------|
@@ -13,20 +13,20 @@ This folder is about Switchyard's routing types and when to use each one. Upstre
 | `llm_classifier` (`escalation`) | [escalation.md](escalation.md) | Start cheap; latch to strong after a judge sees real trouble |
 | `passthrough` | [passthrough.md](passthrough.md) | Always one model; no pick |
 
-How to choose:
+To choose a type, find the line that matches your case:
 
-- Agent with tools (edit, test, shell) and you care about "stuck vs producing": `stage_router`.
+- An agent with tools (edit, test, shell), where you care about "stuck vs producing": `stage_router`.
 - You need a known mix of models for eval or canary: `random`.
-- The **prompt** should decide cheap vs strong before the work starts: `llm_classifier` capability mode.
-- The **prompt** should pick among more than two named targets: `llm_classifier` custom mode ([llm-classifier-custom.md](llm-classifier-custom.md)).
-- The **run** should decide, after the cheap model has already tried: escalation mode.
+- The prompt should decide cheap vs strong before the work starts: `llm_classifier` capability mode.
+- The prompt should pick among more than two named targets: `llm_classifier` custom mode ([llm-classifier-custom.md](llm-classifier-custom.md)).
+- The run should decide, after the cheap model has already tried: escalation mode.
 - You never want a second model: `passthrough`.
 
-Context is the client `messages` array unless a type adds session latching (classifier affinity, escalation confirmations). Switchyard does not keep a private notebook per target.
+The context for every turn is the client's `messages` array, unless a type adds session latching (classifier affinity or escalation confirmations). Switchyard does not keep a private notebook per target.
 
-Polypus dials Switchyard over Bifrost (synthetic provider id `switchyard`) for composed `router/…` chat. Leaf callbacks still hit Polypus `:1320`. CF TTS/STT enter Bifrost then a plugin short-circuits onto extension `/ai/run` (Workers AI OpenAI-compat does not expose `/ai/v1/audio/*`; verified live). Model Search stays on the Cloudflare extension.
+For composed `router/…` chat, Polypus dials Switchyard over Bifrost, using the synthetic provider id `switchyard`. The leaf callbacks still hit Polypus on `:1320`. Cloudflare TTS and STT calls enter Bifrost, and then a plugin short-circuits them onto the extension's `/ai/run`. The plugin is there because the Workers AI OpenAI-compatible API does not expose `/ai/v1/audio/*` (verified live). Model Search stays on the Cloudflare extension.
 
-## Common TOML shape
+## Every route file uses the same TOML shape
 
 ```toml
 schema_version = 1
@@ -48,4 +48,4 @@ id = "my-route"
 type = "stage_router"   # or random, llm_classifier, passthrough
 ```
 
-Clients send `model: "my-route"` (the route `id`). Table names like `[routes.my_route]` are local to the file.
+Clients send `model: "my-route"`, which is the route `id`. Table names such as `[routes.my_route]` are local to the file.

@@ -1,20 +1,28 @@
 # Run your own Polypus on your tailnet
 
-This guide takes you from nothing to your own Polypus gateway, running in Docker on the computer you work on and reached only through your own Tailscale network. It is written for people at Digizoo, so it uses Digizoo's OpenRouter organisation for model access. Everything else applies to anyone.
+This guide takes you from nothing to your own Polypus gateway. The gateway runs in Docker on the computer you work on, and only your own Tailscale network can reach it. It is written for people at Digizoo, so it uses Digizoo's OpenRouter organisation for model access. Everything else applies to anyone.
 
 You end up with one address, `https://polypus-<identifier>.<tailnet>`, that speaks the OpenAI API. Your tools call it with a client key, and the gateway holds the OpenRouter key, so no tool ever sees it.
 
 ## Before you start, set up four things
 
-**Docker.** Any Docker engine that runs Compose v2 works: Docker Desktop, OrbStack or Colima on a Mac, Docker Desktop on Windows. Polypus starts its services as containers, so the engine must be running whenever you deploy.
+### Docker
 
-**Tailscale, signed in to your own tailnet.** Install the Tailscale app on this computer and sign in. The deploy checks your gateway through its tailnet address, so it fails when this machine is not on the tailnet. Each person uses their own tailnet, which keeps your gateway and its traces visible only to your own devices.
+Any Docker engine that runs Compose v2 works: Docker Desktop, OrbStack or Colima on a Mac, Docker Desktop on Windows. Polypus starts its services as containers, so the engine must be running whenever you deploy.
 
-In the Tailscale admin console, open **DNS** and check two settings there. **MagicDNS** must be on, and **HTTPS certificates** must be enabled, so the gateway can answer on `https://` with a real certificate. The same page shows your tailnet name, such as `tail1234.ts.net`, which you need in step 3.
+### Tailscale, signed in to your own tailnet
 
-**A Tailscale auth key for the gateway.** The gateway joins your tailnet as its own device, named `polypus-<identifier>`, and it uses an auth key to join the first time. In the admin console, open **Settings**, then **Keys**, and generate an auth key. Leave **Ephemeral** off, because an ephemeral device disappears from the tailnet when it goes offline. A one-off key is enough: the gateway keeps its identity in a Docker volume after the first join, so later deploys never use the key again.
+Install the Tailscale app on this computer and sign in. The deploy checks your gateway through its tailnet address, so it fails when this machine is not on the tailnet. Each person uses their own tailnet, which keeps your gateway and its traces visible only to your own devices.
 
-**An invite to Digizoo's OpenRouter organisation.** Ask Hector, who administers it, to invite you. Every model call goes through OpenRouter, and the organisation pays for it from one shared credit pool.
+In the Tailscale admin console, open DNS and check two settings there. MagicDNS must be on, and HTTPS certificates must be enabled, so the gateway can answer on `https://` with a real certificate. The same page shows your tailnet name, such as `tail1234.ts.net`, which you need in step 3.
+
+### A Tailscale auth key for the gateway
+
+The gateway joins your tailnet as its own device, named `polypus-<identifier>`, and it uses an auth key to join the first time. In the admin console, open Settings, then Keys, and generate an auth key. Leave Ephemeral off, because an ephemeral device disappears from the tailnet when it goes offline. A one-off key is enough: the gateway keeps its identity in a Docker volume after the first join, so later deploys never use the key again.
+
+### An invite to Digizoo's OpenRouter organisation
+
+Ask Hector, who administers it, to invite you. Every model call goes through OpenRouter, and the organisation pays for it from one shared credit pool.
 
 ## 1. Install polypus
 
@@ -29,7 +37,7 @@ Go puts the binary in `$(go env GOPATH)/bin`, so add that folder to your `PATH` 
 
 ## 2. Create your own OpenRouter key
 
-Accept the invite, then create an API key under the Digizoo organisation in OpenRouter's **Keys** page. Each person creates and keeps their own key, so revoking one never stops anyone else's gateway, and spend shows per person.
+Accept the invite, then create an API key under the Digizoo organisation in OpenRouter's Keys page. Each person creates and keeps their own key, so revoking one never stops anyone else's gateway, and spend shows per person.
 
 Your account carries a **weekly guardrail**: a spending allowance that resets each week. It acts as a circuit breaker for a runaway agent, so normal work should stay well under it. You can also put a smaller limit on your own key if you want an earlier stop.
 
