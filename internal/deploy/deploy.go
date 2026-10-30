@@ -45,6 +45,7 @@ type plan struct {
 	imagesEnv      string
 	pins           string // resolved pins to write to imagesEnv; empty when an environment file is used.
 	services       images.Services
+	smokeRouters   bool // the gateway YAML has routers: (passthrough ones need no Switchyard).
 	smokeSystemOne bool
 	secretNames    []string
 }
@@ -77,6 +78,9 @@ func resolvePlan(opts Options) (plan, error) {
 	if p.services, err = Services(opts); err != nil {
 		return p, err
 	}
+	if p.smokeRouters, err = routers.HasTopLevelRouters(gatewayPath); err != nil {
+		return p, fmt.Errorf("deploy: routers detect: %w", err)
+	}
 	if p.imagesEnv, p.pins, err = resolvePins(opts, p.services); err != nil {
 		return p, err
 	}
@@ -90,17 +94,17 @@ func resolvePlan(opts Options) (plan, error) {
 }
 
 // Services returns the optional services the environment runs: Switchyard when its
-// gateway YAML has routers, and the observability stack when its switch is on.
+// gateway YAML has a composed router, and the observability stack when its switch is on.
 func Services(opts Options) (images.Services, error) {
 	gatewayPath, err := paths.ResolveGatewayConfig(opts.GatewayConfig)
 	if err != nil {
 		return images.Services{}, err
 	}
-	hasRouters, err := routers.HasTopLevelRouters(gatewayPath)
+	composed, err := gatewayconfig.HasComposedRouters(gatewayPath)
 	if err != nil {
 		return images.Services{}, fmt.Errorf("deploy: routers detect: %w", err)
 	}
-	return images.Services{Routers: hasRouters, Observability: opts.Environment.Observability}, nil
+	return images.Services{Routers: composed, Observability: opts.Environment.Observability}, nil
 }
 
 // resolvePins returns the images file compose reads and, when the deploy writes
@@ -152,9 +156,12 @@ func printPlan(opts Options, p plan) {
 	} else {
 		fmt.Printf("deploy: images of release %s (written to %s)\n", opts.Version, p.imagesEnv)
 	}
-	if p.services.Routers {
-		fmt.Println("deploy: routers in host config; switchyard on")
-	} else {
+	switch {
+	case p.services.Routers:
+		fmt.Println("deploy: composed routers in host config; switchyard on")
+	case p.smokeRouters:
+		fmt.Println("deploy: passthrough routers only; the gateway serves them, switchyard off")
+	default:
 		fmt.Println("deploy: no routers in host config; switchyard off")
 	}
 	if p.services.Observability {
@@ -293,6 +300,13 @@ func startStack(ctx context.Context, opts Options, p plan, cc compose.Client) er
 	if err := cc.Up(ctx); err != nil {
 		return err
 	}
+	if !p.services.Routers {
+		// compose up leaves a profile's containers running once the profile is off.
+		fmt.Println("deploy: remove the switchyard container if present")
+		if err := cc.RemoveServices(ctx, "switchyard"); err != nil {
+			return err
+		}
+	}
 	if !p.services.Observability {
 		// compose up leaves a profile's containers running once the profile is off.
 		fmt.Println("deploy: remove collector, Phoenix and HyperDX containers if present (their volumes stay)")
@@ -331,7 +345,7 @@ func runSmoke(ctx context.Context, opts Options, p plan) error {
 	return smoke.Run(smokeCtx, smoke.Options{
 		BaseURL:       opts.HealthURL,
 		ChatModel:     opts.SmokeChatModel,
-		WithRouter:    p.services.Routers,
+		WithRouter:    p.smokeRouters,
 		WithSystemOne: p.smokeSystemOne,
 		WithProviders: withProviders,
 		GatewayConfig: p.gatewayPath,

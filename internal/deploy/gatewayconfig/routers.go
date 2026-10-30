@@ -33,6 +33,27 @@ type routersFile struct {
 	} `yaml:"routers"`
 }
 
+// HasComposedRouters reports whether the gateway YAML has a router of any
+// capability that Switchyard serves (stage_router, llm_classifier or fallback).
+// The gateway answers passthrough routers itself, so they need no Switchyard.
+func HasComposedRouters(path string) (bool, error) {
+	data, err := readGatewayYAML(path)
+	if err != nil {
+		return false, err
+	}
+	var f routersFile
+	if err := yaml.Unmarshal(data, &f); err != nil {
+		return false, fmt.Errorf("gatewayconfig: routers in %q: %w", path, err)
+	}
+	for _, r := range f.Routers {
+		switch r.Route.Type {
+		case "stage_router", "llm_classifier", "fallback":
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // RouterSmokeTargets returns the gateway YAML's chat routers in name order, each
 // with the leaves it can answer with.
 func RouterSmokeTargets(path string) ([]RouterTarget, error) {

@@ -3,7 +3,8 @@ package images
 // Services says which optional parts of the deploy stack run, and so which image
 // pins a deploy needs. The gateway and Tailscale always run.
 type Services struct {
-	// Routers runs Switchyard (the gateway YAML has routers:).
+	// Routers runs Switchyard (the gateway YAML has a stage_router, llm_classifier
+	// or fallback router; the gateway serves passthrough routers itself).
 	Routers bool
 	// Observability runs the OTLP collector, Phoenix and HyperDX.
 	Observability bool
