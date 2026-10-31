@@ -9,8 +9,9 @@ identifier: personal
 # and smoke checks. Find it in the Tailscale admin console under DNS.
 tailnet: example.ts.net
 
-# observability runs the OTLP collector, Phoenix and HyperDX alongside the gateway.
-observability: false
+# observability runs the OTLP collector, Phoenix and HyperDX alongside the gateway,
+# so every call is traced. It is on when this line is missing; set false only to skip them.
+observability: true
 
 # gateway is the Polypus gateway YAML this environment deploys.
 gateway: gateway.yaml
