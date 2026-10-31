@@ -1,0 +1,74 @@
+# Landing page copy. Every claim here must match the README or docs/.
+hero:
+  eyebrow: For the AI behavior engineer
+  title: One address for every model your software calls
+  lead: >-
+    Polypus is an OpenAI-compatible gateway for developers shaping how their AI
+    behaves. Your apps and agents call one address, and you change models,
+    routes and keys in one place.
+  primary: { label: Run your own, path: /docs/setup }
+  secondary: { label: Read the docs, path: /docs }
+
+features:
+  - icon: swap
+    title: Swap the model, not the app
+    text: >-
+      Moving to another model, provider or key is a gateway config change. Your
+      apps keep calling the same address with the same OpenAI client.
+  - icon: route
+    title: Route each turn by how it is going
+    text: >-
+      Named routers pick a model per turn: a stage router that reads tool
+      progress, an LLM classifier, escalation that latches to a strong model,
+      and fallback.
+    link: { label: Choose a router, path: /docs/switchyard }
+  - icon: eye
+    title: See every call
+    text: >-
+      Traces go to Phoenix and HyperDX, and every failed call leaves a JSON dump
+      that an agent can read to work out what went wrong.
+  - icon: key
+    title: Keys stay out of your apps
+    text: >-
+      The gateway holds every provider URL and key, read from the OS keyring.
+      Your apps carry one client key, or none on your own machine.
+  - icon: shield
+    title: Yours, on your tailnet
+    text: >-
+      polypus deploy runs the whole stack in Docker on your machine. Nothing
+      publishes a host port, so only devices on your Tailscale network can call
+      it.
+    link: { label: Set it up, path: /docs/setup }
+
+code:
+  title: Your client already speaks it
+  text: >-
+    Point any OpenAI client at your gateway and pick a model or a router by
+    name. The default deploy defines router/turno for chat.
+  sample: |
+    curl https://polypus-laptop.tail1234.ts.net/v1/chat/completions \
+      -H "Authorization: Bearer $POLYPUS_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"model": "router/turno",
+           "messages": [{"role": "user", "content": "Hello"}]}'
+
+capabilities:
+  title: What ships today
+  items:
+    - Chat and vision, streamed, with tools
+    - Embeddings
+    - Speech and transcription
+    - Batches over the provider's own batch API
+    - SystemOne structured evaluation
+    - Model catalogue with allow lists
+
+backends:
+  title: Arms it can reach
+  items: [OpenRouter, Claude, Gemini, Cloudflare Workers AI, LM Studio, Local MLX speech]
+
+cta:
+  title: Run your own Polypus
+  text: >-
+    One guide takes you from an empty machine to a locked gateway on your
+    tailnet, and a coding agent can walk you through it.
+  primary: { label: Start the setup, path: /docs/setup }

@@ -1,0 +1,38 @@
+{{- $cur := . -}}
+{{- $group := "" -}}
+{{- range site.Params.nav -}}{{- $g := .group -}}{{- range .pages -}}{{- if eq (site.GetPage .path) $cur -}}{{- $group = $g -}}{{- end -}}{{- end -}}{{- end -}}
+<div class="docs">
+  <aside class="docs__nav">
+    <details class="navbox" open>
+      <summary>Pages</summary>
+      <nav aria-label="Documentation">
+        {{- range site.Params.nav }}
+        <div class="navgroup">
+          <p class="navgroup__title">{{ partial "icon.html" .icon }}{{ .group }}</p>
+          <ul>
+            {{- range .pages }}
+            {{- $label := .label }}
+            {{- with site.GetPage .path }}
+            <li><a href="{{ .RelPermalink }}"{{ if eq . $cur }} aria-current="page"{{ end }}>{{ $label }}</a></li>
+            {{- end }}
+            {{- end }}
+          </ul>
+        </div>
+        {{- end }}
+      </nav>
+    </details>
+  </aside>
+  <main class="docs__main">
+    <div class="dochead">
+      <span class="dochead__group">{{ $group }}</span>
+      <a class="dochead__edit" href="{{ site.Params.repo }}/blob/main/{{ partial "source-path.html" . }}">{{ partial "github.html" . }} View &amp; edit on GitHub</a>
+    </div>
+    <article class="doc">{{ .Content }}</article>
+  </main>
+  {{- with .TableOfContents }}{{ if ne (trim (. | plainify) " \n") "" }}
+  <aside class="docs__toc" aria-label="On this page">
+    <p class="toc__title">On this page</p>
+    {{ . }}
+  </aside>
+  {{- end }}{{ end }}
+</div>
