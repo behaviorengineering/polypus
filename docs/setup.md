@@ -4,6 +4,8 @@ This guide takes you from nothing to your own Polypus gateway. The gateway runs 
 
 You end up with one address, `https://polypus-<identifier>.<tailnet>`, that speaks the OpenAI API. Your tools call it with a client key, and the gateway holds the OpenRouter key, so no tool ever sees it.
 
+If you use Claude Code or another coding agent, ask it to set up Polypus with the skill at [ai-copilots/skills/polypus-setup/SKILL.md](../ai-copilots/skills/polypus-setup/SKILL.md). It follows this guide, checks your machine before each step, and leaves every secret for you to type into your own terminal.
+
 ## Before you start, set up four things
 
 ### Docker
