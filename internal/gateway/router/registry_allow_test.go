@@ -26,6 +26,35 @@ func TestAllowModelAppends(t *testing.T) {
 	}
 }
 
+func TestAllowModelKeepsSystemOneAllow(t *testing.T) {
+	cfg := gatedTestRouterConfig()
+	b := cfg.Backends["cf"]
+	b.Models.SystemOneAllowConfigured = true
+	b.Models.SystemOneAllow = []string{"typesafe/jev", "perplexity/pplx-decider-v1.2"}
+	cfg.Backends["cf"] = b
+	reg, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.AllowModel("cf", "@cf/new"); err != nil {
+		t.Fatal(err)
+	}
+	got := reg.Config().Backends["cf"].Models
+	if got == nil {
+		t.Fatal("models missing")
+	}
+	if !got.SystemOneAllowConfigured {
+		t.Fatal("SystemOneAllowConfigured dropped")
+	}
+	if len(got.SystemOneAllow) != 2 || got.SystemOneAllow[0] != "typesafe/jev" || got.SystemOneAllow[1] != "perplexity/pplx-decider-v1.2" {
+		t.Fatalf("SystemOneAllow dropped: %v", got.SystemOneAllow)
+	}
+	b2, _ := reg.Backend("cf")
+	if !b2.IsModelAllowed("@cf/new") {
+		t.Fatal("expected chat model allowed")
+	}
+}
+
 func TestAllowModelUnknownBackend(t *testing.T) {
 	reg, err := NewRegistry(gatedTestRouterConfig())
 	if err != nil {
