@@ -1,21 +1,53 @@
-# Builds the Polypus docs site from the Markdown in place: README.md is the home
-# page and docs/ keeps its paths, so GitHub, clones and agents read the same files.
-# Build: hugo --source site. Published to GitHub Pages by .github/workflows/docs-site.yml.
+# The Polypus site: a landing page (layouts/home.html, copy in data/landing.yaml)
+# and the docs, built from docs/ in place so GitHub, clones and agents read the
+# same Markdown. Preview: go tool task site. Published to GitHub Pages by
+# .github/workflows/docs-site.yml.
 baseURL = "https://behaviorengineering.github.io/polypus/"
 title = "Polypus"
 disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
 
 [params]
   repo = "https://github.com/behaviorengineering/polypus"
+  org = "https://behaviorengineering.ai/"
+  description = "An OpenAI-compatible gateway for developers shaping how AI behaves."
+
+  # The docs page list: short labels in groups. Each page keeps its own H1.
+  [[params.nav]]
+    group = "Getting started"
+    icon = "book"
+    pages = [
+      { path = "/docs", label = "Overview" },
+      { path = "/docs/setup", label = "Run your own" },
+      { path = "/docs/install", label = "Install" },
+      { path = "/docs/run-locally", label = "Run locally" },
+    ]
+  [[params.nav]]
+    group = "Switchyard routers"
+    icon = "route"
+    pages = [
+      { path = "/docs/switchyard", label = "Choosing a type" },
+      { path = "/docs/switchyard/stage-router", label = "Stage router" },
+      { path = "/docs/switchyard/llm-classifier", label = "LLM classifier" },
+      { path = "/docs/switchyard/llm-classifier-custom", label = "Custom classifier" },
+      { path = "/docs/switchyard/escalation", label = "Escalation" },
+      { path = "/docs/switchyard/random", label = "Random" },
+      { path = "/docs/switchyard/passthrough", label = "Passthrough" },
+    ]
+  [[params.nav]]
+    group = "Releases"
+    icon = "box"
+    pages = [
+      { path = "/docs/releases", label = "Releases and images" },
+    ]
 
 [module]
-  [[module.mounts]]
-    source = "../README.md"
-    target = "content/_index.md"
   [[module.mounts]]
     source = "../docs"
     target = "content/docs"
     excludeFiles = ["**/README.md"]
+  [[module.mounts]]
+    source = "../docs/README.md"
+    target = "content/docs/_index.md"
   [[module.mounts]]
     source = "../docs/switchyard/README.md"
     target = "content/docs/switchyard/_index.md"
@@ -24,21 +56,22 @@ disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
     target = "static/media"
     includeFiles = ["*.webp"]
   [[module.mounts]]
+    source = "static"
+    target = "static"
+  [[module.mounts]]
     source = "layouts"
     target = "layouts"
   [[module.mounts]]
     source = "assets"
     target = "assets"
+  [[module.mounts]]
+    source = "data"
+    target = "data"
 
-# The README opens with an HTML banner; every page here is our own Markdown.
 [markup.goldmark.renderer]
-  unsafe = true
+  unsafe = false
 [markup.highlight]
   noClasses = false
-
-# docs/ has no page of its own, only the pages inside it.
-[[cascade]]
-  [cascade.build]
-    render = "never"
-  [cascade.target]
-    path = "/docs"
+[markup.tableOfContents]
+  startLevel = 2
+  endLevel = 3

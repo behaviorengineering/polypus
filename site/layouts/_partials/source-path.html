@@ -1,6 +1,4 @@
 {{- /* The repository path of the Markdown a page was built from, undoing the mounts in hugo.toml. */ -}}
 {{- $p := .File.Path -}}
-{{- if .IsHome -}}{{- $p = "README.md" -}}
-{{- else if eq .File.LogicalName "_index.md" -}}{{- $p = path.Join .File.Dir "README.md" -}}
-{{- end -}}
+{{- if eq .File.LogicalName "_index.md" -}}{{- $p = path.Join .File.Dir "README.md" -}}{{- end -}}
 {{- return $p -}}

@@ -1,0 +1,13 @@
+{{- /* A small line icon by name, drawn in currentColor. */ -}}
+{{- $paths := dict
+  "book" `<path d="M4 19.5V5a2 2 0 0 1 2-2h14v15H6a2 2 0 0 0-2 2v.5"/><path d="M6 21h14"/>`
+  "route" `<circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h7.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H16"/>`
+  "box" `<path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="m3 7.5 9 4.5 9-4.5M12 12v9"/>`
+  "swap" `<path d="M7 4 3 8l4 4"/><path d="M3 8h14"/><path d="m17 12 4 4-4 4"/><path d="M21 16H7"/>`
+  "eye" `<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>`
+  "key" `<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.3-9.3M16 7l3 3M14 9l2 2"/>`
+  "shield" `<path d="M12 3 4 6v6c0 4.6 3.4 8.1 8 9 4.6-.9 8-4.4 8-9V6z"/><path d="m9 12 2 2 4-4"/>`
+  "arrow" `<path d="M5 12h14M13 6l6 6-6 6"/>`
+  "check" `<path d="m5 12 4.5 4.5L19 7"/>`
+-}}
+<svg class="icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{{ index $paths . | safeHTML }}</svg>

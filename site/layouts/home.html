@@ -1,1 +1,68 @@
-{{ define "main" }}{{ .Content }}{{ end }}
+{{ define "main" }}
+{{- $l := site.Data.landing -}}
+<main class="landing">
+  <section class="hero">
+    <div class="hero__inner">
+      <img class="hero__banner" src="{{ "media/banner.webp" | relURL }}" alt="Polypus. One face. Many arms. Stay local." width="760">
+      <p class="eyebrow">{{ $l.hero.eyebrow }}</p>
+      <h1>{{ $l.hero.title }}</h1>
+      <p class="hero__lead">{{ $l.hero.lead }}</p>
+      <div class="actions">
+        <a class="btn btn--primary" href="{{ (site.GetPage $l.hero.primary.path).RelPermalink }}">{{ $l.hero.primary.label }} {{ partial "icon.html" "arrow" }}</a>
+        <a class="btn btn--ghost" href="{{ (site.GetPage $l.hero.secondary.path).RelPermalink }}">{{ $l.hero.secondary.label }}</a>
+        <a class="btn btn--ghost" href="{{ site.Params.repo }}">{{ partial "github.html" . }} GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="band__inner features">
+      {{- range $l.features }}
+      <article class="feature">
+        <span class="feature__icon">{{ partial "icon.html" .icon }}</span>
+        <h2>{{ .title }}</h2>
+        <p>{{ .text }}</p>
+        {{- with .link }}
+        <a class="more" href="{{ (site.GetPage .path).RelPermalink }}">{{ .label }} {{ partial "icon.html" "arrow" }}</a>
+        {{- end }}
+      </article>
+      {{- end }}
+    </div>
+  </section>
+
+  <section class="band band--tint">
+    <div class="band__inner split">
+      <div>
+        <h2>{{ $l.code.title }}</h2>
+        <p>{{ $l.code.text }}</p>
+      </div>
+      <div class="code-card">{{ transform.Highlight $l.code.sample "bash" }}</div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="band__inner split">
+      <div>
+        <h2>{{ $l.capabilities.title }}</h2>
+        <ul class="checks">
+          {{- range $l.capabilities.items }}<li>{{ partial "icon.html" "check" }}{{ . }}</li>{{ end }}
+        </ul>
+      </div>
+      <div>
+        <h2>{{ $l.backends.title }}</h2>
+        <ul class="chips">
+          {{- range $l.backends.items }}<li>{{ . }}</li>{{ end }}
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="cta__inner">
+      <h2>{{ $l.cta.title }}</h2>
+      <p>{{ $l.cta.text }}</p>
+      <a class="btn btn--primary" href="{{ (site.GetPage $l.cta.primary.path).RelPermalink }}">{{ $l.cta.primary.label }} {{ partial "icon.html" "arrow" }}</a>
+    </div>
+  </section>
+</main>
+{{ end }}

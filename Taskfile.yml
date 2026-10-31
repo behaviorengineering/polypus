@@ -46,9 +46,10 @@ tasks:
     cmds:
       - ./scripts/pc-up.sh
 
-  docs-site:
-    desc: Preview the docs site (Hugo) at http://localhost:1313/polypus/
-    summary: "Serves site/ with hugo server, live-reloading README.md and docs/. Needs Hugo 0.152 or newer on PATH; CI pins the version in .github/workflows/docs-site.yml."
+  site:
+    desc: Preview the website at http://localhost:1313/polypus/
+    summary: "Serves site/ with hugo server: the landing page and the docs from docs/, live-reloading as you edit. Needs Hugo 0.152 or newer on PATH; CI pins the version in .github/workflows/docs-site.yml."
+    aliases: [docs-site]
     cmds:
       - hugo server --source site
 
