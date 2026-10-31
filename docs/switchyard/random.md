@@ -1,14 +1,14 @@
-# Random routing
+# Random routing splits traffic by weight
 
-`type = "random"` picks one configured target per request. It does **not** read the prompt or tool history. Two or more targets. Weights set the mix.
+`type = "random"` picks one of two or more configured targets for each request, and the weights set the mix. It does not read the prompt or the tool history.
 
-Upstream: `providers/switchyard/docs/routing_algorithms/random_routing.md`.
+The upstream page is `providers/switchyard/docs/routing_algorithms/random_routing.md`.
 
 ## How a turn is routed
 
-Each request draws a target from `targets` using `weights`. Turns in the same conversation can land on different models. Short runs will not match the weights exactly.
+Each request draws a target from `targets` using `weights`, so turns in the same conversation can land on different models. Short runs will not match the weights exactly.
 
-Omit `weights` for an even split. A weight of `0` disables that target. Optional `seed` makes the sequence repeatable for tests; omit it for live traffic.
+Omit `weights` for an even split, and set a weight to `0` to disable that target. The optional `seed` makes the sequence repeatable for tests, and you omit it for live traffic.
 
 ## Fields (out of the box)
 
@@ -19,11 +19,11 @@ Omit `weights` for an even split. A weight of `0` disables that target. Optional
 | `weights` | no | One non-negative number per target, same order. Need not sum to 1. |
 | `seed` | no | Integer. Same seed plus same request order repeats the picks. |
 
-## Use cases
+## Where random routing fits
 
 ### A/B a new model
 
-Send most traffic to the current model, a slice to a candidate. Compare quality and cost on real prompts. Do not use this when the **same** thread must stay on one model (chat UX will flip mid-conversation). For sticky sessions, use [llm-classifier](llm-classifier.md) with `session_affinity` or [passthrough](passthrough.md).
+Send most traffic to the current model and a slice to a candidate, then compare quality and cost on real prompts. Do not use this when the same thread must stay on one model, because the chat UX will flip mid-conversation. For sticky sessions, use [llm-classifier](llm-classifier.md) with `session_affinity`, or [passthrough](passthrough.md).
 
 ```toml
 [routes.ab_test]
@@ -33,15 +33,15 @@ targets = ["strong", "weak"]
 weights = [1, 9]
 ```
 
-About 10% strong, 90% weak.
+That route sends about 10% of requests to strong and 90% to weak.
 
 ### Eval and benchmark baselines
 
-Fixed mix so a harness hits both models without writing two client configs. Set `seed` so a replay is comparable.
+A fixed mix lets a harness hit both models without writing two client configs. Set `seed` so a replay is comparable.
 
-Good fits: offline eval, load tests, "what is p50 latency on this mix."
+It suits offline eval, load tests and questions such as "what is p50 latency on this mix".
 
-Poor fits: debug loops (you want progress signals, not a coin flip). Use [stage-router](stage-router.md).
+It fits debug loops poorly, because there you want progress signals rather than a coin flip. Use [stage-router](stage-router.md) for those.
 
 ```toml
 [routes.bench]
@@ -54,11 +54,11 @@ seed = 42
 
 ### Cost experiments
 
-Raise the cheap weight until quality drops too far. This is a traffic knob, not a per-turn brain. If quality must follow "stuck vs producing," use [stage-router](stage-router.md) instead.
+Raise the cheap weight until quality drops too far. Random routing only sets the traffic mix and makes no per-turn judgement, so if quality must follow "stuck vs producing", use [stage-router](stage-router.md) instead.
 
 ### Canary a self-hosted target
 
-Keep most traffic on a known cloud model; send a small weight to a local server you are trying. If the local target is down, that slice fails; random does not fail over.
+Keep most traffic on a known cloud model and send a small weight to a local server you are trying. Random routing does not fail over, so if the local target is down, that slice fails.
 
 ## When not to use this type
 
