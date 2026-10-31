@@ -14,8 +14,8 @@ import (
 
 const bannerAssetPath = "/media/banner.webp"
 
-// Matte sampled from media/banner.webp so the page matches the logo asset (not #000).
-const landingPageBackground = "#010302"
+// The Polypus site, linked from the page header.
+const landingDocsURL = "https://behaviorengineering.github.io/polypus/"
 
 type landingLink struct {
 	Href        string
@@ -30,46 +30,91 @@ type landingPageData struct {
 	Version    string
 }
 
+// The Polypus mark: the eye from media/banner.webp, as drawn for the site (site/assets/polypus-eye.svg).
+const landingEyeSVG = `<svg viewBox="-54 -54 108 108" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true">` +
+	`<ellipse cx="0" cy="0" rx="41" ry="44.5" stroke-width="13"/><circle cx="0" cy="4" r="10" fill="currentColor" stroke="none"/>` +
+	`<path d="M7.3 -22.3A23.5 23.5 0 0 1 20.8 -11" stroke-width="7"/></svg>`
+
+// The same mark in the brand purple, URL-encoded for a data: favicon.
+const landingEyeFavicon = `%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-54 -54 108 108' fill='none' stroke='%23bd50d1' stroke-linecap='round'%3E` +
+	`%3Cellipse rx='41' ry='44.5' stroke-width='13'/%3E%3Ccircle cy='4' r='10' fill='%23bd50d1' stroke='none'/%3E` +
+	`%3Cpath d='M7.3 -22.3A23.5 23.5 0 0 1 20.8 -11' stroke-width='7'/%3E%3C/svg%3E`
+
 const landingPageTmpl = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Polypus</title>
+<link rel="icon" href="data:image/svg+xml,` + landingEyeFavicon + `">
 <style>
-html, body { margin: 0; min-height: 100%; background: ` + landingPageBackground + `; color: #e8e8e8; font-family: system-ui, sans-serif; }
-main { max-width: 56rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
-.layout { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem 2.5rem; align-items: start; }
-@media (max-width: 720px) { .layout { grid-template-columns: 1fr; } }
-.col { text-align: left; min-width: 0; }
-img.banner { display: block; max-width: min(100%, 28rem); height: auto; margin: 0 0 2rem; }
-nav h2, section.notes h2 { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #888; margin: 0 0 0.75rem; }
-ul { list-style: none; padding: 0; margin: 0; }
-li { margin: 0 0 1.25rem; }
-a { color: #7eb8ff; text-decoration: none; font-weight: 600; }
-a:hover { text-decoration: underline; }
-p.desc { margin: 0.35rem 0 0; font-size: 0.9rem; color: #a8a8a8; line-height: 1.45; }
-section.notes { margin-top: 1.75rem; }
-pre.note { margin: 0; padding: 0.75rem; background: #111; border: 1px solid #333; font-size: 0.8rem; line-height: 1.5; overflow-x: auto; white-space: pre; color: #c8c8c8; }
-section.allow { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #333; }
-section.allow h2 { font-size: 1rem; margin: 0 0 1rem; font-weight: 600; text-transform: none; letter-spacing: normal; color: #e8e8e8; }
-#allow-form label { display: block; margin-bottom: 0.75rem; font-size: 0.9rem; }
-#allow-form input { display: block; width: 100%; margin-top: 0.25rem; padding: 0.45rem 0.5rem; box-sizing: border-box; background: #111; border: 1px solid #444; color: #e8e8e8; border-radius: 4px; }
-#allow-form button { margin-top: 0.5rem; padding: 0.5rem 1rem; background: #1a3a5c; color: #e8e8e8; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; }
-#allow-form button:hover { background: #254a70; }
-#allow-result { margin-top: 1rem; padding: 0.75rem; background: #111; border: 1px solid #333; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; color: #c8c8c8; min-height: 2rem; }
-footer.version-footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid #333; font-size: 0.8rem; color: #666; text-align: center; }
+:root {
+  --brand: #bd50d1; --brand-strong: #9b2fb2; --bg: #120c15; --card: #1a1220; --card-hi: #221829;
+  --line: #2c2232; --fg: #ece4f0; --muted: #a99bb0; --link: #f3e8f6; --link-hover: #e8c4ff; --code: #0e0911;
+  --heading: "Montserrat", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  background: radial-gradient(900px 380px at 50% -80px, rgba(189, 80, 209, 0.22), transparent 70%), var(--bg);
+  color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased;
+}
+a { color: var(--link); text-decoration: none; }
+header.top { border-bottom: 1px solid var(--line); background: rgba(29, 19, 33, 0.85); }
+header.top .inner { display: flex; align-items: center; gap: 12px; max-width: 64rem; margin: 0 auto; padding: 0.8rem 1.25rem; }
+.wordmark { display: flex; align-items: center; gap: 8px; color: #fff; font: 500 1.25rem/1 var(--heading); letter-spacing: -0.02em; }
+.wordmark svg { width: 24px; height: 24px; color: var(--brand); }
+.pill { padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 0.78rem; }
+header.top .docs { margin-left: auto; color: var(--muted); font-size: 0.9rem; }
+header.top .docs:hover { color: #fff; }
+main { max-width: 64rem; margin: 0 auto; padding: 1.75rem 1.25rem 3rem; }
+.layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items: start; }
+@media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+.col { display: grid; gap: 1.25rem; min-width: 0; }
+.card, section.notes, section.allow { padding: 1.25rem; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.hero { padding: 0.5rem; background: linear-gradient(160deg, #2f0035, #1d1321 70%); overflow: hidden; }
+img.banner { display: block; width: 100%; height: auto; mix-blend-mode: screen; filter: brightness(0.92) contrast(1.35);
+  -webkit-mask-image: radial-gradient(ellipse 62% 64% at 50% 50%, #000 62%, transparent 100%);
+  mask-image: radial-gradient(ellipse 62% 64% at 50% 50%, #000 62%, transparent 100%); }
+h2 { margin: 0 0 0.6rem; color: var(--brand); font: 600 0.74rem/1.4 var(--heading); letter-spacing: 0.12em; text-transform: uppercase; }
+ul { list-style: none; padding: 0; margin: 0 -0.6rem; }
+li a { display: block; padding: 0.6rem; border-radius: 8px; }
+li a:hover { background: var(--card-hi); }
+li a .title { color: var(--link); font-weight: 600; }
+li a:hover .title { color: var(--link-hover); }
+li a .title::after { content: " \2192"; color: var(--brand); opacity: 0; transition: opacity 0.15s; }
+li a:hover .title::after { opacity: 1; }
+p.desc { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.88rem; }
+pre.note { margin: 0; padding: 0.8rem; border: 1px solid var(--line); border-radius: 8px; background: var(--code); color: #d9cbe0;
+  font: 0.8rem/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-x: auto; white-space: pre; }
+section.allow h2 { margin-bottom: 0.9rem; }
+#allow-form label { display: block; margin-bottom: 0.8rem; color: var(--muted); font-size: 0.85rem; }
+#allow-form input { display: block; width: 100%; margin-top: 0.3rem; padding: 0.55rem 0.7rem; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--code); color: var(--fg); font: inherit; }
+#allow-form input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(189, 80, 209, 0.25); }
+#allow-form button { margin-top: 0.3rem; padding: 0.55rem 1.1rem; border: 0; border-radius: 999px; background: var(--brand); color: #fff;
+  font: 600 0.9rem system-ui, sans-serif; cursor: pointer; }
+#allow-form button:hover { background: var(--brand-strong); }
+#allow-result { margin: 1rem 0 0; padding: 0.8rem; border: 1px solid var(--line); border-radius: 8px; background: var(--code); color: #d9cbe0;
+  font: 0.8rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-x: auto; }
+#allow-result:empty { display: none; }
+footer.version-footer { max-width: 64rem; margin: 0 auto; padding: 1.25rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8rem; text-align: center; }
+footer.version-footer a { color: var(--muted); text-decoration: underline; }
 </style>
 </head>
 <body>
+<header class="top"><div class="inner">
+<span class="wordmark">` + landingEyeSVG + `polypus</span><span class="pill">gateway</span>
+<a class="docs" href="` + landingDocsURL + `">Docs</a>
+</div></header>
 <main>
 <div class="layout">
 <div class="col col-ops">
-<img class="banner" src="` + bannerAssetPath + `" width="1536" height="753" alt="Polypus">
-<nav aria-label="Health and observability">
+<div class="card hero"><img class="banner" src="` + bannerAssetPath + `" width="1536" height="753" alt="Polypus"></div>
+<nav class="card" aria-label="Health and observability">
 <h2>Health &amp; collectors</h2>
 <ul>
-{{range .OpsLinks}}<li><a href="{{.Href}}">{{.Title}}</a><p class="desc">{{.Description}}</p></li>
+{{range .OpsLinks}}<li><a href="{{.Href}}"><span class="title">{{.Title}}</span><p class="desc">{{.Description}}</p></a></li>
 {{end}}
 </ul>
 </nav>
@@ -79,10 +124,10 @@ footer.version-footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px s
 </section>{{end}}
 </div>
 <div class="col col-models">
-<nav aria-label="Models and APIs">
+<nav class="card" aria-label="Models and APIs">
 <h2>Models</h2>
 <ul>
-{{range .ModelLinks}}<li><a href="{{.Href}}">{{.Title}}</a><p class="desc">{{.Description}}</p></li>
+{{range .ModelLinks}}<li><a href="{{.Href}}"><span class="title">{{.Title}}</span><p class="desc">{{.Description}}</p></a></li>
 {{end}}
 </ul>
 </nav>
@@ -97,8 +142,8 @@ footer.version-footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px s
 </section>
 </div>
 </div>
-<footer class="version-footer" aria-label="Gateway version">Polypus {{.Version}}</footer>
 </main>
+<footer class="version-footer" aria-label="Gateway version">Polypus {{.Version}} · <a href="` + landingDocsURL + `">behaviorengineering.github.io/polypus</a></footer>
 <script>
 (function () {
   var form = document.getElementById('allow-form');
