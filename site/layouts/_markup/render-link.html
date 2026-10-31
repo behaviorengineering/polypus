@@ -1,0 +1,16 @@
+{{- /* Links between Markdown files resolve to their site pages. A relative link to a
+       file the site does not publish goes to that file on GitHub instead. */ -}}
+{{- $u := urls.Parse .Destination -}}
+{{- $href := .Destination -}}
+{{- if and $u.Path (not $u.IsAbs) (not (hasPrefix $u.Path "/")) -}}
+  {{- $target := or ($.PageInner.GetPage $u.Path) ($.PageInner.GetPage (strings.TrimSuffix ".md" $u.Path)) -}}
+  {{- if $target -}}
+    {{- $href = $target.RelPermalink -}}
+  {{- else -}}
+    {{- $dir := path.Dir (partial "source-path.html" $.PageInner) -}}
+    {{- $href = printf "%s/blob/main/%s" site.Params.repo (path.Join $dir $u.Path) -}}
+  {{- end -}}
+  {{- with $u.Fragment }}{{ $href = printf "%s#%s" $href . }}{{ end -}}
+{{- end -}}
+<a href="{{ $href }}"{{ with .Title }} title="{{ . }}"{{ end }}{{ if $u.IsAbs }} rel="external"{{ end }}>{{ .Text }}</a>
+{{- /**/ -}}

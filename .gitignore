@@ -41,3 +41,7 @@ coverage.html
 .env.deploy
 .env.images
 .deploy/
+
+# Hugo build lock and default output (go tool task docs-site)
+/site/.hugo_build.lock
+/site/public/

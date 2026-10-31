@@ -1,0 +1,44 @@
+# Builds the Polypus docs site from the Markdown in place: README.md is the home
+# page and docs/ keeps its paths, so GitHub, clones and agents read the same files.
+# Build: hugo --source site. Published to GitHub Pages by .github/workflows/docs-site.yml.
+baseURL = "https://behaviorengineering.github.io/polypus/"
+title = "Polypus"
+disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
+
+[params]
+  repo = "https://github.com/behaviorengineering/polypus"
+
+[module]
+  [[module.mounts]]
+    source = "../README.md"
+    target = "content/_index.md"
+  [[module.mounts]]
+    source = "../docs"
+    target = "content/docs"
+    excludeFiles = ["**/README.md"]
+  [[module.mounts]]
+    source = "../docs/switchyard/README.md"
+    target = "content/docs/switchyard/_index.md"
+  [[module.mounts]]
+    source = "../media"
+    target = "static/media"
+    includeFiles = ["*.webp"]
+  [[module.mounts]]
+    source = "layouts"
+    target = "layouts"
+  [[module.mounts]]
+    source = "assets"
+    target = "assets"
+
+# The README opens with an HTML banner; every page here is our own Markdown.
+[markup.goldmark.renderer]
+  unsafe = true
+[markup.highlight]
+  noClasses = false
+
+# docs/ has no page of its own, only the pages inside it.
+[[cascade]]
+  [cascade.build]
+    render = "never"
+  [cascade.target]
+    path = "/docs"

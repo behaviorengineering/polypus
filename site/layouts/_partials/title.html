@@ -1,0 +1,7 @@
+{{- /* A page's title: front matter if set, else its first heading, else its file name. */ -}}
+{{- $t := .Title -}}
+{{- if not $t -}}
+  {{- with .Fragments.Headings -}}{{- with index . 0 -}}{{- $t = .Title | plainify -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- if not $t -}}{{- with .File -}}{{- $t = .ContentBaseName | humanize -}}{{- end -}}{{- end -}}
+{{- return $t -}}
