@@ -9,6 +9,8 @@ This module is the Polypus inference gateway. Humans read [README.md](README.md)
 3. [ai-copilots/skills/polypus-backend-inventory/SKILL.md](ai-copilots/skills/polypus-backend-inventory/SKILL.md) (when adding backends, inventory, or Allow model)
 4. [ai-copilots/skills/release-polypus/SKILL.md](ai-copilots/skills/release-polypus/SKILL.md) (when tagging / releasing)
 
+**Load when someone sets up their own Polypus:** [ai-copilots/skills/polypus-setup/SKILL.md](ai-copilots/skills/polypus-setup/SKILL.md), which follows [docs/setup.md](docs/setup.md).
+
 Wire discovery with [ai-copilots/BOOTSTRAP.md](ai-copilots/BOOTSTRAP.md).
 
 ```bash
