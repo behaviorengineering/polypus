@@ -2,7 +2,7 @@
 # and the docs, built from docs/ in place so GitHub, clones and agents read the
 # same Markdown. Preview: go tool task site. Published to GitHub Pages by
 # .github/workflows/docs-site.yml.
-baseURL = "https://behaviorengineering.github.io/polypus/"
+baseURL = "https://polypus.dev.xynova.com/"
 title = "Polypus"
 disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
 
