@@ -10,7 +10,7 @@ Today a Go binary, `polypus`, serves the gateway, and an NVIDIA Switchyard sidec
 
 ---
 
-- **Website:** [behaviorengineering.github.io/polypus](https://behaviorengineering.github.io/polypus/)
+- **Website:** [polypus.dev.xynova.com](https://polypus.dev.xynova.com/)
 - **Run your own** on your machine and tailnet: [docs/setup.md](docs/setup.md)
 - **Documentation:** [docs/](docs/README.md), covering install, local development, routers and releases
 - **Agents** start at [AGENTS.md](AGENTS.md)
