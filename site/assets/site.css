@@ -87,7 +87,7 @@ pre {
 
 pre code { padding: 0; background: none; }
 :not(pre) > code { overflow-wrap: anywhere; }
-.highlight pre { background: var(--panel) !important; }
+.highlight pre { background: var(--panel); }
 
 table {
   display: block;

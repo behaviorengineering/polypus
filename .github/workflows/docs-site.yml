@@ -48,7 +48,7 @@ jobs:
       - name: Install Hugo
         run: |
           tarball="hugo_${HUGO_VERSION}_linux-amd64.tar.gz"
-          curl -fsSL -o "$RUNNER_TEMP/$tarball" "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/$tarball"
+          curl --proto "=https" --tlsv1.2 -fsSL -o "$RUNNER_TEMP/$tarball" "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/$tarball"
           echo "${HUGO_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" hugo
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
