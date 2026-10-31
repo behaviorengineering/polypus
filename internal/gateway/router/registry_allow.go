@@ -66,9 +66,11 @@ func withAllowedModel(snap config.RouterConfig, backendID, model string) (config
 	}
 	nb := b
 	nb.Models = &config.BackendModels{
-		Sync:            b.Models.Sync,
-		AllowConfigured: true,
-		Allow:           append(append([]string(nil), b.Models.Allow...), down),
+		Sync:                     b.Models.Sync,
+		AllowConfigured:          true,
+		Allow:                    append(append([]string(nil), b.Models.Allow...), down),
+		SystemOneAllowConfigured: b.Models.SystemOneAllowConfigured,
+		SystemOneAllow:           append([]string(nil), b.Models.SystemOneAllow...),
 	}
 	newBackends[backendID] = nb
 	snap.Backends = newBackends
