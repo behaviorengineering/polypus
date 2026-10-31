@@ -1,0 +1,80 @@
+# Builds the docs site from README.md and docs/ with Hugo (site/hugo.toml) and,
+# on main, publishes it to GitHub Pages. Pull requests build it only, so a broken
+# page or template fails before it merges.
+#
+# One-time setup by a repository admin: Settings > Pages > Build and deployment >
+# Source "GitHub Actions". Until then the configure-pages step fails on main.
+
+name: docs-site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "docs/**"
+      - "media/banner.webp"
+      - "site/**"
+      - ".github/workflows/docs-site.yml"
+  pull_request:
+    paths:
+      - "README.md"
+      - "docs/**"
+      - "media/banner.webp"
+      - "site/**"
+      - ".github/workflows/docs-site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer push waits rather than cancelling a
+# deployment halfway.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  HUGO_VERSION: 0.152.2
+  HUGO_SHA256: 52b6eda6c00f4449d96f0cbfd7300e834c26179c4fe68e0510ef566db52dba04
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Hugo
+        run: |
+          tarball="hugo_${HUGO_VERSION}_linux-amd64.tar.gz"
+          curl --proto "=https" --tlsv1.2 -fsSL -o "$RUNNER_TEMP/$tarball" "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/$tarball"
+          echo "${HUGO_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" hugo
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Build the site
+        run: hugo --source site --destination "$GITHUB_WORKSPACE/_site" --minify --panicOnWarning
+
+      - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: deploy
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

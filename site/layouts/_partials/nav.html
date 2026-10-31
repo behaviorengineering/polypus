@@ -1,0 +1,19 @@
+{{- $cur := .current -}}
+<ul>
+  {{- with .section }}
+  {{- if .IsHome }}
+  <li><a href="{{ .RelPermalink }}"{{ if eq $cur . }} aria-current="page"{{ end }}>Overview</a></li>
+  {{- end }}
+  {{- range .RegularPages }}
+  <li><a href="{{ .RelPermalink }}"{{ if eq $cur . }} aria-current="page"{{ end }}>{{ partial "title.html" . }}</a></li>
+  {{- end }}
+  {{- range .Sections }}
+  <li>
+    {{- if .File }}
+    <a href="{{ .RelPermalink }}"{{ if eq $cur . }} aria-current="page"{{ end }}>{{ partial "title.html" . }}</a>
+    {{- end }}
+    {{ partial "nav.html" (dict "section" . "current" $cur) }}
+  </li>
+  {{- end }}
+  {{- end }}
+</ul>

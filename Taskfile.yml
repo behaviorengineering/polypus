@@ -46,6 +46,12 @@ tasks:
     cmds:
       - ./scripts/pc-up.sh
 
+  docs-site:
+    desc: Preview the docs site (Hugo) at http://localhost:1313/polypus/
+    summary: "Serves site/ with hugo server, live-reloading README.md and docs/. Needs Hugo 0.152 or newer on PATH; CI pins the version in .github/workflows/docs-site.yml."
+    cmds:
+      - hugo server --source site
+
   serve-down:
     desc: Stop this process-compose project only
     summary: "Stops this repo's process-compose project via scripts/pc-down.sh. Leaves Docker volumes alone."
