@@ -25,12 +25,12 @@ polypus deploy init                       # a starting environment under ~/.conf
 polypus deploy secret set TS_AUTHKEY      # each secret goes to the OS keyring
 polypus deploy run --dry-run              # prints the plan; writes nothing
 polypus deploy run                        # deploys, then checks health and smoke tests every router
-polypus deploy client-key                 # locks the gateway with a client key
+polypus deploy client-key                 # optional: locks the gateway with a client key
 ```
 
 The binary carries its own stack, so you don't need a Polypus checkout. Each environment is its own compose project, Tailscale host and keyring service, so several can run side by side on one machine.
 
-For the full walk-through, from an empty machine to a locked gateway, follow [Run your own Polypus on your tailnet](setup.md).
+For the full walk-through, from an empty machine to a working gateway, follow [Run your own Polypus on your tailnet](setup.md).
 
 ## Where to go next
 
