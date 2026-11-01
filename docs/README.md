@@ -30,7 +30,7 @@ polypus deploy client-key                 # optional: locks the gateway with a c
 
 The binary carries its own stack, so you don't need a Polypus checkout. Each environment is its own compose project, Tailscale host and keyring service, so several can run side by side on one machine.
 
-For the full walk-through, from an empty machine to a working gateway, follow [Run your own Polypus on your tailnet](setup.md).
+The [quick start](quick-start.md) gives you one message to paste into a coding agent such as Claude Code, which then sets up your gateway with you. For the full walk-through by hand, from an empty machine to a working gateway, follow [Run your own Polypus on your tailnet](setup.md).
 
 ## Where to go next
 

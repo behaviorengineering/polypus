@@ -77,7 +77,7 @@ MagicDNS:        same output, CurrentTailnet.MagicDNSEnabled → [true | FAIL]
 HTTPS certs:     same output, CertDomains → [non-empty | FAIL: empty, turn on HTTPS certificates under DNS]
 Tailnet name:    same output, CurrentTailnet.MagicDNSSuffix → [name, used for `tailnet:`]
 Auth key:        person confirms a non-ephemeral key for this tailnet → [confirmed | WAIT]
-OpenRouter key:  person confirms a key created under the Digizoo organisation → [confirmed | WAIT]
+OpenRouter key:  person confirms a key from their OpenRouter account with credits (at Digizoo: created under the Digizoo organisation) → [confirmed | WAIT]
 Result:          [all pass → continue | FAIL or WAIT → fix that row first]
 ```
 
