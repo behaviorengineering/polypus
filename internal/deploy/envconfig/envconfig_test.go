@@ -96,8 +96,18 @@ func TestLoadDefaults(t *testing.T) {
 	if want := filepath.Join(dir, "gateway.yaml"); env.Gateway != want {
 		t.Fatalf("gateway %q want %q", env.Gateway, want)
 	}
-	if env.Images != "" || env.Observability {
+	if env.Images != "" || !env.Observability {
 		t.Fatalf("defaults: %+v", env)
+	}
+}
+
+func TestLoadObservabilityOff(t *testing.T) {
+	env, err := Load(writeConfig(t, t.TempDir(), validConfig+"observability: false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.Observability {
+		t.Fatalf("observability: false should turn it off: %+v", env)
 	}
 }
 

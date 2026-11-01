@@ -60,9 +60,10 @@ func (e Environment) GatewayURL() string {
 }
 
 type fileConfig struct {
-	Identifier    string `yaml:"identifier"`
-	Tailnet       string `yaml:"tailnet"`
-	Observability bool   `yaml:"observability"`
+	Identifier string `yaml:"identifier"`
+	Tailnet    string `yaml:"tailnet"`
+	// Observability is a pointer so a config without the line gets the default, on.
+	Observability *bool  `yaml:"observability"`
 	Gateway       string `yaml:"gateway"`
 	Images        string `yaml:"images"`
 }
@@ -157,7 +158,7 @@ func (fc fileConfig) environment(path string) (Environment, error) {
 		Path:          path,
 		Identifier:    id,
 		Tailnet:       tailnet,
-		Observability: fc.Observability,
+		Observability: fc.Observability == nil || *fc.Observability,
 		Gateway:       relativeTo(dir, gateway),
 	}
 	if images := strings.TrimSpace(fc.Images); images != "" {

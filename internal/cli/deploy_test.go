@@ -153,6 +153,7 @@ func TestDeployRunPinsFollowObservability(t *testing.T) {
 	minimal := filepath.Join(filepath.Dir(config), "minimal.env")
 	writeFiles(t, filepath.Dir(config), map[string]string{
 		"minimal.env": "POLYPUS_IMAGE=ghcr.io/behaviorengineering/polypus:0.3.0\nTAILSCALE_IMAGE=tailscale/tailscale:v1.102.4\n",
+		"config.yaml": "identifier: work\ntailnet: corp.ts.net\nobservability: false\n",
 	})
 	code, out, errOut := captureRun([]string{"deploy", "run", "--dry-run", "--config", config, "--images", minimal})
 	if code != 0 {

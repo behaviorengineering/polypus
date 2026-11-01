@@ -89,7 +89,7 @@ Result:          [all pass → continue | FAIL or WAIT → fix that row first]
 1. **Read the guide** (constraint 1).
 2. **Gate:** run the [prerequisite gate](#prerequisite-gate) (constraint 3).
 3. **Install:** IF `polypus version` fails → give the guide's `go install` line; IF it is still not found → add `$(go env GOPATH)/bin` to `PATH`.
-4. **Environment:** ask the person for an identifier (lower-case letters, digits, hyphens; once chosen, kept). DO `polypus deploy init`. DO set `identifier` and `tailnet` (from the gate) in `~/.config/polypus/deploy/config.yaml`. Leave `observability: false` unless the person asks for traces.
+4. **Environment:** ask the person for an identifier (lower-case letters, digits, hyphens; once chosen, kept). DO `polypus deploy init`. DO set `identifier` and `tailnet` (from the gate) in `~/.config/polypus/deploy/config.yaml`. Keep `observability: true`; traces in Phoenix and HyperDX are part of every setup.
 5. **Secrets:** hand over the two `secret set` commands; check both exist (constraint 2).
 6. **Deploy:** dry run, the person's yes, then `polypus deploy run` (constraints 4 and 5). Pass: the run ends with every smoke line `pass`.
 7. **Lock:** `polypus deploy client-key`. Pass: it reports the 401 without the key and the 200 with it.

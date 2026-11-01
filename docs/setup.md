@@ -58,7 +58,7 @@ polypus deploy init
 | `identifier` | A short name for this environment, such as `laptop`, in lower-case letters, digits and hyphens. It names the containers, the tailnet device (`polypus-laptop`) and the keyring entries, so pick it once and keep it. |
 | `tailnet` | Your tailnet name from the Tailscale DNS page, such as `tail1234.ts.net`. |
 
-Leave `observability: false` unless you want traces. Turning it on adds Phoenix, HyperDX and an OpenTelemetry collector as three more containers, which show every call in detail.
+Keep `observability: true`. It runs Phoenix, HyperDX and an OpenTelemetry collector beside the gateway, so every call is traced and you can see exactly what your tools sent and got back. Phoenix answers on port 6006 and HyperDX on port 8080 of your gateway's address.
 
 The second file, `gateway.yaml`, is the gateway's own configuration. It runs every model through OpenRouter and defines `router/turno`, the route Digizoo tools use for chat, which goes to Claude Sonnet. You can deploy it as it is.
 
