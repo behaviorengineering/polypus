@@ -41,13 +41,34 @@ func reloadServices(svc images.Services) []string {
 
 // plan is what a deploy resolves before it changes anything.
 type plan struct {
-	gatewayPath    string
-	imagesEnv      string
-	pins           string // resolved pins to write to imagesEnv; empty when an environment file is used.
-	services       images.Services
-	smokeRouters   bool // the gateway YAML has routers: (passthrough ones need no Switchyard).
-	smokeSystemOne bool
-	secretNames    []string
+	gatewayPath string
+	imagesEnv   string
+	pins        string // resolved pins to write to imagesEnv; empty when an environment file is used.
+	services    images.Services
+	checks      SmokeChecks
+	secretNames []string
+}
+
+// SmokeChecks are the probes a deploy runs after health. polypus deploy smoke
+// repeats them, so a re-test only reaches backends the environment has keys for.
+type SmokeChecks struct {
+	Providers bool // one chat per backend in the gateway YAML whose secrets are set.
+	Routers   bool // the gateway YAML has routers: (passthrough ones need no Switchyard).
+	SystemOne bool
+}
+
+// ResolveSmokeChecks returns the smoke checks for the gateway YAML at gatewayPath.
+// POLYPUS_SMOKE_PROVIDERS=0 and POLYPUS_SMOKE_SYSTEMONE=0|1 override the YAML.
+func ResolveSmokeChecks(gatewayPath string) (SmokeChecks, error) {
+	c := SmokeChecks{Providers: os.Getenv("POLYPUS_SMOKE_PROVIDERS") != "0"}
+	var err error
+	if c.Routers, err = routers.HasTopLevelRouters(gatewayPath); err != nil {
+		return c, fmt.Errorf("deploy: routers detect: %w", err)
+	}
+	if c.SystemOne, err = smokeSystemOne(gatewayPath); err != nil {
+		return c, err
+	}
+	return c, nil
 }
 
 // Run deploys the environment in opts: resolve the plan, then (unless DryRun)
@@ -78,13 +99,10 @@ func resolvePlan(opts Options) (plan, error) {
 	if p.services, err = Services(opts); err != nil {
 		return p, err
 	}
-	if p.smokeRouters, err = routers.HasTopLevelRouters(gatewayPath); err != nil {
-		return p, fmt.Errorf("deploy: routers detect: %w", err)
-	}
-	if p.imagesEnv, p.pins, err = resolvePins(opts, p.services); err != nil {
+	if p.checks, err = ResolveSmokeChecks(gatewayPath); err != nil {
 		return p, err
 	}
-	if p.smokeSystemOne, err = smokeSystemOne(gatewayPath); err != nil {
+	if p.imagesEnv, p.pins, err = resolvePins(opts, p.services); err != nil {
 		return p, err
 	}
 	if p.secretNames, err = ExportSecretNames(opts); err != nil {
@@ -159,7 +177,7 @@ func printPlan(opts Options, p plan) {
 	switch {
 	case p.services.Routers:
 		fmt.Println("deploy: composed routers in host config; switchyard on")
-	case p.smokeRouters:
+	case p.checks.Routers:
 		fmt.Println("deploy: passthrough routers only; the gateway serves them, switchyard off")
 	default:
 		fmt.Println("deploy: no routers in host config; switchyard off")
@@ -204,7 +222,7 @@ func apply(ctx context.Context, opts Options, p plan) error {
 	if err := setComposeEnv(opts, p, serveDir); err != nil {
 		return err
 	}
-	if p.smokeSystemOne {
+	if p.checks.SystemOne {
 		if err := printSystemOneTargets(p.gatewayPath); err != nil {
 			return err
 		}
@@ -338,16 +356,15 @@ func runSmoke(ctx context.Context, opts Options, p plan) error {
 	if clientKey != "" {
 		fmt.Printf("deploy: smoke sends the client key (%s)\n", secrets.ClientKeyName)
 	}
-	withProviders := os.Getenv("POLYPUS_SMOKE_PROVIDERS") != "0"
-	if withProviders {
+	if p.checks.Providers {
 		fmt.Println("deploy: provider chat smoke enabled (POLYPUS_SMOKE_PROVIDERS=0 to disable)")
 	}
 	return smoke.Run(smokeCtx, smoke.Options{
 		BaseURL:       opts.HealthURL,
 		ChatModel:     opts.SmokeChatModel,
-		WithRouter:    p.smokeRouters,
-		WithSystemOne: p.smokeSystemOne,
-		WithProviders: withProviders,
+		WithRouter:    p.checks.Routers,
+		WithSystemOne: p.checks.SystemOne,
+		WithProviders: p.checks.Providers,
 		GatewayConfig: p.gatewayPath,
 		EnvDeploy:     opts.EnvDeployPath(),
 		APIKey:        clientKey,

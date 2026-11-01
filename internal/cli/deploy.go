@@ -192,8 +192,14 @@ func newDeploySmokeCmd() *cobra.Command {
 	var timeout time.Duration
 	var envDeploy string
 	cmd := &cobra.Command{
-		Use:     "smoke",
-		Short:   "Chat inference smoke against a deployed gateway",
+		Use:   "smoke",
+		Short: "Chat inference smoke against a deployed gateway",
+		Long: `Chat inference smoke against a deployed gateway.
+
+With an environment, smoke repeats the checks polypus deploy run makes: one chat per
+backend in the gateway YAML whose secrets are set, each chat router, and SystemOne
+when the YAML enables it. A --with-* flag you pass, or --smoke-chat-model, wins over
+that. Without an environment, smoke sends one chat to --smoke-chat-model.`,
 		GroupID: groupInspect,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -204,6 +210,9 @@ func newDeploySmokeCmd() *cobra.Command {
 			if found {
 				// Env POLYPUS_API_KEY wins, then the environment's keyring service.
 				if o.APIKey, err = secrets.Lookup(nil, env.Name(), secrets.ClientKeyName); err != nil {
+					return err
+				}
+				if err := applyDeploySmokeChecks(cmd, &t, &o); err != nil {
 					return err
 				}
 			}
@@ -240,12 +249,42 @@ func newDeploySmokeCmd() *cobra.Command {
 	t.bind(cmd)
 	f := cmd.Flags()
 	f.StringVar(&o.BaseURL, "health-url", "", healthURLHelp)
-	f.BoolVar(&o.WithRouter, "with-router", os.Getenv("POLYPUS_SWITCHYARD") == "1", "also smoke each chat router in the gateway YAML, reporting the model that answered")
-	f.BoolVar(&o.WithSystemOne, "with-systemone", os.Getenv("POLYPUS_SMOKE_SYSTEMONE") == "1", "also smoke /v1/systemone for the gateway YAML's SystemOne backends")
-	f.BoolVar(&o.WithProviders, "with-providers", os.Getenv("POLYPUS_SMOKE_PROVIDERS") == "1", "smoke chat per backend in the gateway YAML (secret names from --env-deploy)")
+	f.BoolVar(&o.WithRouter, "with-router", os.Getenv("POLYPUS_SWITCHYARD") == "1", "also smoke each chat router in the gateway YAML, reporting the model that answered (default with an environment: as deploy run)")
+	f.BoolVar(&o.WithSystemOne, "with-systemone", os.Getenv("POLYPUS_SMOKE_SYSTEMONE") == "1", "also smoke /v1/systemone for the gateway YAML's SystemOne backends (default with an environment: as deploy run)")
+	f.BoolVar(&o.WithProviders, "with-providers", os.Getenv("POLYPUS_SMOKE_PROVIDERS") == "1", "smoke chat per backend in the gateway YAML whose secrets are set, in place of --smoke-chat-model (default with an environment: as deploy run)")
 	f.StringVar(&envDeploy, "env-deploy", "", "dotenv with secret names for --with-providers (default: .env.deploy in the environment's state folder)")
 	bindSmokeModelFlags(cmd, &timeout, &o.ChatModel)
 	return cmd
+}
+
+// applyDeploySmokeChecks gives each smoke check the operator left unset the value
+// deploy run uses for the environment, so a re-test only reaches backends it has
+// keys for. An explicit --smoke-chat-model keeps the direct chat in place of the
+// provider probes.
+func applyDeploySmokeChecks(cmd *cobra.Command, t *deployTarget, o *smoke.Options) error {
+	opts, err := t.options()
+	if err != nil {
+		return err
+	}
+	gatewayPath, err := paths.ResolveGatewayConfig(opts.GatewayConfig)
+	if err != nil {
+		return err
+	}
+	checks, err := deploy.ResolveSmokeChecks(gatewayPath)
+	if err != nil {
+		return err
+	}
+	f := cmd.Flags()
+	if !f.Changed("with-providers") && !f.Changed("smoke-chat-model") {
+		o.WithProviders = checks.Providers
+	}
+	if !f.Changed("with-router") {
+		o.WithRouter = checks.Routers
+	}
+	if !f.Changed("with-systemone") {
+		o.WithSystemOne = checks.SystemOne
+	}
+	return nil
 }
 
 func newDeploySmokeCollectorCmd() *cobra.Command {
