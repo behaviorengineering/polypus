@@ -1,10 +1,10 @@
 # Run your own Polypus on your tailnet
 
-This guide takes you from nothing to your own Polypus gateway. The gateway runs in Docker on the computer you work on, and only your own Tailscale network can reach it. It is written for people at Digizoo, so it uses Digizoo's OpenRouter organisation for model access. Everything else applies to anyone.
+This guide takes you from nothing to your own Polypus gateway. The gateway runs in Docker on the computer you work on, only your own Tailscale network can reach it, and it reaches the models through OpenRouter with a key from your own account.
 
 You end up with one address, `https://polypus-<identifier>.<tailnet>`, that speaks the OpenAI API. Only devices on your tailnet can reach it, and the gateway holds the OpenRouter key, so no tool ever sees it.
 
-If you use Claude Code or another coding agent, ask it to set up Polypus with the skill at [ai-copilots/skills/polypus-setup/SKILL.md](../ai-copilots/skills/polypus-setup/SKILL.md). It follows this guide, checks your machine before each step, and leaves every secret for you to type into your own terminal.
+If you use Claude Code or another coding agent, the [quick start](quick-start.md) gives you one message to paste into it. The agent then sets up Polypus with the skill at [ai-copilots/skills/polypus-setup/SKILL.md](../ai-copilots/skills/polypus-setup/SKILL.md), which follows this guide, checks your machine before each step, and leaves every secret for you to type into your own terminal.
 
 ## Before you start, set up four things
 
@@ -22,9 +22,11 @@ In the Tailscale admin console, open DNS and check two settings there. MagicDNS 
 
 The gateway joins your tailnet as its own device, named `polypus-<identifier>`, and it uses an auth key to join the first time. In the admin console, open Settings, then Keys, and generate an auth key. Leave Ephemeral off, because an ephemeral device disappears from the tailnet when it goes offline. A one-off key is enough: the gateway keeps its identity in a Docker volume after the first join, so later deploys never use the key again.
 
-### An invite to Digizoo's OpenRouter organisation
+### An OpenRouter account with credits
 
-Ask in the `#chapter-ai` channel on Digizoo's Slack for an invite. Every model call goes through OpenRouter, and the organisation pays for it from one shared credit pool.
+Every model call goes through OpenRouter and is paid from your OpenRouter credits, so sign up on OpenRouter and add credits to your account before you deploy.
+
+> **At Digizoo:** ask in the `#chapter-ai` channel on Digizoo's Slack for an invite to Digizoo's OpenRouter organisation instead. The organisation pays for every call from one shared credit pool.
 
 ## 1. Install polypus
 
@@ -39,11 +41,11 @@ Go puts the binary in `$(go env GOPATH)/bin`, so add that folder to your `PATH` 
 
 ## 2. Create your own OpenRouter key
 
-Accept the invite, then create an API key under the Digizoo organisation in OpenRouter's Keys page. Each person creates and keeps their own key, so revoking one never stops anyone else's gateway, and spend shows per person.
-
-Your account carries a **weekly guardrail**: a spending allowance that resets each week. It acts as a circuit breaker for a runaway agent, so normal work should stay well under it. You can also put a smaller limit on your own key if you want an earlier stop.
+Create an API key on OpenRouter's Keys page and give it a **credit limit**: the most the key can spend. The limit acts as a circuit breaker, so a runaway agent stops at that amount instead of spending your whole balance.
 
 Keep the key in your clipboard for step 4 and nowhere else. Polypus stores it in your operating system's keyring.
+
+> **At Digizoo:** accept the invite, then create the key under the Digizoo organisation. Each person creates and keeps their own key, so revoking one never stops anyone else's gateway, and spend shows per person. Your account also carries a **weekly guardrail**, a spending allowance that resets each week, so normal work should stay well under it.
 
 ## 3. Write your environment with `polypus deploy init`
 
@@ -60,7 +62,7 @@ polypus deploy init
 
 Keep `observability: true`. It runs Phoenix, HyperDX and an OpenTelemetry collector beside the gateway, so every call is traced and you can see exactly what your tools sent and got back. Phoenix answers on port 6006 and HyperDX on port 8080 of your gateway's address.
 
-The second file, `gateway.yaml`, is the gateway's own configuration. It runs every model through OpenRouter and defines `router/turno`, the route Digizoo tools use for chat, which goes to Claude Sonnet. You can deploy it as it is.
+The second file, `gateway.yaml`, is the gateway's own configuration. It runs every model through OpenRouter and defines `router/turno`, a chat route that goes to Claude Sonnet and that Digizoo's own tools use for chat. You can deploy it as it is.
 
 ## 4. Store your two secrets
 
@@ -125,7 +127,7 @@ The binary carries its own image versions, so the deploy moves the whole stack t
 
 | What you see | What to do |
 | --- | --- |
-| Every model call fails partway through a week | Your weekly guardrail has probably tripped, and OpenRouter refuses calls until it resets. If normal work trips it, ask in `#chapter-ai` for the limit to be looked at. |
+| Every model call fails after working for a while | Your key has probably reached its credit limit, or your OpenRouter balance has run out. Raise the limit or add credits on OpenRouter. At Digizoo, the weekly guardrail has probably tripped, and OpenRouter refuses calls until it resets; if normal work trips it, ask in `#chapter-ai` for the limit to be looked at. |
 | `setenv "<NAME>": invalid argument` during a deploy | The stored secret holds a character the deploy cannot pass on. Store it again with `polypus deploy secret set <NAME>`. |
 | The health check times out on the first deploy | Run `polypus deploy run` again; see step 5. |
 | The health check times out later | Check that Tailscale is connected on this computer, then look at the containers with `docker compose -p polypus-<identifier> ps` and `docker compose -p polypus-<identifier> logs gateway`. |

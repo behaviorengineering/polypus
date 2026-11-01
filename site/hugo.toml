@@ -17,6 +17,7 @@ disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
     icon = "book"
     pages = [
       { path = "/docs", label = "Overview" },
+      { path = "/docs/quick-start", label = "Quick start" },
       { path = "/docs/setup", label = "Run your own" },
       { path = "/docs/install", label = "Install" },
       { path = "/docs/run-locally", label = "Run locally" },
