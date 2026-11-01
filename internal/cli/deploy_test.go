@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/deploy"
@@ -180,5 +184,64 @@ func TestDeployRunHealthURLOverrideSkipsTailnet(t *testing.T) {
 	}
 	if !strings.Contains(out, "health and smoke at http://127.0.0.1:1320\n") || strings.Contains(out, "on tailnet") {
 		t.Fatalf("an explicit --health-url should be used as is, with no tailnet check:\n%s", out)
+	}
+}
+
+// TestDeploySmokeFollowsDeployChecks checks that deploy smoke, given an environment,
+// probes the backends its gateway YAML has keys for, as deploy run does, and that an
+// explicit --smoke-chat-model still sends that one chat.
+func TestDeploySmokeFollowsDeployChecks(t *testing.T) {
+	root, config, _ := deployFixture(t)
+	t.Setenv("POLYPUS_API_KEY", "client-key") // keeps the developer's keyring out of the test.
+	t.Setenv("POLYPUS_SMOKE_PROVIDERS", "")
+	t.Setenv("POLYPUS_SMOKE_SYSTEMONE", "")
+	writeFiles(t, filepath.Dir(config), map[string]string{
+		"gateway.yaml": "backends:\n  openrouter:\n    auth:\n      bearer_env: OPENROUTER_API_KEY\n    capabilities: [chat]\n    models:\n      allow: [\"google/gemini-2.5-flash\"]\n",
+	})
+	state := filepath.Join(root, "polypus-work")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFiles(t, state, map[string]string{".env.deploy": "OPENROUTER_API_KEY=or\n"})
+
+	var mu sync.Mutex
+	var models []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			var body struct {
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			models = append(models, body.Model)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"defaults follow deploy run", nil, "openrouter/google/gemini-2.5-flash"},
+		{"explicit model wins", []string{"--smoke-chat-model", "openrouter/mistralai/mistral-small"}, "openrouter/mistralai/mistral-small"},
+	} {
+		mu.Lock()
+		models = nil
+		mu.Unlock()
+		args := append([]string{"deploy", "smoke", "--config", config, "--health-url", srv.URL}, tc.args...)
+		code, out, errOut := captureRun(args)
+		mu.Lock()
+		got := append([]string(nil), models...)
+		mu.Unlock()
+		if code != 0 || len(got) != 1 || got[0] != tc.want {
+			t.Errorf("%s: exit %d models %v want [%s]\nstdout=%s\nstderr=%s", tc.name, code, got, tc.want, out, errOut)
+		}
 	}
 }
