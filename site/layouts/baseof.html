@@ -3,8 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ if .IsHome }}Polypus: one address for every model your software calls{{ else }}{{ partial "title.html" . }} · Polypus{{ end }}</title>
-  <meta name="description" content="{{ site.Params.description }}">
+  {{- /* A docs page describes itself with its lead paragraph; the home page uses the site description. */}}
+  {{- $title := "Polypus: one address for every model your software calls" }}
+  {{- $desc := site.Params.description }}
+  {{- if not .IsHome }}
+    {{- $title = printf "%s · Polypus" (partial "title.html" .) }}
+    {{- with index (findRE `(?s)<p>.*?</p>` .Content 1) 0 }}{{ $desc = . | plainify | htmlUnescape | truncate 200 }}{{ end }}
+  {{- end }}
+  <title>{{ $title }}</title>
+  <meta name="description" content="{{ $desc }}">
+  {{- /* Link previews: Open Graph for LinkedIn, Slack and Facebook; X reads the same tags plus its card type. */}}
+  <meta property="og:site_name" content="Polypus">
+  <meta property="og:type" content="{{ if .IsHome }}website{{ else }}article{{ end }}">
+  <meta property="og:title" content="{{ $title }}">
+  <meta property="og:description" content="{{ $desc }}">
+  <meta property="og:url" content="{{ .Permalink }}">
+  <meta property="og:image" content="{{ "og-image.png" | absURL }}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Polypus. One face. Many arms. Stay local.">
+  <meta name="twitter:card" content="summary_large_image">
   <script>
     (function () {
       var saved = null;
