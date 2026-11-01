@@ -1,10 +1,8 @@
-# Quick start: set up Polypus with a coding agent
+# A coding agent can set up your own Polypus in one conversation
 
-Polypus is a small gateway that runs in Docker on your own computer and speaks the OpenAI API. Your apps, scripts and agents send their AI requests to it, and it passes each one to the right model through your OpenRouter key and records the call. A coding agent such as Claude Code can set it up with you in one conversation, while you type every key into your own terminal.
+Polypus is a small gateway that runs in Docker on your own computer and speaks the OpenAI API. Your apps, scripts and agents send their AI requests to it, and it passes each one to the right model through your OpenRouter key and records the call. A coding agent such as Claude Code can set it up with you, while **you type every key into your own terminal**.
 
 ## Your tools call one address, and Polypus reaches the models
-
-Anything you build that calls an AI model calls Polypus instead. Polypus holds the key, picks the model, sends the request on to OpenRouter and keeps a record of what happened.
 
 - Phoenix and HyperDX run beside the gateway and trace every call, so when an agent behaves oddly you can read what it actually sent and got back.
 - Your tools always call the same address, so trying a different model means one change in Polypus rather than one in every app.
@@ -13,12 +11,12 @@ Anything you build that calls an AI model calls Polypus instead. Polypus holds t
 
 ## Have four things ready before you start
 
-1. **Docker, running.** Docker Desktop, OrbStack or Colima on a Mac, or Docker Desktop on Windows.
-2. **Tailscale, signed in to your own tailnet.** In the Tailscale admin console under DNS, turn on MagicDNS and HTTPS certificates.
-3. **A Tailscale auth key.** Generate one under Settings, then Keys, with Ephemeral left off. Polypus uses it once, to join your tailnet as its own device.
-4. **An OpenRouter API key.** Create one on OpenRouter's Keys page and give it a credit limit, so a looping agent stops at that amount instead of spending your whole balance. Keep it to hand, because you type it into your own terminal during the setup.
+1. Docker running, through Docker Desktop, OrbStack or Colima on a Mac, or Docker Desktop on Windows.
+2. Tailscale signed in to your own tailnet, with MagicDNS and HTTPS certificates turned on under DNS in the Tailscale admin console.
+3. A Tailscale auth key from Settings, then Keys, with Ephemeral left off, which Polypus uses once to join your tailnet as its own device.
+4. An OpenRouter API key from OpenRouter's Keys page, with a **credit limit** so a looping agent stops at that amount instead of spending your whole balance.
 
-The agent also checks for Go 1.27 or newer, which installs the `polypus` command, and tells you if anything is missing.
+Keep the OpenRouter key to hand, because you type it into your own terminal during the setup. The agent also checks for Go 1.27 or newer, which installs the `polypus` command, and tells you if anything is missing.
 
 ## Paste one message into your coding agent
 
@@ -39,7 +37,7 @@ Turn observability on in my config, so every call is traced in Phoenix and Hyper
 Check my machine before each step and show me the plan before you deploy. Never ask me to paste a key into this chat: I will type every secret into my own terminal.
 ```
 
-The agent follows the [polypus-setup skill](../ai-copilots/skills/polypus-setup/SKILL.md), which checks your machine before each step and shows you a dry run of the deploy before it changes anything. When it needs a key, it gives you a command such as `polypus deploy secret set OPENROUTER_API_KEY`, and you paste the key at a hidden prompt in your own terminal.
+The agent follows the [polypus-setup skill](../ai-copilots/skills/polypus-setup/SKILL.md), which checks your machine before each step and shows you a **dry run of the deploy** before it changes anything. When it needs a key, it gives you a command such as `polypus deploy secret set OPENROUTER_API_KEY`, and you paste the key at a hidden prompt.
 
 **The agent never needs to see your keys.** If it asks you to paste one into the chat, say no, and revoke any key that ends up there.
 
@@ -56,6 +54,6 @@ You pick a short name for your setup, such as `laptop`, and Polypus joins your t
 
 When someone else's device is on your tailnet, ask the agent to lock the gateway with a client key, as [the setup guide](setup.md#lock-the-gateway-if-others-share-your-tailnet) describes.
 
-## Prefer to do it by hand
+## The setup guide covers the same steps by hand
 
 [Run your own Polypus on your tailnet](setup.md) walks through the same six steps, with every command and a table of what to do when something goes wrong.

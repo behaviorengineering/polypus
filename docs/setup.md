@@ -1,10 +1,10 @@
 # Run your own Polypus on your tailnet
 
-This guide takes you from nothing to your own Polypus gateway. The gateway runs in Docker on the computer you work on, only your own Tailscale network can reach it, and it reaches the models through OpenRouter with a key from your own account.
+This guide takes you from nothing to your own Polypus gateway. The gateway runs in Docker on the computer you work on, and only your own Tailscale network can reach it. It calls the models through OpenRouter, with a key from your own account.
 
 You end up with one address, `https://polypus-<identifier>.<tailnet>`, that speaks the OpenAI API. Only devices on your tailnet can reach it, and the gateway holds the OpenRouter key, so no tool ever sees it.
 
-If you use Claude Code or another coding agent, the [quick start](quick-start.md) gives you one message to paste into it. The agent then sets up Polypus with the skill at [ai-copilots/skills/polypus-setup/SKILL.md](../ai-copilots/skills/polypus-setup/SKILL.md), which follows this guide, checks your machine before each step, and leaves every secret for you to type into your own terminal.
+If you use Claude Code or another coding agent, the [quick start](quick-start.md) gives you one message to paste into it. The agent then follows the setup skill at [ai-copilots/skills/polypus-setup/SKILL.md](../ai-copilots/skills/polypus-setup/SKILL.md). It checks your machine before each step of this guide, and leaves every secret for you to type into your own terminal.
 
 ## Before you start, set up four things
 
@@ -24,9 +24,9 @@ The gateway joins your tailnet as its own device, named `polypus-<identifier>`, 
 
 ### An OpenRouter account with credits
 
-Every model call goes through OpenRouter and is paid from your OpenRouter credits, so sign up on OpenRouter and add credits to your account before you deploy.
+Every model call goes through OpenRouter and spends your OpenRouter credits. Sign up on OpenRouter and add credits to your account before you deploy.
 
-> **At Digizoo:** ask in the `#chapter-ai` channel on Digizoo's Slack for an invite to Digizoo's OpenRouter organisation instead. The organisation pays for every call from one shared credit pool.
+> At Digizoo, ask in the `#chapter-ai` channel on Digizoo's Slack for an invite to Digizoo's OpenRouter organisation instead. The organisation pays for every call from one shared credit pool.
 
 ## 1. Install polypus
 
@@ -45,7 +45,7 @@ Create an API key on OpenRouter's Keys page and give it a **credit limit**: the 
 
 Keep the key in your clipboard for step 4 and nowhere else. Polypus stores it in your operating system's keyring.
 
-> **At Digizoo:** accept the invite, then create the key under the Digizoo organisation. Each person creates and keeps their own key, so revoking one never stops anyone else's gateway, and spend shows per person. Your account also carries a **weekly guardrail**, a spending allowance that resets each week, so normal work should stay well under it.
+> At Digizoo, accept the invite, then create the key under the Digizoo organisation. Each person creates and keeps their own key, so revoking one never stops anyone else's gateway, and spend shows per person. Your account also carries a weekly guardrail, a spending allowance that resets each week, so normal work should stay well under it.
 
 ## 3. Write your environment with `polypus deploy init`
 
