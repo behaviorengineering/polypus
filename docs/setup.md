@@ -2,7 +2,7 @@
 
 This guide takes you from nothing to your own Polypus gateway. The gateway runs in Docker on the computer you work on, and only your own Tailscale network can reach it. It is written for people at Digizoo, so it uses Digizoo's OpenRouter organisation for model access. Everything else applies to anyone.
 
-You end up with one address, `https://polypus-<identifier>.<tailnet>`, that speaks the OpenAI API. Your tools call it with a client key, and the gateway holds the OpenRouter key, so no tool ever sees it.
+You end up with one address, `https://polypus-<identifier>.<tailnet>`, that speaks the OpenAI API. Only devices on your tailnet can reach it, and the gateway holds the OpenRouter key, so no tool ever sees it.
 
 If you use Claude Code or another coding agent, ask it to set up Polypus with the skill at [ai-copilots/skills/polypus-setup/SKILL.md](../ai-copilots/skills/polypus-setup/SKILL.md). It follows this guide, checks your machine before each step, and leaves every secret for you to type into your own terminal.
 
@@ -84,31 +84,31 @@ The dry run prints what the deploy would do and changes nothing. The real run pu
 
 The first deploy of a new environment can run past the two-minute health wait while Tailscale sets up the new device. We believe this is the HTTPS certificate being issued, though we have not confirmed it. Run `polypus deploy run` again, and the second run passes.
 
-## 6. Lock the gateway with a client key
-
-```bash
-polypus deploy client-key
-```
-
-This creates a **client key** inside your running gateway, stores it in your keyring as `POLYPUS_API_KEY`, and then checks that the gateway refuses calls without it. From then on every call needs the key, so a lost or shared device on your tailnet cannot spend on your account.
-
-On a Mac, print the key when a tool asks for it:
-
-```bash
-security find-generic-password -s polypus-<identifier> -a POLYPUS_API_KEY -w
-```
-
-## 7. Point your tools at your gateway
+## 6. Point your tools at your gateway
 
 Use these settings in any tool that speaks the OpenAI API:
 
 | Setting | Value |
 | --- | --- |
 | Base URL | `https://polypus-<identifier>.<tailnet>/v1` |
-| API key | Your client key, sent as `Authorization: Bearer <key>` |
+| API key | Any text, such as `polypus`. The gateway accepts any key until you lock it. |
 | Chat model | `router/turno` |
 
 `/v1/models` lists every other model the gateway allows. Two that are useful beside chat are `openrouter/baai/bge-m3` for embeddings and `openrouter/fish-audio/transcribe-1-pro` for speech to text. Transcripts from the speech model can start with a speaker tag such as `<|speaker:0|>`, so strip it if your tool shows the text as it is.
+
+## Lock the gateway if others share your tailnet
+
+Your tailnet already decides who reaches your gateway, so a gateway that only your own devices can reach needs no key. Lock it when someone else's device is on your tailnet, or when you share the gateway's device with another person in Tailscale, so their tools cannot spend on your OpenRouter key:
+
+```bash
+polypus deploy client-key
+```
+
+This creates a **client key** inside your running gateway, stores it in your keyring as `POLYPUS_API_KEY`, and then checks that the gateway refuses calls without it. From then on every call needs the key, so put it in your tools' API key setting in place of the placeholder. On a Mac, print the key when a tool asks for it:
+
+```bash
+security find-generic-password -s polypus-<identifier> -a POLYPUS_API_KEY -w
+```
 
 ## Keep it up to date
 
@@ -119,7 +119,7 @@ go install github.com/behaviorengineering/polypus/cmd/polypus@latest
 polypus deploy run
 ```
 
-The binary carries its own image versions, so the deploy moves the whole stack to that release. Your config, secrets, tailnet device and client key all stay as they are.
+The binary carries its own image versions, so the deploy moves the whole stack to that release. Your config, secrets, tailnet device and any client key all stay as they are.
 
 ## When something goes wrong
 
@@ -133,7 +133,7 @@ The binary carries its own image versions, so the deploy moves the whole stack t
 
 ## Later, a server of your own
 
-A gateway on a home server or a spare machine stays up when your laptop sleeps. Set it up as a **new environment** with its own identifier, such as `server`, rather than moving your laptop's setup across. Each environment has its own tailnet device, keyring entries and client key, so the two never interfere.
+A gateway on a home server or a spare machine stays up when your laptop sleeps. Set it up as a **new environment** with its own identifier, such as `server`, rather than moving your laptop's setup across. Each environment has its own tailnet device and keyring entries, so the two never interfere.
 
 On the server, follow the same steps as its login user. Store the secrets as that user, because Polypus reads them from that user's keyring.
 

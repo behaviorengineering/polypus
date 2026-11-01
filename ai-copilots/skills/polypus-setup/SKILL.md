@@ -5,7 +5,7 @@ description: >-
   with polypus deploy, following docs/setup.md: checks Docker, Go and
   Tailscale (signed in, MagicDNS, HTTPS certificates) before the first deploy,
   has the person store secrets in their own terminal, retries the first
-  deploy's health timeout once, and checks the gateway is locked and answers.
+  deploy's health timeout once, and checks the gateway answers.
   Use when someone asks to set up, install or run their own Polypus, a laptop
   or single-machine setup, a server as a new environment, or says the first
   polypus deploy run timed out. Not for operating or debugging a running
@@ -18,7 +18,7 @@ description: >-
 
 ## Core constraints
 
-**CONSTRAINT 1: The guide owns the steps.** MUST read the setup guide before step 1 and follow its order: install, OpenRouter key, `init`, secrets, deploy, client key, tool settings. MUST take flags from `polypus deploy <command> --help`, not from memory.
+**CONSTRAINT 1: The guide owns the steps.** MUST read the setup guide before step 1 and follow its order: install, OpenRouter key, `init`, secrets, deploy, tool settings. The client key is optional, for a shared tailnet only. MUST take flags from `polypus deploy <command> --help`, not from memory.
 
 - Guide location: `docs/setup.md` in a Polypus checkout; else `gh api repos/behaviorengineering/polypus/contents/docs/setup.md -H 'Accept: application/vnd.github.raw'`; else `https://raw.githubusercontent.com/behaviorengineering/polypus/main/docs/setup.md`.
 - Enforcement: the guide was read in this session before the first command; every flag used appears in that command's `--help`.
@@ -92,9 +92,9 @@ Result:          [all pass → continue | FAIL or WAIT → fix that row first]
 4. **Environment:** ask the person for an identifier (lower-case letters, digits, hyphens; once chosen, kept). DO `polypus deploy init`. DO set `identifier` and `tailnet` (from the gate) in `~/.config/polypus/deploy/config.yaml`. Keep `observability: true`; traces in Phoenix and HyperDX are part of every setup.
 5. **Secrets:** hand over the two `secret set` commands; check both exist (constraint 2).
 6. **Deploy:** dry run, the person's yes, then `polypus deploy run` (constraints 4 and 5). Pass: the run ends with every smoke line `pass`.
-7. **Lock:** `polypus deploy client-key`. Pass: it reports the 401 without the key and the 200 with it.
-8. **Check:** `polypus deploy smoke` passes, and `curl -s -o /dev/null -w '%{http_code}' https://polypus-<identifier>.<tailnet>/v1/models` prints `401`.
-9. **Hand over:** give the guide's tool settings table with the real identifier and tailnet filled in. Tell the person to print the client key themselves with the guide's step 6 command.
+7. **Lock, only if the tailnet is shared:** ask whether anyone else's device is on the person's tailnet, or whether they share the gateway's device in Tailscale. IF yes → `polypus deploy client-key`; pass: it reports the 401 without the key and the 200 with it. IF no → skip; the tailnet decides who reaches the gateway.
+8. **Check:** `polypus deploy smoke` passes, and `curl -s -o /dev/null -w '%{http_code}' https://polypus-<identifier>.<tailnet>/v1/models` prints `200`, or `401` when step 7 locked the gateway.
+9. **Hand over:** give the guide's tool settings table with the real identifier and tailnet filled in. IF step 7 locked the gateway → tell the person to print the client key themselves with the command in the guide's "Lock the gateway if others share your tailnet" section; ELSE → any text works as the API key.
 
 A **server setup** is a new environment with its own identifier, run as the server's login user (the guide's "Later, a server of your own"). IF the agent is not running on the server → hand the person the gate and steps as a checklist to run there.
 
@@ -112,7 +112,7 @@ A **server setup** is a new environment with its own identifier, run as the serv
       Method: count `deploy run` calls before the passing one
       Pass: two or fewer, the second only after a first-deploy health timeout
       Fail: STOP, diagnose from the guide's table
-- [ ] **Gateway locked and answering**
+- [ ] **Gateway answering**
       Method: `polypus deploy smoke`, then the `curl` from step 8
-      Pass: smoke passes; `curl` prints `401`
-      Fail: STOP, rerun `polypus deploy client-key`, then recheck
+      Pass: smoke passes; `curl` prints `200`, or `401` when step 7 locked the gateway
+      Fail: STOP, diagnose from the guide's table; IF a locked gateway prints `200` → rerun `polypus deploy client-key`, then recheck
