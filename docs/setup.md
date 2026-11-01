@@ -24,7 +24,7 @@ The gateway joins your tailnet as its own device, named `polypus-<identifier>`, 
 
 ### An invite to Digizoo's OpenRouter organisation
 
-Ask Hector, who administers it, to invite you. Every model call goes through OpenRouter, and the organisation pays for it from one shared credit pool.
+Ask in the `#chapter-ai` channel on Digizoo's Slack for an invite. Every model call goes through OpenRouter, and the organisation pays for it from one shared credit pool.
 
 ## 1. Install polypus
 
@@ -125,7 +125,7 @@ The binary carries its own image versions, so the deploy moves the whole stack t
 
 | What you see | What to do |
 | --- | --- |
-| Every model call fails partway through a week | Your weekly guardrail has probably tripped, and OpenRouter refuses calls until it resets. If normal work trips it, ask Hector to look at the limit. |
+| Every model call fails partway through a week | Your weekly guardrail has probably tripped, and OpenRouter refuses calls until it resets. If normal work trips it, ask in `#chapter-ai` for the limit to be looked at. |
 | `setenv "<NAME>": invalid argument` during a deploy | The stored secret holds a character the deploy cannot pass on. Store it again with `polypus deploy secret set <NAME>`. |
 | The health check times out on the first deploy | Run `polypus deploy run` again; see step 5. |
 | The health check times out later | Check that Tailscale is connected on this computer, then look at the containers with `docker compose -p polypus-<identifier> ps` and `docker compose -p polypus-<identifier> logs gateway`. |
