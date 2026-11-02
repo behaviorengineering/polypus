@@ -74,11 +74,14 @@ func TestLandingPageHTML(t *testing.T) {
 			t.Fatalf("body missing %q:\n%s", want, body)
 		}
 	}
-	iOps := strings.Index(body, `class="col col-ops"`)
 	iBanner := strings.Index(body, `class="banner"`)
-	iHealth := strings.Index(body, "Health &amp; collectors")
-	if iOps < 0 || iBanner < 0 || iHealth < 0 || iOps >= iBanner || iBanner >= iHealth {
-		t.Fatalf("banner should be at top of left ops column:\n%s", body)
+	iAllow := strings.Index(body, `id="allow-form"`)
+	iDivider := strings.Index(body, `class="divider"`)
+	iModels := strings.Index(body, `class="col col-models"`)
+	iOps := strings.Index(body, `class="col col-ops"`)
+	if iBanner < 0 || iAllow < 0 || iDivider < 0 || iModels < 0 || iOps < 0 ||
+		iBanner >= iAllow || iAllow >= iDivider || iDivider >= iModels || iModels >= iOps {
+		t.Fatalf("banner and allow form should sit above the divider, then models and ops columns:\n%s", body)
 	}
 }
 
