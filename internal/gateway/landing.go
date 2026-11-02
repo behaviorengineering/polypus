@@ -68,11 +68,12 @@ header.top .inner { display: flex; align-items: center; gap: 12px; max-width: 64
 header.top .docs { margin-left: auto; color: var(--muted); font-size: 0.9rem; }
 header.top .docs:hover { color: #fff; }
 main { max-width: 64rem; margin: 0 auto; padding: 1.75rem 1.25rem 3rem; }
-.layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items: start; }
-@media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
-.col { display: grid; gap: 1.25rem; min-width: 0; }
-.card, section.notes, section.allow { padding: 1.25rem; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
-.hero { padding: 0.5rem; background: linear-gradient(160deg, #2f0035, #1d1321 70%); overflow: hidden; }
+.intro, .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem 3rem; }
+.intro { align-items: center; }
+.layout { align-items: start; }
+@media (max-width: 760px) { .intro, .layout { grid-template-columns: 1fr; } }
+hr.divider { margin: 2rem 0; border: 0; border-top: 1px solid var(--line); }
+.col { display: grid; gap: 2rem; min-width: 0; }
 img.banner { display: block; width: 100%; height: auto; mix-blend-mode: screen; filter: brightness(0.92) contrast(1.35);
   -webkit-mask-image: radial-gradient(ellipse 62% 64% at 50% 50%, #000 62%, transparent 100%);
   mask-image: radial-gradient(ellipse 62% 64% at 50% 50%, #000 62%, transparent 100%); }
@@ -108,10 +109,31 @@ footer.version-footer a { color: var(--muted); text-decoration: underline; }
 <a class="docs" href="` + landingDocsURL + `">Docs</a>
 </div></header>
 <main>
+<div class="intro">
+<div class="hero"><img class="banner" src="` + bannerAssetPath + `" width="1536" height="753" alt="Polypus"></div>
+<section class="allow">
+<h2>Allow model (inventory check)</h2>
+<form id="allow-form">
+<label>Backend <input name="backend" autocomplete="off" required placeholder="cf_local"></label>
+<label>Model <input name="model" autocomplete="off" required placeholder="@cf/..."></label>
+<button type="submit">Add to allow list</button>
+</form>
+<pre id="allow-result"></pre>
+</section>
+</div>
+<hr class="divider">
 <div class="layout">
+<div class="col col-models">
+<nav aria-label="Models and APIs">
+<h2>Models</h2>
+<ul>
+{{range .ModelLinks}}<li><a href="{{.Href}}"><span class="title">{{.Title}}</span><p class="desc">{{.Description}}</p></a></li>
+{{end}}
+</ul>
+</nav>
+</div>
 <div class="col col-ops">
-<div class="card hero"><img class="banner" src="` + bannerAssetPath + `" width="1536" height="753" alt="Polypus"></div>
-<nav class="card" aria-label="Health and observability">
+<nav aria-label="Health and observability">
 <h2>Health &amp; collectors</h2>
 <ul>
 {{range .OpsLinks}}<li><a href="{{.Href}}"><span class="title">{{.Title}}</span><p class="desc">{{.Description}}</p></a></li>
@@ -122,24 +144,6 @@ footer.version-footer a { color: var(--muted); text-decoration: underline; }
 <h2>Notes</h2>
 <pre class="note">{{.OTLPNote}}</pre>
 </section>{{end}}
-</div>
-<div class="col col-models">
-<nav class="card" aria-label="Models and APIs">
-<h2>Models</h2>
-<ul>
-{{range .ModelLinks}}<li><a href="{{.Href}}"><span class="title">{{.Title}}</span><p class="desc">{{.Description}}</p></a></li>
-{{end}}
-</ul>
-</nav>
-<section class="allow">
-<h2>Allow model (inventory check)</h2>
-<form id="allow-form">
-<label>Backend <input name="backend" autocomplete="off" required placeholder="cf_local"></label>
-<label>Model <input name="model" autocomplete="off" required placeholder="@cf/..."></label>
-<button type="submit">Add to allow list</button>
-</form>
-<pre id="allow-result"></pre>
-</section>
 </div>
 </div>
 </main>
