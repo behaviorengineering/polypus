@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TestSharedFilesMatchRepoRoot fails when the embedded copies drift from the files
@@ -42,5 +46,31 @@ func TestWrite(t *testing.T) {
 	// A second deploy rewrites the same files.
 	if _, err := Write(dir); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestGatewayLoadsKeysFromEnvFile fails when the gateway service goes back to a
+// hand-written list of backend keys, which drops any key the list forgets.
+func TestGatewayLoadsKeysFromEnvFile(t *testing.T) {
+	var doc struct {
+		Services map[string]struct {
+			EnvFile     []string          `yaml:"env_file"`
+			Environment map[string]string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(composeFile, &doc); err != nil {
+		t.Fatal(err)
+	}
+	gateway, ok := doc.Services["gateway"]
+	if !ok {
+		t.Fatal("compose file has no gateway service")
+	}
+	if !slices.Contains(gateway.EnvFile, ".env.gateway") {
+		t.Fatalf("gateway env_file = %v, want .env.gateway", gateway.EnvFile)
+	}
+	for name := range gateway.Environment {
+		if strings.HasSuffix(name, "_API_KEY") || name == "CF_ACCOUNT_ID" {
+			t.Errorf("gateway environment lists %s; backend keys belong in .env.gateway", name)
+		}
 	}
 }

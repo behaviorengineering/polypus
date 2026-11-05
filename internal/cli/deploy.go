@@ -421,7 +421,7 @@ func newDeployExportEnvCmd() *cobra.Command {
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use:     "export-env",
-		Short:   "Write keyring secrets named by the gateway YAML to .env.deploy",
+		Short:   "Write keyring secrets named by the gateway YAML to .env.deploy and .env.gateway",
 		GroupID: groupSetup,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -449,7 +449,7 @@ func newDeployExportEnvCmd() *cobra.Command {
 			if err := secrets.Export(app, names, out); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "export-env: wrote %s\n", out)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "export-env: wrote %s and %s beside it\n", out, secrets.GatewayEnvFileName)
 			return err
 		},
 	}

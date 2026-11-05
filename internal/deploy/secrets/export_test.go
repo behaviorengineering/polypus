@@ -76,3 +76,33 @@ func TestValidateCloudflareAccountID(t *testing.T) {
 		t.Fatal("expected a malformed account ID rejected")
 	}
 }
+
+func TestExportWritesGatewayEnvWithoutTailscaleKey(t *testing.T) {
+	t.Setenv("TS_AUTHKEY", "tskey-auth-example")
+	t.Setenv("OPENROUTER_API_KEY", strings.Repeat("o", minAPIKeyLen))
+	t.Setenv("ANTHROPIC_API_KEY", strings.Repeat("a", minAPIKeyLen))
+	dir := t.TempDir()
+	names := []string{"TS_AUTHKEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"}
+	if err := Export("polypus-test", names, filepath.Join(dir, ".env.deploy")); err != nil {
+		t.Fatal(err)
+	}
+	deploy, err := NonEmptyDotenvKeys(filepath.Join(dir, ".env.deploy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := NonEmptyDotenvKeys(filepath.Join(dir, GatewayEnvFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if !deploy[n] {
+			t.Errorf(".env.deploy is missing %s", n)
+		}
+	}
+	if !gateway["OPENROUTER_API_KEY"] || !gateway["ANTHROPIC_API_KEY"] {
+		t.Errorf("%s = %v, want both backend keys", GatewayEnvFileName, gateway)
+	}
+	if gateway["TS_AUTHKEY"] {
+		t.Errorf("%s carries TS_AUTHKEY, which only the tailscale service reads", GatewayEnvFileName)
+	}
+}
