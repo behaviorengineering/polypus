@@ -230,7 +230,7 @@ func apply(ctx context.Context, opts Options, p plan) error {
 	if err := secrets.Export(opts.Name, p.secretNames, opts.EnvDeployPath()); err != nil {
 		return fmt.Errorf("%w (store each with: polypus deploy secret set <ENV>)", err)
 	}
-	fmt.Printf("export-env: wrote %s\n", opts.EnvDeployPath())
+	fmt.Printf("export-env: wrote %s and %s beside it\n", opts.EnvDeployPath(), secrets.GatewayEnvFileName)
 
 	cc := compose.Client{
 		Project:     opts.Name,

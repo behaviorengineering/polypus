@@ -1,5 +1,5 @@
 # Polypus deploy stack, run by polypus deploy run. Image pins: .env.images (written per deploy, no :latest).
-# Secrets: .env.deploy from polypus deploy export-env.
+# Secrets: .env.deploy and .env.gateway from polypus deploy export-env, both beside this file.
 # Containers and volumes are named by the compose project, polypus-<identifier>, so two
 # environments run side by side on one host.
 # Profiles: routers runs Switchyard; observability runs the OTLP collector, Phoenix and HyperDX.
@@ -12,6 +12,11 @@ services:
   gateway:
     image: ${POLYPUS_IMAGE}
     restart: on-failure:5
+    # Every key the gateway YAML names (each auth.bearer_env and ${VAR} in a base_url),
+    # so a new backend's key reaches the gateway without editing this file. TS_AUTHKEY
+    # stays out: only the tailscale service reads it.
+    env_file:
+      - .env.gateway
     environment:
       POLYPUS_HOST: "0.0.0.0"
       POLYPUS_PORT: "1320"
@@ -21,13 +26,6 @@ services:
       # deploy sets POLYPUS_SWITCHYARD=1 and COMPOSE_PROFILES=routers when host config has routers:
       POLYPUS_SWITCHYARD: "${POLYPUS_SWITCHYARD:-0}"
       POLYPUS_CONFIG: /etc/polypus/config.yaml
-      # Set only when the gateway YAML has a Cloudflare backend.
-      CF_AI_API_KEY: ${CF_AI_API_KEY:-}
-      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_API_KEY_FREE: ${GEMINI_API_KEY_FREE:-}
       # Empty when observability is off: traces stay local (failure dumps still written).
       POLYPUS_OTLP_ENDPOINT: ${POLYPUS_DEPLOY_OTLP_ENDPOINT?run through polypus deploy}
       POLYPUS_PHOENIX: "false"
