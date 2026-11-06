@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/deploy/images"
+	"github.com/behaviorengineering/polypus/internal/deploy/progress"
 )
 
 func TestPostComposeUpReloadPrunesBeforeRecreate(t *testing.T) {
@@ -22,7 +24,7 @@ func TestPostComposeUpReloadPrunesBeforeRecreate(t *testing.T) {
 			return nil
 		},
 	}
-	err := postComposeUpReload(ctx, opts, "/gateway.yaml", func(ctx context.Context, services ...string) error {
+	err := postComposeUpReload(ctx, opts, progress.New(io.Discard), "/gateway.yaml", func(ctx context.Context, services ...string) error {
 		order = append(order, "recreate")
 		return nil
 	}, "gateway")
@@ -80,6 +82,8 @@ func TestRunStopsOffTailnetBeforeWriting(t *testing.T) {
 	opts.PinsFile = pins
 	opts.HealthURL = "https://polypus-work.corp.ts.net"
 	opts.Tailnet = "corp.ts.net"
+	var out strings.Builder
+	opts.Out = &out
 	opts.TailnetStatus = func(context.Context) ([]byte, error) {
 		return []byte(`{"BackendState":"Running","CurrentTailnet":{"MagicDNSSuffix":"home.ts.net","MagicDNSEnabled":true}}`), nil
 	}
@@ -88,6 +92,9 @@ func TestRunStopsOffTailnetBeforeWriting(t *testing.T) {
 	err := Run(ctx, opts)
 	if err == nil || !strings.Contains(err.Error(), "home.ts.net") {
 		t.Fatalf("err = %v, want the wrong tailnet named", err)
+	}
+	if !strings.Contains(out.String(), "deploy: checks this machine is on tailnet corp.ts.net first") {
+		t.Fatalf("plan not written to Options.Out: %q", out.String())
 	}
 	for _, p := range []string{opts.EnvDeployPath(), opts.StateDir} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
@@ -110,5 +117,20 @@ func TestDefaultStateDirOverride(t *testing.T) {
 	opts.Name = "polypus-work"
 	if want := filepath.Join(dir, "polypus-work", ".env.deploy"); opts.EnvDeployPath() != want {
 		t.Fatalf("env deploy %q want %q", opts.EnvDeployPath(), want)
+	}
+}
+
+func TestComposeEnvLeavesProcessEnvironmentAlone(t *testing.T) {
+	t.Setenv("COMPOSE_PROFILES", "operator")
+	env := composeEnv(Options{Name: "polypus-work"}, plan{gatewayPath: "/g.yaml", services: images.Services{Routers: true}}, "/serve")
+	if !slices.Contains(env, "COMPOSE_PROFILES=routers") || !slices.Contains(env, "POLYPUS_SWITCHYARD=1") {
+		t.Fatalf("env %v", env)
+	}
+	if os.Getenv("COMPOSE_PROFILES") != "operator" {
+		t.Fatal("composeEnv must not change the process environment")
+	}
+	off := composeEnv(Options{}, plan{}, "/serve")
+	if !slices.Contains(off, "COMPOSE_PROFILES=") {
+		t.Fatalf("no profiles must still override the operator's: %v", off)
 	}
 }

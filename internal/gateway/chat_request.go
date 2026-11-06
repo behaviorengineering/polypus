@@ -1,8 +1,8 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -11,6 +11,8 @@ import (
 // chatRequest is a chat completion body decoded once per request. Routing reads its
 // fields; outbound encodes the body the backend gets.
 type chatRequest struct {
+	// raw is the body as the client sent it.
+	raw      []byte
 	root     map[string]any
 	model    string
 	stream   bool
@@ -20,9 +22,15 @@ type chatRequest struct {
 
 func parseChatRequest(body []byte) (chatRequest, error) {
 	const op = "gateway.parseChatRequest"
+	// UseNumber keeps 64-bit integers such as seed exact when the body is re-encoded.
 	var root map[string]any
-	if err := json.Unmarshal(body, &root); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&root); err != nil {
 		return chatRequest{}, derrors.Wrap(err, derrors.CodeInvalid, op, "invalid json")
+	}
+	if dec.More() {
+		return chatRequest{}, derrors.New(derrors.CodeInvalid, op, "invalid json: trailing data")
 	}
 	model, _ := root[keyModel].(string)
 	model = strings.TrimSpace(model)
@@ -31,6 +39,7 @@ func parseChatRequest(body []byte) (chatRequest, error) {
 	}
 	stream, _ := root["stream"].(bool)
 	return chatRequest{
+		raw:      body,
 		root:     root,
 		model:    model,
 		stream:   stream,
@@ -66,7 +75,7 @@ func chatMapHasVision(root map[string]any) bool {
 			if !ok {
 				continue
 			}
-			if strings.EqualFold(strings.TrimSpace(fmt.Sprint(p["type"])), "image_url") {
+			if typ, ok := p["type"].(string); ok && strings.EqualFold(strings.TrimSpace(typ), "image_url") {
 				return true
 			}
 		}

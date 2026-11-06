@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,7 +146,7 @@ func TestWrapTransportRecordsTimeout(t *testing.T) {
 
 	found := false
 	for _, sp := range exporter.GetSpans() {
-		if sp.Name != "polypus CLIENT POST 127.0.0.1:1323/v1/chat/completions" {
+		if sp.Name != "polypus CLIENT POST 127.0.0.1:1323" {
 			continue
 		}
 		if sp.Status.Code != codes.Error {
@@ -176,7 +177,7 @@ func TestEndSpanRecordsTimeout(t *testing.T) {
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
 	_, span := tp.Tracer("test").Start(context.Background(), "polypus.chat")
-	endSpan(span, context.DeadlineExceeded)
+	EndSpan(span, context.DeadlineExceeded)
 
 	spans := exporter.GetSpans()
 	if len(spans) != 1 {
@@ -254,5 +255,40 @@ func TestFailureDumpSkipsSuccessfulRequest(t *testing.T) {
 func TestInitRequiresALogger(t *testing.T) {
 	if _, err := Init(Config{}); derrors.CodeOf(err) != derrors.CodeInvalid {
 		t.Fatalf("Init without a logger must fail closed: %v", err)
+	}
+}
+
+func TestClientSpanNameHasNoPath(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	const accountID = "0123456789abcdef0123456789abcdef"
+	const path = "/client/v4/accounts/" + accountID + "/ai/models/search"
+	client := &http.Client{Transport: WrapTransport(timeoutRoundTripper{})}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://api.cloudflare.com"+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := client.Do(req); err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("expected the fake transport to fail")
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("want one client span, got %d", len(spans))
+	}
+	sp := spans[0]
+	if sp.Name != "polypus CLIENT GET api.cloudflare.com" {
+		t.Fatalf("span name %q", sp.Name)
+	}
+	if strings.Contains(sp.Name, accountID) {
+		t.Fatalf("span name carries the account id: %q", sp.Name)
+	}
+	if got, _ := attrString(sp, "url.path"); got != path {
+		t.Fatalf("url.path=%q want %q", got, path)
 	}
 }

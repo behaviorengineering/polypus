@@ -5,11 +5,10 @@ import (
 	"testing"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/sony/gobreaker"
 )
 
 func TestResolveUpstreamNameFromBreakerWrap(t *testing.T) {
-	err := UnavailableError("edge_cf", gobreaker.ErrOpenState)
+	err := UnavailableError("edge_cf", ErrOpen)
 	got := ResolveUpstreamName(err, "")
 	if got != "edge_cf" {
 		t.Fatalf("got %q", got)
@@ -17,7 +16,7 @@ func TestResolveUpstreamNameFromBreakerWrap(t *testing.T) {
 }
 
 func TestResolveUpstreamNameHintWins(t *testing.T) {
-	err := UnavailableError("other", gobreaker.ErrOpenState)
+	err := UnavailableError("other", ErrOpen)
 	got := ResolveUpstreamName(err, "hint_backend")
 	if got != "hint_backend" {
 		t.Fatalf("got %q", got)
@@ -50,7 +49,7 @@ func TestClassifyDialFailureBifrostLeafStatus(t *testing.T) {
 }
 
 func TestClassifyDialFailureBreakerUpstreamParsed(t *testing.T) {
-	err := UnavailableError("cf_local", gobreaker.ErrOpenState)
+	err := UnavailableError("cf_local", ErrOpen)
 	cls := ClassifyDialFailure(err, "")
 	if cls.Upstream != "cf_local" {
 		t.Fatalf("upstream=%q", cls.Upstream)

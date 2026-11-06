@@ -17,18 +17,21 @@ func TestRunWithProviders(t *testing.T) {
 	if err := os.WriteFile(gw, []byte(`backends:
   cf_local:
     extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
     capabilities: [chat]
     models:
       allow: ["@cf/ibm-granite/granite-4.0-h-micro"]
   openrouter:
+    base_url: https://openrouter.ai/api/v1
     auth:
       bearer_env: OPENROUTER_API_KEY
     capabilities: [chat]
     models:
       allow: ["google/gemma-4-26b-a4b-it:free"]
   deepinfra:
+    base_url: https://api.deepinfra.com/v1/openai
     auth:
       bearer_env: DEEPINFRA_API_KEY
     capabilities: [chat]
@@ -96,6 +99,7 @@ func TestRunWithDeepInfraGemmaReasoning(t *testing.T) {
 	gw := filepath.Join(dir, "gw.yaml")
 	if err := os.WriteFile(gw, []byte(`backends:
   deepinfra:
+    base_url: https://api.deepinfra.com/v1/openai
     auth:
       bearer_env: DEEPINFRA_API_KEY
     capabilities: [chat]
@@ -156,12 +160,14 @@ func TestRunWithProvidersSkipsMissingSecrets(t *testing.T) {
 	if err := os.WriteFile(gw, []byte(`backends:
   cf_local:
     extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
     capabilities: [chat]
     models:
       allow: ["@cf/ibm-granite/granite-4.0-h-micro"]
   openrouter:
+    base_url: https://openrouter.ai/api/v1
     auth:
       bearer_env: OPENROUTER_API_KEY
     capabilities: [chat]

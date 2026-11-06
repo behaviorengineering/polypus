@@ -4,7 +4,10 @@ import (
 	"net/http"
 	"strconv"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
+	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
 type polypusFailureBody struct {
@@ -44,4 +47,24 @@ func (s *shared) writeUnavailableError(w http.ResponseWriter, err error, message
 		body.Polypus.CircuitBreaker = &polypusBreakerMeta{State: cls.BreakerState}
 	}
 	s.writeJSON(w, http.StatusServiceUnavailable, body)
+}
+
+// dialFailureLabels classifies a dial error with the gateway's breaker and upstream
+// rules, for observability to record on the span.
+func dialFailureLabels(err error, upstreamName string) observability.DialFailure {
+	if err == nil {
+		return observability.DialFailure{}
+	}
+	c := upstream.ClassifyDialFailure(err, upstreamName)
+	return observability.DialFailure{
+		Layer:        c.Layer,
+		Upstream:     c.Upstream,
+		BreakerState: c.BreakerState,
+		HTTPStatus:   c.HTTPStatus,
+	}
+}
+
+// endDialSpan ends a dial span, labelling a failure with dialFailureLabels.
+func endDialSpan(span trace.Span, err error, upstreamName string) {
+	observability.EndDialSpan(span, err, dialFailureLabels(err, upstreamName))
 }

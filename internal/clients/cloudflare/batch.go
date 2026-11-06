@@ -5,16 +5,23 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
 
 const (
 	batchMaxPayload = 10 << 20
+)
+
+// Op names for the batch errors.
+const (
+	opSubmitBatch  = "cloudflare.SubmitBatch"
+	opPollBatch    = "cloudflare.PollBatch"
+	opPostBatchRun = "cloudflare.postBatchRun"
+	opEmbedInput   = "cloudflare.embeddingInputToText"
 )
 
 // BatchPollState is the Workers AI async batch poll outcome.
@@ -40,7 +47,6 @@ type BatchResponseItem struct {
 type BatchPollResult struct {
 	State     BatchPollState
 	Responses []BatchResponseItem
-	Usage     json.RawMessage
 }
 
 var batchAllowedModels = map[string]struct{}{
@@ -71,17 +77,17 @@ func ModelSupportsBatch(model string) bool {
 // SubmitBatch queues an async Workers AI batch for the given model.
 func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string, lines []batch.InputLine) (string, error) {
 	if ctx == nil {
-		return "", derrors.New(derrors.CodeInvalid, "cloudflare.SubmitBatch", "context required")
+		return "", derrors.New(derrors.CodeInvalid, opSubmitBatch, "context required")
 	}
 	if c == nil {
-		return "", derrors.New(derrors.CodeFailedPrecondition, "cloudflare.SubmitBatch", "not configured")
+		return "", derrors.New(derrors.CodeFailedPrecondition, opSubmitBatch, "not configured")
 	}
 	model = NormalizeModel(strings.TrimSpace(model))
 	if model == "" {
-		return "", derrors.New(derrors.CodeInvalid, "cloudflare.SubmitBatch", "model required")
+		return "", derrors.New(derrors.CodeInvalid, opSubmitBatch, "model required")
 	}
 	if !ModelSupportsBatch(model) {
-		return "", derrors.New(derrors.CodeInvalid, "cloudflare.SubmitBatch", "model does not support batch").
+		return "", derrors.New(derrors.CodeInvalid, opSubmitBatch, "model does not support batch").
 			With("model", model)
 	}
 	requests, err := translateBatchRequests(endpoint, lines)
@@ -92,72 +98,69 @@ func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string,
 		Requests []map[string]json.RawMessage `json:"requests"`
 	}{requests})
 	if err != nil {
-		return "", derrors.Wrap(err, derrors.CodeInternal, "cloudflare.SubmitBatch", "marshal")
+		return "", derrors.Wrap(err, derrors.CodeInternal, opSubmitBatch, "marshal")
 	}
 	if len(payload) > batchMaxPayload {
-		return "", derrors.New(derrors.CodeInvalid, "cloudflare.SubmitBatch", "batch payload exceeds 10MB limit")
+		return "", derrors.New(derrors.CodeInvalid, opSubmitBatch, "batch payload exceeds 10MB limit")
 	}
-	raw, err := c.postBatchRun(ctx, model, payload)
+	raw, err := c.postBatchRun(ctx, model, payload, false)
 	if err != nil {
 		return "", err
 	}
 	return parseSubmitRequestID(raw)
 }
 
-// PollBatch checks status or fetches completed responses for a queued batch.
+// PollBatch checks status or fetches completed responses for a queued batch. A poll
+// is idempotent, so a transient failure is retried within ctx's deadline.
 func (c *Client) PollBatch(ctx context.Context, model, cfRequestID string) (BatchPollResult, error) {
 	if ctx == nil {
-		return BatchPollResult{}, derrors.New(derrors.CodeInvalid, "cloudflare.PollBatch", "context required")
+		return BatchPollResult{}, derrors.New(derrors.CodeInvalid, opPollBatch, "context required")
 	}
 	if c == nil {
-		return BatchPollResult{}, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.PollBatch", "not configured")
+		return BatchPollResult{}, derrors.New(derrors.CodeFailedPrecondition, opPollBatch, "not configured")
 	}
 	model = NormalizeModel(strings.TrimSpace(model))
 	cfRequestID = strings.TrimSpace(cfRequestID)
 	if model == "" || cfRequestID == "" {
-		return BatchPollResult{}, derrors.New(derrors.CodeInvalid, "cloudflare.PollBatch", "model and request_id required")
+		return BatchPollResult{}, derrors.New(derrors.CodeInvalid, opPollBatch, "model and request_id required")
 	}
 	payload, err := json.Marshal(map[string]string{
 		"request_id": cfRequestID,
 	})
 	if err != nil {
-		return BatchPollResult{}, derrors.Wrap(err, derrors.CodeInternal, "cloudflare.PollBatch", "marshal")
+		return BatchPollResult{}, derrors.Wrap(err, derrors.CodeInternal, opPollBatch, "marshal")
 	}
-	raw, err := c.postBatchRun(ctx, model, payload)
+	raw, err := c.postBatchRun(ctx, model, payload, true)
 	if err != nil {
 		return BatchPollResult{}, err
 	}
 	return parsePollResult(raw)
 }
 
-func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte) ([]byte, error) {
+// postBatchRun posts payload to the async batch /run endpoint. A submit (retry false)
+// goes once, so it can never queue the same paid batch twice; a poll (retry true)
+// goes under the retry policy.
+func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte, retry bool) ([]byte, error) {
 	target := batchRunURL(c.apiBase, model)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "cloudflare.postBatchRun", "request")
+		return nil, derrors.Wrap(err, derrors.CodeInternal, opPostBatchRun, "request")
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 
-	resp, err := c.policies.DoOnce(ctx, c.dep(), c.speechClient, httpReq)
+	resp, err := c.run(ctx, opPostBatchRun, httpReq, retry)
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.postBatchRun", "post").
-			With("target", target)
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := readCapped(resp.Body, runMaxBody, "cloudflare.postBatchRun")
+	raw, err := catalog.ReadCapped(resp.Body, runMaxBody, opPostBatchRun)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if rl := ratelimit.Classify("cloudflare.postBatchRun", resp.StatusCode, resp.Header, raw); rl != nil {
-			return nil, rl
-		}
-		msg := workersAIErrorMessage(raw)
-		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.postBatchRun", msg).
-			With("status", strconv.Itoa(resp.StatusCode)).
-			With("body", truncate(string(raw), 256))
+		return nil, upstreamError(opPostBatchRun, resp, raw)
 	}
 	return unwrapBatchEnvelope(raw)
 }
@@ -206,12 +209,7 @@ func embedLineToCF(body json.RawMessage, customID string) (map[string]json.RawMe
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.embedLineToCF", "parse body")
 	}
 	delete(m, "model")
-	var input any
-	if raw, ok := m["input"]; ok {
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.embedLineToCF", "parse input")
-		}
-	}
+	input := m["input"]
 	delete(m, "input")
 	text, err := embeddingInputToText(input)
 	if err != nil {
@@ -233,43 +231,36 @@ func withString(m map[string]json.RawMessage, key, s string) (map[string]json.Ra
 	return m, nil
 }
 
-func embeddingInputToText(input interface{}) (string, error) {
-	switch v := input.(type) {
-	case string:
-		if strings.TrimSpace(v) == "" {
-			return "", derrors.New(derrors.CodeInvalid, "cloudflare.embeddingInputToText", "input required")
-		}
-		return v, nil
-	case []interface{}:
-		if len(v) != 1 {
-			return "", derrors.New(derrors.CodeInvalid, "cloudflare.embeddingInputToText", "batch embeddings require a single input per line")
-		}
-		s, ok := v[0].(string)
-		if !ok || strings.TrimSpace(s) == "" {
-			return "", derrors.New(derrors.CodeInvalid, "cloudflare.embeddingInputToText", "input must be a string")
-		}
-		return s, nil
-	default:
-		return "", derrors.New(derrors.CodeInvalid, "cloudflare.embeddingInputToText", "unsupported input type")
+// embeddingInputToText reads a batch embedding line's input: a string, or a list of
+// exactly one string. Workers AI batch takes one text per line.
+func embeddingInputToText(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", derrors.New(derrors.CodeInvalid, opEmbedInput, "input required")
 	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		var list []string
+		if err := json.Unmarshal(raw, &list); err != nil || len(list) != 1 {
+			return "", derrors.New(derrors.CodeInvalid, opEmbedInput, "batch embeddings require a single string input per line")
+		}
+		text = list[0]
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", derrors.New(derrors.CodeInvalid, opEmbedInput, "input required")
+	}
+	return text, nil
 }
 
+// parseSubmitRequestID reads the request id from a submit result (postBatchRun has
+// already removed the {success, result} envelope).
 func parseSubmitRequestID(raw []byte) (string, error) {
-	var envelope struct {
-		Result struct {
-			RequestID string `json:"request_id"`
-			Status    string `json:"status"`
-		} `json:"result"`
+	var result struct {
 		RequestID string `json:"request_id"`
-		Status    string `json:"status"`
 	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
+	if err := json.Unmarshal(raw, &result); err != nil {
 		return "", derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.parseSubmitRequestID", "parse")
 	}
-	id := strings.TrimSpace(envelope.Result.RequestID)
-	if id == "" {
-		id = strings.TrimSpace(envelope.RequestID)
-	}
+	id := strings.TrimSpace(result.RequestID)
 	if id == "" {
 		return "", derrors.New(derrors.CodeUnavailable, "cloudflare.parseSubmitRequestID", "missing request_id")
 	}
@@ -283,30 +274,20 @@ type cfBatchResponseRow struct {
 	Error             json.RawMessage `json:"error"`
 }
 
+// parsePollResult reads a poll result (postBatchRun has already removed the
+// {success, result} envelope): its responses once done, else its status.
 func parsePollResult(raw []byte) (BatchPollResult, error) {
-	var envelope struct {
-		Result struct {
-			Status    string               `json:"status"`
-			Responses []cfBatchResponseRow `json:"responses"`
-			Usage     json.RawMessage      `json:"usage"`
-		} `json:"result"`
+	var result struct {
 		Status    string               `json:"status"`
 		Responses []cfBatchResponseRow `json:"responses"`
 	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
+	if err := json.Unmarshal(raw, &result); err != nil {
 		return BatchPollResult{}, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.parsePollResult", "parse")
 	}
-	status := strings.ToLower(strings.TrimSpace(envelope.Result.Status))
-	if status == "" {
-		status = strings.ToLower(strings.TrimSpace(envelope.Status))
-	}
-	responses := envelope.Result.Responses
-	if len(responses) == 0 {
-		responses = envelope.Responses
-	}
-	if len(responses) > 0 {
-		out := BatchPollResult{State: BatchPollCompleted, Usage: envelope.Result.Usage}
-		for _, r := range responses {
+	status := strings.ToLower(strings.TrimSpace(result.Status))
+	if len(result.Responses) > 0 {
+		out := BatchPollResult{State: BatchPollCompleted}
+		for _, r := range result.Responses {
 			out.Responses = append(out.Responses, BatchResponseItem{
 				ExternalReference: r.ExternalReference,
 				Success:           r.Success,
@@ -349,11 +330,9 @@ func cfBatchRowErrorMessage(raw json.RawMessage) string {
 func unwrapBatchEnvelope(raw []byte) ([]byte, error) {
 	raw = bytes.TrimSpace(raw)
 	var envelope struct {
-		Success *bool           `json:"success"`
-		Result  json.RawMessage `json:"result"`
-		Errors  []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
+		Success *bool            `json:"success"`
+		Result  json.RawMessage  `json:"result"`
+		Errors  []workersAIError `json:"errors"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		// Not an envelope: Workers AI can answer with the bare result, which the
@@ -361,8 +340,7 @@ func unwrapBatchEnvelope(raw []byte) ([]byte, error) {
 		return raw, nil
 	}
 	if envelope.Success != nil && !*envelope.Success {
-		msg := workersAIErrorMessage(raw)
-		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapBatchEnvelope", msg)
+		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapBatchEnvelope", firstErrorMessage(envelope.Errors, "workers ai error"))
 	}
 	if len(envelope.Result) > 0 {
 		return envelope.Result, nil

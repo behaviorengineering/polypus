@@ -1,37 +1,50 @@
+// Package keys stores the gateway's named access keys (ppk.<id>.<secret>) as
+// SHA-256 digests in a locked JSON file and verifies presented tokens.
+//
+// Each secret is 32 random bytes, so a fast hash with a constant-time compare is
+// as strong as a password KDF and costs microseconds per request. Hashes written
+// before that change are argon2id; they still verify, and the store rewrites each
+// as SHA-256 the first time its key is used.
 package keys
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"fmt"
-	"io"
 	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
 )
 
+// sha256Prefix starts a stored SHA-256 digest; legacyPrefix a stored argon2id hash.
 const (
-	argonTime    = 2
-	argonMemory  = 19456
-	argonThreads = 1
-	argonKeyLen  = 32
-	saltLen      = 16
+	sha256Prefix = "sha256$"
+	legacyPrefix = "argon2id$"
 )
 
-// hashSecret hashes secret with argon2id under a salt drawn from r (the store's
-// injected source, so tests can make the stored hash deterministic).
-func hashSecret(r io.Reader, secret []byte) (string, error) {
-	salt := make([]byte, saltLen)
-	if _, err := io.ReadFull(r, salt); err != nil {
-		return "", err
+// hashSecret returns the stored form of secret: "sha256$" and the base64 digest.
+func hashSecret(secret []byte) string {
+	sum := sha256.Sum256(secret)
+	return sha256Prefix + base64.RawStdEncoding.EncodeToString(sum[:])
+}
+
+// verifyHash reports whether secret matches encoded. legacy is true when encoded
+// is an argon2id hash, which the store upgrades after a match.
+func verifyHash(encoded string, secret []byte) (ok, legacy bool) {
+	switch {
+	case strings.HasPrefix(encoded, sha256Prefix):
+		want, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(encoded, sha256Prefix))
+		if err != nil || len(want) != sha256.Size {
+			return false, false
+		}
+		got := sha256.Sum256(secret)
+		return subtle.ConstantTimeCompare(got[:], want) == 1, false
+	case strings.HasPrefix(encoded, legacyPrefix):
+		return verifyArgon2id(encoded, secret), true
+	default:
+		return false, false
 	}
-	dk := argon2.IDKey(secret, salt, argonTime, argonMemory, argonThreads, argonKeyLen)
-	return fmt.Sprintf("argon2id$v=19$m=%d,t=%d,p=%d$%s$%s",
-		argonMemory, argonTime, argonThreads,
-		base64.RawStdEncoding.EncodeToString(salt),
-		base64.RawStdEncoding.EncodeToString(dk),
-	), nil
 }
 
 // Bounds for the cost settings read back from a stored hash. argon2.IDKey panics
@@ -43,7 +56,8 @@ const (
 	maxArgonKeyLen = 64
 )
 
-func verifyHash(encoded string, secret []byte) bool {
+// verifyArgon2id checks secret against a legacy argon2id hash.
+func verifyArgon2id(encoded string, secret []byte) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 5 || parts[0] != "argon2id" || parts[1] != "v=19" {
 		return false

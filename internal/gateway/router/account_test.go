@@ -265,3 +265,55 @@ func TestUsesBifrostSwitchyardAndLeaf(t *testing.T) {
 		t.Fatal("composed routers register switchyard for Bifrost")
 	}
 }
+
+func TestTypesafeExtensionUsesTypesafeProvider(t *testing.T) {
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	cases := map[string]string{
+		"":                             "",
+		"https://api.typesafe.ai":      "https://api.typesafe.ai",
+		"https://api.typesafe.ai/v1/":  "https://api.typesafe.ai",
+		"http://127.0.0.1:8080/v1":     "http://127.0.0.1:8080",
+		"  https://jev.example.com/  ": "https://jev.example.com",
+	}
+	for raw, wantBase := range cases {
+		acct := newAccount(config.RouterConfig{
+			Timeouts: config.DefaultTimeouts(),
+			Backends: map[string]config.BackendDef{
+				"jev": {
+					ID:           "jev",
+					Extension:    config.ExtensionTypesafe,
+					BaseURL:      raw,
+					Capabilities: []config.Capability{config.CapSystemOne},
+				},
+			},
+		})
+		pc, err := acct.GetConfigForProvider("jev")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pc.CustomProviderConfig == nil || pc.CustomProviderConfig.BaseProviderType != schemas.Typesafe {
+			t.Fatalf("base type: %+v", pc.CustomProviderConfig)
+		}
+		if got := pc.NetworkConfig.BaseURL; got != wantBase {
+			t.Fatalf("base_url %q: got %q want %q (empty keeps Bifrost's default host)", raw, got, wantBase)
+		}
+		ar := pc.CustomProviderConfig.AllowedRequests
+		if ar == nil || !ar.Decision {
+			t.Fatalf("a typesafe systemone backend needs the decision operation: %+v", ar)
+		}
+		if ar.ChatCompletion || ar.Embedding {
+			t.Fatalf("only the declared capabilities are allowed: %+v", ar)
+		}
+	}
+}
+
+func TestDecisionOnlyForTypesafeBackends(t *testing.T) {
+	for _, b := range []config.BackendDef{
+		{ID: "cf", Extension: config.ExtensionCloudflare, Capabilities: []config.Capability{config.CapSystemOne}},
+		{ID: "leaf", Capabilities: []config.Capability{config.CapSystemOne, config.CapChat}},
+	} {
+		if allowedRequestsForBackend(b).Decision {
+			t.Fatalf("%s: decision is Typesafe-only on a custom provider", b.ID)
+		}
+	}
+}

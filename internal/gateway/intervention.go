@@ -10,7 +10,9 @@ import (
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
-func setIntervention(w http.ResponseWriter, ctx context.Context, code observability.Intervention) {
+// setIntervention records code on the span (when ctx is set) and the response header
+// (when w is set).
+func setIntervention(ctx context.Context, w http.ResponseWriter, code observability.Intervention) {
 	code = observability.Intervention(strings.TrimSpace(string(code)))
 	if code == "" {
 		return
@@ -25,7 +27,7 @@ func setIntervention(w http.ResponseWriter, ctx context.Context, code observabil
 
 func recordInterventionFromError(ctx context.Context, err error) {
 	if code := derrors.Field(err, derrors.FieldIntervention); code != "" {
-		setIntervention(nil, ctx, observability.Intervention(code))
+		setIntervention(ctx, nil, observability.Intervention(code))
 	}
 }
 

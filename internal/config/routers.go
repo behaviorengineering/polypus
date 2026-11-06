@@ -213,17 +213,6 @@ func decodeStrictNode(node *yaml.Node, out any) error {
 	return dec.Decode(out)
 }
 
-func defaultSwitchyardConfig() SwitchyardConfig {
-	path, err := DefaultSwitchyardRoutesPath()
-	if err != nil {
-		path = ""
-	}
-	return SwitchyardConfig{
-		BaseURL:    DefaultSwitchyardBaseURL,
-		ConfigPath: path,
-	}
-}
-
 func mergeSwitchyardFile(file switchyardFile) SwitchyardConfig {
 	var cfg SwitchyardConfig
 	if v := strings.TrimSpace(file.BaseURL); v != "" {
@@ -287,39 +276,7 @@ func parseRouterRoute(name string, file routerRouteFile) (RouterRoute, error) {
 		if err := rejectStageRouteExtras(name, file); err != nil {
 			return RouterRoute{}, err
 		}
-		capable := strings.TrimSpace(file.Capable)
-		efficient := strings.TrimSpace(file.Efficient)
-		picker := Picker(strings.TrimSpace(file.Picker))
-		if capable == "" {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.capable required for stage_router", name)
-		}
-		if efficient == "" {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.efficient required for stage_router", name)
-		}
-		if picker == "" {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.picker required for stage_router", name)
-		}
-		if picker != PickerEfficientFirst && picker != PickerCapableFirst {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.picker must be efficient_first or capable_first", name)
-		}
-		if file.ConfidenceThreshold == nil {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.confidence_threshold required for stage_router", name)
-		}
-		threshold := *file.ConfidenceThreshold
-		if threshold < 0 || threshold > 1 {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.confidence_threshold must be in [0, 1]", name)
-		}
-		if file.RecentTurnWindow != nil && *file.RecentTurnWindow < 1 {
-			return RouterRoute{}, fmt.Errorf("router: routers.%s.route.recent_turn_window must be >= 1", name)
-		}
-		return RouterRoute{
-			Type:                RouteStageRouter,
-			Capable:             capable,
-			Efficient:           efficient,
-			Picker:              picker,
-			ConfidenceThreshold: threshold,
-			RecentTurnWindow:    file.RecentTurnWindow,
-		}, nil
+		return parseStageRoute(name, file)
 	case RouteLLMClassifier:
 		if err := rejectClassifierRouteExtras(name, file); err != nil {
 			return RouterRoute{}, err
@@ -333,6 +290,44 @@ func parseRouterRoute(name string, file routerRouteFile) (RouterRoute, error) {
 	default:
 		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.type %q unsupported (v1: passthrough, stage_router, llm_classifier, fallback)", name, routeType)
 	}
+}
+
+// parseStageRoute reads a stage_router route: two leaves, a picker and the
+// confidence threshold that moves a request between them.
+func parseStageRoute(name string, file routerRouteFile) (RouterRoute, error) {
+	capable := strings.TrimSpace(file.Capable)
+	efficient := strings.TrimSpace(file.Efficient)
+	picker := Picker(strings.TrimSpace(file.Picker))
+	if capable == "" {
+		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.capable required for stage_router", name)
+	}
+	if efficient == "" {
+		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.efficient required for stage_router", name)
+	}
+	if picker == "" {
+		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.picker required for stage_router", name)
+	}
+	if picker != PickerEfficientFirst && picker != PickerCapableFirst {
+		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.picker must be efficient_first or capable_first", name)
+	}
+	if file.ConfidenceThreshold == nil {
+		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.confidence_threshold required for stage_router", name)
+	}
+	threshold := *file.ConfidenceThreshold
+	if threshold < 0 || threshold > 1 {
+		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.confidence_threshold must be in [0, 1]", name)
+	}
+	if file.RecentTurnWindow != nil && *file.RecentTurnWindow < 1 {
+		return RouterRoute{}, fmt.Errorf("router: routers.%s.route.recent_turn_window must be >= 1", name)
+	}
+	return RouterRoute{
+		Type:                RouteStageRouter,
+		Capable:             capable,
+		Efficient:           efficient,
+		Picker:              picker,
+		ConfidenceThreshold: threshold,
+		RecentTurnWindow:    file.RecentTurnWindow,
+	}, nil
 }
 
 // parseFallbackRoute reads the ordered leaves of a fallback route. Leaves must be
@@ -539,17 +534,23 @@ func validateRouters(cfg *RouterConfig) error {
 }
 
 // fillSwitchyardDefaults gives composed routers the default Switchyard URL and
-// routes.toml path when the config names none.
-func fillSwitchyardDefaults(cfg *RouterConfig) {
+// routes.toml path when the config names none. A default path that cannot be
+// resolved fails the load here, not later at ResolveSwitchyardConfigPath.
+func fillSwitchyardDefaults(cfg *RouterConfig) error {
 	if !cfg.HasComposedRouters() {
-		return
+		return nil
 	}
 	if cfg.Switchyard.BaseURL == "" {
-		cfg.Switchyard.BaseURL = defaultSwitchyardConfig().BaseURL
+		cfg.Switchyard.BaseURL = DefaultSwitchyardBaseURL
 	}
 	if cfg.Switchyard.ConfigPath == "" {
-		cfg.Switchyard.ConfigPath = defaultSwitchyardConfig().ConfigPath
+		path, err := DefaultSwitchyardRoutesPath()
+		if err != nil {
+			return fmt.Errorf("router: switchyard.config_path default: %w", err)
+		}
+		cfg.Switchyard.ConfigPath = path
 	}
+	return nil
 }
 
 // routeLeaf is one chat leaf a route dials.
@@ -741,7 +742,7 @@ func (c RouterConfig) EffectiveSwitchyardBaseURL() string {
 	if v := strings.TrimRight(strings.TrimSpace(c.Switchyard.BaseURL), "/"); v != "" {
 		return v
 	}
-	return defaultSwitchyardConfig().BaseURL
+	return DefaultSwitchyardBaseURL
 }
 
 // ResolveSwitchyardConfigPath returns the generated Switchyard TOML path.

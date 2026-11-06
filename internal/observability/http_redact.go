@@ -1,7 +1,6 @@
 package observability
 
 import (
-	"errors"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -40,21 +39,33 @@ func redactQueryValues(q url.Values) bool {
 	return changed
 }
 
+// redactURLString masks userinfo credentials and secret query values in raw. A URL
+// that needs neither comes back unchanged.
 func redactURLString(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return raw
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.RawQuery == "" {
+	if err != nil {
 		return raw
 	}
-	q := u.Query()
-	if !redactQueryValues(q) {
+	changed := false
+	if u.User != nil {
+		// The user name alone can be a token (https://TOKEN@host), so mask all of it.
+		u.User = url.User(redactedSecret)
+		changed = true
+	}
+	if u.RawQuery != "" {
+		q := u.Query()
+		if redactQueryValues(q) {
+			u.RawQuery = q.Encode()
+			changed = true
+		}
+	}
+	if !changed {
 		return raw
 	}
-	u.RawQuery = q.Encode()
-	u.User = nil
 	return u.String()
 }
 
@@ -80,12 +91,15 @@ func redactHTTPError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
+	// Only an outermost *url.Error is copied with its URL redacted; errors.As would
+	// also match one deeper in the chain and drop the layers above it.
+	if urlErr, ok := err.(*url.Error); ok { //nolint:errorlint // the outermost error only, by design
 		out := *urlErr
 		out.URL = redactURLString(urlErr.URL)
 		return &out
 	}
+	// A url.Error deeper in the chain: keep the chain (and its domain code and op),
+	// redact only the text.
 	msg := err.Error()
 	redacted := redactURLsInText(msg)
 	if redacted == msg {
@@ -109,6 +123,7 @@ func redactSpanRequestURL(span trace.Span, req *http.Request) {
 	}
 	span.SetAttributes(
 		attribute.String("url.full", redactURLString(req.URL.String())),
+		attribute.String("url.path", sanitizeAttrValue("url.path", req.URL.Path)),
 	)
 	if req.URL.RawQuery != "" {
 		span.SetAttributes(attribute.String("url.query", redactQueryString(req.URL.RawQuery)))

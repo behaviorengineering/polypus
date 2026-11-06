@@ -11,7 +11,7 @@ import (
 type catalogLister func(context.Context) (catalog.ModelList, error)
 
 // liveCatalogLister returns the catalog list call for backends whose models come from a
-// provider catalog client (Gemini, Anthropic), or nil for every other backend.
+// provider catalog client (Gemini, Anthropic, Cloudflare), or nil for every other backend.
 func (h modelsHandler) liveCatalogLister(b config.BackendDef) catalogLister {
 	switch {
 	case b.IsGeminiExtension():
@@ -25,6 +25,14 @@ func (h modelsHandler) liveCatalogLister(b config.BackendDef) catalogLister {
 	case b.IsAnthropicExtension():
 		return func(ctx context.Context) (catalog.ModelList, error) {
 			client, err := h.anthropicClient(b)
+			if err != nil {
+				return catalog.ModelList{}, err
+			}
+			return client.ListModelsStrict(ctx)
+		}
+	case b.IsCloudflareExtension():
+		return func(ctx context.Context) (catalog.ModelList, error) {
+			client, err := h.cloudflareClient(b)
 			if err != nil {
 				return catalog.ModelList{}, err
 			}

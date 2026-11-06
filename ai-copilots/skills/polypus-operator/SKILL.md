@@ -51,7 +51,13 @@ curl -sS 'http://127.0.0.1:1320/v1/apis/openai/models?view=inventory' | jq '.dat
 curl -sS http://127.0.0.1:1320/v1/admin/models/allow | jq .
 ```
 
-Compare to `config.yaml` `backends.*.models.allow`. OpenAI surface = chat/embed/audio/router ids; SystemOne surface = `models.systemone_allow` (default `typesafe/jev`). Inventory view = last call. `GET /v1/admin/models/allow` is overlay-file contents only (runtime extras), not enabled list and not `?view=inventory`.
+Compare to `config.yaml` `backends.*.models.allow`. OpenAI surface = chat/embed/audio/router ids; SystemOne surface = `models.systemone_allow` (default `typesafe/jev`). The model lists come from the inventory cache, as of the last refresh (serve warm-up, then every `POLYPUS_MODELS_REFRESH_INTERVAL`); a request dials a backend only when it has no cached entry yet. `GET /v1/admin/models/allow` is overlay-file contents only (runtime extras), not enabled list and not `?view=inventory`.
+
+To enable a model at runtime, send JSON (`--json` sets `Content-Type: application/json`). The gateway answers 415 to any other Content-Type and 403 to a cross-site browser `Origin`, so a web page cannot change the allow list; adding a model refreshes that backend's cached list at once:
+
+```bash
+curl -sS --json '{"backend":"<id>","model":"<downstream>"}' http://127.0.0.1:1320/v1/admin/models/allow
+```
 
 ### 3. Smoke all Cloudflare channels
 

@@ -1,3 +1,5 @@
+// Package statefile writes small state files atomically and serialises writers
+// with an advisory lock beside each file.
 package statefile
 
 import (
@@ -33,7 +35,7 @@ func WriteAtomic(path string, content []byte, fileMode os.FileMode) error {
 	if _, err := tmp.Write(content); err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WriteAtomic", "write")
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := syncFile(tmp); err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "statefile.WriteAtomic", "sync")
 	}
 	if err := tmp.Close(); err != nil {
@@ -55,5 +57,9 @@ func syncDir(dir string) {
 		return
 	}
 	defer func() { _ = d.Close() }()
-	_ = d.Sync() //nolint:errcheck // not supported on every platform (Windows); the rename stands
+	_ = syncFile(d) //nolint:errcheck // not supported on every platform (Windows); the rename stands
 }
+
+// syncFile flushes f to stable storage. Tests swap it to record which files and
+// directories WriteAtomic syncs.
+var syncFile = (*os.File).Sync

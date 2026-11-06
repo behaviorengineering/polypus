@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
@@ -28,7 +29,8 @@ func claudeBatchTestClient(t *testing.T, promptCache *bool) *Client {
 
 func TestClaudeBatchParamsTranslatesOpenAIChat(t *testing.T) {
 	c := claudeBatchTestClient(t, nil)
-	bctx := c.bifrostContext(context.Background(), time.Minute, false)
+	bctx, cancel := c.bifrostContext(context.Background(), time.Minute, false)
+	defer cancel()
 	body := []byte(`{"model":"claude_team/claude-sonnet-5-5","stream":true,"max_tokens":256,
 		"messages":[{"role":"system","content":"Be brief."},{"role":"user","content":"hi"}]}`)
 	params, err := c.claudeBatchParams(bctx, "claude_team", "claude-sonnet-5-5", body)
@@ -60,7 +62,8 @@ func TestClaudeBatchParamsTranslatesOpenAIChat(t *testing.T) {
 func TestClaudeBatchParamsRespectsPromptCacheOff(t *testing.T) {
 	off := false
 	c := claudeBatchTestClient(t, &off)
-	bctx := c.bifrostContext(context.Background(), time.Minute, false)
+	bctx, cancel := c.bifrostContext(context.Background(), time.Minute, false)
+	defer cancel()
 	params, err := c.claudeBatchParams(bctx, "claude_team", "claude-sonnet-5-5", []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +75,8 @@ func TestClaudeBatchParamsRespectsPromptCacheOff(t *testing.T) {
 
 func TestClaudeBatchParamsRejectsEmptyMessages(t *testing.T) {
 	c := claudeBatchTestClient(t, nil)
-	bctx := c.bifrostContext(context.Background(), time.Minute, false)
+	bctx, cancel := c.bifrostContext(context.Background(), time.Minute, false)
+	defer cancel()
 	if _, err := c.claudeBatchParams(bctx, "claude_team", "m", []byte(`{"messages":[]}`)); err == nil {
 		t.Fatal("expected an error for a line without messages")
 	}
@@ -144,5 +148,41 @@ func TestNewAccountAllowsClaudeBatchesWithCapability(t *testing.T) {
 	ar := pc.CustomProviderConfig.AllowedRequests
 	if !ar.BatchCreate || !ar.BatchRetrieve || !ar.BatchResults || !ar.BatchCancel {
 		t.Fatalf("want batch calls allowed: %+v", ar)
+	}
+}
+
+func TestClaudeBatchesNilReceiverFailsClosed(t *testing.T) {
+	var b *ClaudeBatches
+	ctx := context.Background()
+	if _, err := b.Create(ctx, BatchTarget{BackendID: "claude_team", Timeout: time.Minute}, "m", nil); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := b.Status(ctx, BatchTarget{BackendID: "claude_team", Timeout: time.Minute}, "id"); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+		t.Fatalf("Status: %v", err)
+	}
+	if _, err := b.Results(ctx, BatchTarget{BackendID: "claude_team", Timeout: time.Minute}, "id", "m"); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+		t.Fatalf("Results: %v", err)
+	}
+	if err := b.Cancel(ctx, BatchTarget{BackendID: "claude_team", Timeout: time.Minute}, "id"); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+		t.Fatalf("Cancel: %v", err)
+	}
+}
+
+func TestClaudeBatchLineSynthesisFailureNamesTheStep(t *testing.T) {
+	bctx := schemas.NewBifrostContext(context.Background(), time.Now().Add(time.Minute))
+	defer bctx.Cancel()
+	item := schemas.BatchResultItem{
+		CustomID: "job-3",
+		Result: &schemas.BatchResultData{
+			Type:    "succeeded",
+			Message: map[string]any{"content": "not a block list"},
+		},
+	}
+	line := claudeBatchLine(bctx, item, "claude_team/claude-sonnet-5-5")
+	if line.ErrCode != "synthesis_failed" {
+		t.Fatalf("line: %+v", line)
+	}
+	if !strings.Contains(line.ErrMessage, "router.claudeMessageToChatCompletion") || !strings.Contains(line.ErrMessage, "decode message") {
+		t.Fatalf("the message must name the op and step, got %q", line.ErrMessage)
 	}
 }

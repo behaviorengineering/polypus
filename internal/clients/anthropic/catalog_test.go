@@ -27,7 +27,7 @@ func TestAnthropicListModelsHeadersAndShape(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	client, err := newClient(srv.URL, "secret")
+	client, err := newClient(srv.URL, "secret", time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestAnthropicListModelsFollowsPagination(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	client, err := newClient(srv.URL, "secret")
+	client, err := newClient(srv.URL, "secret", time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestAnthropicListModelsUnauthorized(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	client, err := newClient(srv.URL, "bad")
+	client, err := newClient(srv.URL, "bad", time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestModelsListURL(t *testing.T) {
 }
 
 func TestNewClientRejectsOtherExtensions(t *testing.T) {
-	_, err := newClientFromBackend(config.BackendDef{ID: "g", Extension: config.ExtensionGemini})
+	_, err := (&Clients{Now: time.Now}).Get(config.BackendDef{ID: "g", Extension: config.ExtensionGemini})
 	if !errors.Is(err, errNotAnthropicExtension) {
 		t.Fatalf("err: %v", err)
 	}

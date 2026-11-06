@@ -62,20 +62,40 @@ func Classify(op string, status int, header http.Header, body []byte, hints ...s
 	if cfCode == "" {
 		cfCode = workersCodeFromText(blob)
 	}
-	return classify(op, status, header, body, cfCode, hints, true)
+	return classify(op, response{status: status, header: header, body: body, hints: hints}, &cloudflareSignal{code: cfCode})
 }
 
 // ClassifyStatus is Classify for a backend that is not Cloudflare: only a 429 is a
 // rate limit, Cloudflare codes in the body mean nothing, and the error carries none
 // of the Cloudflare fields (limit_kind, cf_ray) that mark a failure as Cloudflare's.
 func ClassifyStatus(op string, status int, header http.Header, body []byte, hints ...string) *derrors.Error {
-	return classify(op, status, header, body, "", hints, false)
+	return classify(op, response{status: status, header: header, body: body, hints: hints}, nil)
 }
 
-func classify(op string, status int, header http.Header, body []byte, cfCode string, hints []string, cloudflare bool) *derrors.Error {
+// response is the upstream answer classify reads.
+type response struct {
+	status int
+	header http.Header
+	body   []byte
+	hints  []string
+}
+
+// cloudflareSignal marks a Cloudflare backend and carries the throttle code found in
+// its answer ("" for none). A nil signal is any other backend.
+type cloudflareSignal struct {
+	code string
+}
+
+func classify(op string, r response, cf *cloudflareSignal) *derrors.Error {
 	if strings.TrimSpace(op) == "" {
 		op = "ratelimit.Classify"
 	}
+	cloudflare := cf != nil
+	cfCode := ""
+	if cloudflare {
+		cfCode = cf.code
+	}
+	status, header := r.status, r.header
 
 	if status != http.StatusTooManyRequests && cfCode == "" {
 		return nil
@@ -84,7 +104,7 @@ func classify(op string, status int, header http.Header, body []byte, cfCode str
 		status = http.StatusTooManyRequests
 	}
 
-	msg := firstWorkersMessage(body, hints...)
+	msg := firstWorkersMessage(r.body, r.hints...)
 	kind := KindRequest
 	switch cfCode {
 	case WorkersQuotaCode:
@@ -114,7 +134,7 @@ func classify(op string, status int, header http.Header, body []byte, cfCode str
 		if v := strings.TrimSpace(header.Get("Retry-After")); v != "" {
 			err = err.With(FieldRetryAfter, v)
 		}
-		if v := firstHeader(header, "Ratelimit", "RateLimit", "Rate-Limit"); v != "" {
+		if v := firstHeader(header, "RateLimit", "Rate-Limit"); v != "" {
 			err = err.With(FieldRateLimit, v)
 		}
 		if v := strings.TrimSpace(header.Get("Cf-Ray")); v != "" && cloudflare {
@@ -240,6 +260,8 @@ func annotateEdge(msg string) string {
 	return msg
 }
 
+// firstHeader is the first non-empty value among names. Header.Get canonicalises
+// each name, so spellings that differ only in case are one lookup.
 func firstHeader(h http.Header, names ...string) string {
 	for _, name := range names {
 		if v := strings.TrimSpace(h.Get(name)); v != "" {

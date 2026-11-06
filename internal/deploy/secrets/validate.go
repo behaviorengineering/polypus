@@ -15,9 +15,9 @@ var accountIDRe = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
 
 const minAPIKeyLen = 20
 
-// ValidateCloudflareAccountIDFromEnv checks CF_ACCOUNT_ID after ResolveSecrets; app
+// validateCloudflareAccountIDFromEnv checks CF_ACCOUNT_ID after ResolveSecrets; app
 // names the keyring service in the message.
-func ValidateCloudflareAccountIDFromEnv(app string) error {
+func validateCloudflareAccountIDFromEnv(app string) error {
 	accountID := os.Getenv(cloudflareAccountID)
 	if !accountIDRe.MatchString(accountID) {
 		return fmt.Errorf("secrets: %s looks wrong (length=%d; expected 32 hex characters). Use the Cloudflare dashboard account ID in keyring %s:%s, not the API token",
@@ -26,9 +26,9 @@ func ValidateCloudflareAccountIDFromEnv(app string) error {
 	return nil
 }
 
-// ValidateAPIKeysFromEnv checks that each exported API key is long enough to be
+// validateAPIKeysFromEnv checks that each exported API key is long enough to be
 // real. TS_AUTHKEY and CF_ACCOUNT_ID are not API keys and are skipped.
-func ValidateAPIKeysFromEnv(app string, names []string) error {
+func validateAPIKeysFromEnv(app string, names []string) error {
 	for _, name := range names {
 		name = strings.TrimSpace(name)
 		switch name {

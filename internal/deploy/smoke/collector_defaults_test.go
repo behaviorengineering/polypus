@@ -24,10 +24,23 @@ func TestResolveCollectorOptionsRemotePolypusBase(t *testing.T) {
 		t.Fatalf("HyperDXBaseURL = %q", out.HyperDXBaseURL)
 	}
 	if !out.SkipHyperDXVerify {
-		t.Fatal("expected SkipHyperDXVerify on remote homelab")
+		t.Fatal("expected SkipHyperDXVerify on remote gateway")
 	}
-	if os.Getenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK") != "0" {
-		t.Fatalf("expected clickhouse fallback disabled, got %q", os.Getenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK"))
+	if !out.DisableHyperDXCH {
+		t.Fatal("expected clickhouse fallback disabled on remote gateway")
+	}
+	if got := os.Getenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK"); got != "" {
+		t.Fatalf("process environment changed: POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK=%q", got)
+	}
+}
+
+func TestResolveCollectorOptionsRespectsOperatorFallbackSetting(t *testing.T) {
+	t.Setenv("POLYPUS_BASE_URL", "https://polypus.example.ts.net/")
+	t.Setenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", "1")
+
+	out := ResolveCollectorOptions(CollectorOptions{}, "")
+	if out.DisableHyperDXCH {
+		t.Fatal("operator set the fallback env; it must not be overridden")
 	}
 }
 
@@ -36,6 +49,7 @@ func TestResolveCollectorOptionsCoercesHTTPSObservabilityURLs(t *testing.T) {
 	t.Setenv("PHOENIX_BASE_URL", "https://polypus.example.ts.net:6006")
 	t.Setenv("HYPERDX_BASE_URL", "https://polypus.example.ts.net:8080")
 
+	t.Setenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", "")
 	out := ResolveCollectorOptions(CollectorOptions{
 		PhoenixBaseURL: "https://polypus.example.ts.net:6006",
 		HyperDXBaseURL: "https://polypus.example.ts.net:8080",

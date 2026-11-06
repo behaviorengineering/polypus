@@ -7,27 +7,29 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/clients/github"
 )
 
 func TestRunMatchesVersion(t *testing.T) {
-	r := workflowRun{HeadBranch: "v0.2.34"}
+	r := github.WorkflowRun{HeadBranch: "v0.2.34"}
 	if !runMatchesVersion(r, "v0.2.34", "0.2.34") {
 		t.Fatal("expected head_branch match")
 	}
-	r2 := workflowRun{DisplayTitle: "Docker release v0.2.34"}
+	r2 := github.WorkflowRun{DisplayTitle: "Docker release v0.2.34"}
 	if !runMatchesVersion(r2, "v0.2.34", "0.2.34") {
 		t.Fatal("expected title match")
 	}
-	if runMatchesVersion(workflowRun{DisplayTitle: "v0.2.340"}, "v0.2.34", "0.2.34") {
+	if runMatchesVersion(github.WorkflowRun{DisplayTitle: "v0.2.340"}, "v0.2.34", "0.2.34") {
 		t.Fatal("should not match longer semver substring")
 	}
 }
 
 func TestRunInProgress(t *testing.T) {
-	if !runInProgress(workflowRun{Status: "in_progress"}) {
+	if !runInProgress(github.WorkflowRun{Status: "in_progress"}) {
 		t.Fatal("expected in progress")
 	}
-	if runInProgress(workflowRun{Status: "completed"}) {
+	if runInProgress(github.WorkflowRun{Status: "completed"}) {
 		t.Fatal("expected not in progress")
 	}
 }
@@ -59,13 +61,13 @@ func TestWaitForImagesPollsWhenNoRunsYet(t *testing.T) {
 	defer cancel()
 
 	err := WaitForImages(ctx, "0.2.34", WaitOptions{
-		OwnerRepo:           "acme/polypus",
-		WorkflowFiles:       []string{"docker-release.yml"},
-		PollInterval:        20 * time.Millisecond,
-		Timeout:             2 * time.Second,
-		HTTPClient:          srv.Client(),
-		Token:               "test",
-		WorkflowRunsBaseURL: srv.URL,
+		OwnerRepo:        "acme/polypus",
+		WorkflowFiles:    []string{"docker-release.yml"},
+		PollInterval:     20 * time.Millisecond,
+		Timeout:          2 * time.Second,
+		HTTPClient:       srv.Client(),
+		Token:            "test",
+		GitHubAPIBaseURL: srv.URL,
 	})
 	if err != nil {
 		t.Fatal(err)

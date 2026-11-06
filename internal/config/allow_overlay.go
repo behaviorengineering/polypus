@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -140,21 +141,21 @@ func applyAllowOverlay(rcfg *RouterConfig, path string) ([]SkippedOverlay, error
 }
 
 // OverlayAdd appends a downstream model id to the overlay file (overlay-only extras).
-func OverlayAdd(path, backendID, downstream string) error {
-	if err := overlayAdd(path, backendID, downstream); err != nil {
+func OverlayAdd(ctx context.Context, path, backendID, downstream string) error {
+	if err := overlayAdd(ctx, path, backendID, downstream); err != nil {
 		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "config.OverlayAdd", "overlay add")
 	}
 	return nil
 }
 
 // overlayAdd is OverlayAdd before its error is typed at the package boundary.
-func overlayAdd(path, backendID, downstream string) error {
+func overlayAdd(ctx context.Context, path, backendID, downstream string) error {
 	backendID = strings.TrimSpace(backendID)
 	downstream = strings.TrimSpace(NormalizeDownstream(backendID, downstream))
 	if backendID == "" || downstream == "" {
 		return derrors.New(derrors.CodeInvalid, "config.OverlayAdd", "backend and model required")
 	}
-	return statefile.WithFileLock(path, func() error {
+	return statefile.WithFileLock(ctx, path, func() error {
 		file, err := LoadAllowOverlay(path)
 		if err != nil {
 			return err
@@ -179,21 +180,21 @@ func overlayAdd(path, backendID, downstream string) error {
 }
 
 // OverlayRemove drops one downstream model id from the overlay file (no-op if missing).
-func OverlayRemove(path, backendID, downstream string) error {
-	if err := overlayRemove(path, backendID, downstream); err != nil {
+func OverlayRemove(ctx context.Context, path, backendID, downstream string) error {
+	if err := overlayRemove(ctx, path, backendID, downstream); err != nil {
 		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "config.OverlayRemove", "overlay remove")
 	}
 	return nil
 }
 
 // overlayRemove is OverlayRemove before its error is typed at the package boundary.
-func overlayRemove(path, backendID, downstream string) error {
+func overlayRemove(ctx context.Context, path, backendID, downstream string) error {
 	backendID = strings.TrimSpace(backendID)
 	downstream = strings.TrimSpace(NormalizeDownstream(backendID, downstream))
 	if backendID == "" || downstream == "" {
 		return derrors.New(derrors.CodeInvalid, "config.OverlayRemove", "backend and model required")
 	}
-	return statefile.WithFileLock(path, func() error {
+	return statefile.WithFileLock(ctx, path, func() error {
 		file, err := LoadAllowOverlay(path)
 		if err != nil {
 			return err

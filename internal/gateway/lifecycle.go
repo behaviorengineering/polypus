@@ -13,14 +13,12 @@ import (
 	"github.com/behaviorengineering/polypus/internal/switchyard"
 )
 
-// Close releases owned router resources (no-op when WithRouter injected the Router).
+// Close releases owned router resources (no-op when withRouter injected the router).
 func (g *gatewayHandler) Close() {
-	if g == nil || g.shared == nil || !g.ownedRouter {
+	if g == nil || g.shared == nil || g.closeRouter == nil {
 		return
 	}
-	if c, ok := g.router.(routerCloser); ok {
-		c.Close()
-	}
+	g.closeRouter()
 }
 
 // ListenAndServe prepares the gateway (Switchyard routes, credential probes, models
@@ -30,15 +28,21 @@ func ListenAndServe(ctx context.Context, opts config.ServeOptions, options ...Ha
 	if ctx == nil {
 		return derrors.New(derrors.CodeInvalid, "gateway.ListenAndServe", "context is required")
 	}
-	handler, g, err := newServingHandler(opts, options...)
+	handler, g, err := newServingHandler(ctx, opts, options...)
 	if err != nil {
 		return err
 	}
 	defer g.Close()
-	// The refresh loop runs for the life of the server and stops with it.
+	// The refresh loop runs for the life of the server and stops with it, before the
+	// router closes: cancel it, then wait for an in-flight refresh to finish.
 	refreshCtx, refreshCancel := context.WithCancel(ctx)
-	defer refreshCancel()
-	if err := prepare(ctx, refreshCtx, g, opts); err != nil {
+	waitRefresh := func() {}
+	defer func() {
+		refreshCancel()
+		waitRefresh()
+	}()
+	waitRefresh, err = prepare(ctx, refreshCtx, g, opts)
+	if err != nil {
 		return err
 	}
 	// No WriteTimeout: SSE chat streams outlive any fixed write budget; the hop
@@ -53,8 +57,8 @@ func ListenAndServe(ctx context.Context, opts config.ServeOptions, options ...Ha
 }
 
 // newServingHandler builds the public handler and the gateway behind it.
-func newServingHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handler, *gatewayHandler, error) {
-	handler, err := NewHandler(opts, options...)
+func newServingHandler(ctx context.Context, opts config.ServeOptions, options ...HandlerOption) (http.Handler, *gatewayHandler, error) {
+	handler, err := newHandler(ctx, opts, options...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -68,24 +72,26 @@ func newServingHandler(opts config.ServeOptions, options ...HandlerOption) (http
 
 // prepare does the startup work before the server accepts traffic: it writes the
 // Switchyard routes, probes remote credentials, warms the models inventory and starts
-// its refresh loop on refreshCtx.
-func prepare(ctx, refreshCtx context.Context, g *gatewayHandler, opts config.ServeOptions) error {
+// its refresh loop on refreshCtx. wait blocks until that loop has stopped; it is never
+// nil.
+func prepare(ctx, refreshCtx context.Context, g *gatewayHandler, opts config.ServeOptions) (wait func(), err error) {
+	wait = func() {}
 	if err := writeSwitchyardConfig(g, opts); err != nil {
-		return err
+		return wait, err
 	}
 	probeCtx, probeCancel := context.WithTimeout(ctx, backendProbeTimeout)
 	defer probeCancel()
-	if err := probeRemoteCredentials(probeCtx, g.router.Registry().Config(), g.cfGet); err != nil {
-		return fmt.Errorf("gateway: %w", err)
+	if err := probeRemoteCredentials(probeCtx, g.registry.Config(), g.cfGet); err != nil {
+		return wait, err
 	}
 	if g.models.Warmup {
-		cfg := g.router.Registry().Config()
+		cfg := g.registry.Config()
 		warmCtx, warmCancel := context.WithTimeout(ctx, modelsWarmupTimeout(cfg))
 		defer warmCancel()
 		modelsHandler{g.shared}.warmInventory(warmCtx, false)
-		modelsHandler{g.shared}.startModelsRefreshLoop(refreshCtx, cfg)
+		wait = modelsHandler{g.shared}.startModelsRefreshLoop(refreshCtx, cfg)
 	}
-	return nil
+	return wait, nil
 }
 
 // serve runs server until it fails or ctx is done, then shuts it down within
@@ -100,22 +106,26 @@ func serve(ctx context.Context, server *http.Server) error {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
-		return err
+		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.serve", "listen").With("addr", server.Addr)
 	case <-ctx.Done():
 		// ctx is already done, so the shutdown budget hangs off a detached copy.
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
-		return server.Shutdown(shutdownCtx)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return derrors.Wrap(err, derrors.CodeInternal, "gateway.serve", "shutdown")
+		}
+		return nil
 	}
 }
 
 // writeSwitchyardConfig renders Switchyard TOML from the live router config (process startup).
 func writeSwitchyardConfig(g *gatewayHandler, opts config.ServeOptions) error {
-	if g == nil || g.router == nil {
-		return fmt.Errorf("gateway: router not configured")
+	const op = "gateway.writeSwitchyardConfig"
+	if g == nil || g.shared == nil || g.registry == nil {
+		return derrors.New(derrors.CodeNotReady, op, "router not configured")
 	}
-	if _, err := switchyard.WriteConfigIfNeeded(g.router.Registry().Config(), opts.GatewayBaseURL()); err != nil {
-		return fmt.Errorf("gateway: switchyard render: %w", err)
+	if _, err := switchyard.WriteConfigIfNeeded(g.registry.Config(), opts.GatewayBaseURL()); err != nil {
+		return derrors.Wrap(err, derrors.CodeInternal, op, "switchyard render")
 	}
 	return nil
 }

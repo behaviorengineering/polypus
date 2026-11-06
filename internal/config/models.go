@@ -31,7 +31,9 @@ func (m *BackendModels) UnmarshalYAML(value *yaml.Node) error {
 		Allow          *[]string `yaml:"allow"`
 		SystemOneAllow *[]string `yaml:"systemone_allow"`
 	}
-	if err := value.Decode(&raw); err != nil {
+	// yaml.Node.Decode uses a fresh decoder without KnownFields, so a typo such as
+	// alow would pass silently and turn the allow gate off. Keep this block strict.
+	if err := decodeStrictNode(value, &raw); err != nil {
 		return err
 	}
 	m.Sync = raw.Sync

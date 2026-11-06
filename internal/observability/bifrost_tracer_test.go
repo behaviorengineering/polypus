@@ -25,15 +25,19 @@ func TestBifrostOTelTracer_sameTraceAsParent(t *testing.T) {
 	parentTrace := parent.SpanContext().TraceID()
 
 	tr := NewBifrostOTelTracer()
+	var iface schemas.Tracer = tr
 
 	bctx := schemas.NewBifrostContext(parentCtx, schemas.NoDeadline)
-	_, handle := tr.StartSpanID(bctx, "chat_completion_stream test-model", schemas.SpanKindLLMCall)
+	_, handle := iface.StartSpanID(bctx, "chat_completion_stream test-model", schemas.SpanKindLLMCall)
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil {
 		t.Fatal("expected otel span bridge handle")
 	}
 	bridge.schema.SetAttribute(schemas.AttrBifrostProviderName, string(schemas.Gemini))
-	tr.endSpan(handle, schemas.SpanStatusOk, "")
+	iface.EndSpan(handle, schemas.SpanStatusOk, "")
+	if n := handleCount(tr); n != 0 {
+		t.Fatalf("EndSpan through schemas.Tracer left %d handles", n)
+	}
 	parent.End()
 
 	var childTrace string
@@ -84,25 +88,91 @@ func TestBifrostOTelTracer_concurrentRequestsKeepTheirOwnTrace(t *testing.T) {
 		_ = tp.Shutdown(context.Background())
 	})
 	tr := NewBifrostOTelTracer()
+	var iface schemas.Tracer = tr
 	ctxA, spanA := Tracer().Start(context.Background(), "polypus.chat A")
 	ctxB, spanB := Tracer().Start(context.Background(), "polypus.chat B")
 	// Interleave like two concurrent requests on the one shared tracer.
-	_, hA := tr.StartSpanID(schemas.NewBifrostContext(ctxA, schemas.NoDeadline), "llm A", schemas.SpanKindLLMCall)
-	_, hB := tr.StartSpanID(schemas.NewBifrostContext(ctxB, schemas.NoDeadline), "llm B", schemas.SpanKindLLMCall)
-	tr.endSpan(hA, schemas.SpanStatusOk, "")
-	tr.endSpan(hB, schemas.SpanStatusOk, "")
+	_, hA := iface.StartSpanID(schemas.NewBifrostContext(ctxA, schemas.NoDeadline), "llm A", schemas.SpanKindLLMCall)
+	_, hB := iface.StartSpanID(schemas.NewBifrostContext(ctxB, schemas.NoDeadline), "llm B", schemas.SpanKindLLMCall)
+	iface.EndSpan(hA, schemas.SpanStatusOk, "")
+	iface.EndSpan(hB, schemas.SpanStatusOk, "")
 	spanA.End()
 	spanB.End()
+	if n := handleCount(tr); n != 0 {
+		t.Fatalf("EndSpan through schemas.Tracer left %d handles", n)
+	}
 	want := map[string]string{
 		"llm A": spanA.SpanContext().TraceID().String(),
 		"llm B": spanB.SpanContext().TraceID().String(),
 	}
+	exported := 0
 	for _, sp := range exporter.GetSpans() {
-		if w, ok := want[sp.Name]; ok && sp.SpanContext.TraceID().String() != w {
+		w, ok := want[sp.Name]
+		if !ok {
+			continue
+		}
+		exported++
+		if sp.SpanContext.TraceID().String() != w {
 			t.Fatalf("%s joined trace %s, want its own request's %s", sp.Name, sp.SpanContext.TraceID(), w)
 		}
+	}
+	if exported != len(want) {
+		t.Fatalf("exported %d bifrost spans, want %d", exported, len(want))
 	}
 	if got := tr.CreateTrace(""); len(got) != 32 {
 		t.Fatalf("CreateTrace with no parent must return a fresh 32-hex id, got %q", got)
 	}
+}
+
+func TestBifrostOTelTracer_EndSpanThroughInterfaceExportsAndReleases(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+	tr := NewBifrostOTelTracer()
+	var iface schemas.Tracer = tr
+	bctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	_, handle := iface.StartSpan(bctx, "llm", schemas.SpanKindLLMCall)
+	if handle == nil {
+		t.Fatal("StartSpan returned a nil handle")
+	}
+	if n := handleCount(tr); n != 1 {
+		t.Fatalf("after StartSpan: %d handles, want 1", n)
+	}
+	iface.EndSpan(handle, schemas.SpanStatusError, "boom")
+	if n := handleCount(tr); n != 0 {
+		t.Fatalf("after EndSpan: %d handles, want 0", n)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || spans[0].Name != "llm" {
+		t.Fatalf("exported spans = %+v, want one \"llm\" span", spans)
+	}
+	if spans[0].Status.Description != "boom" {
+		t.Fatalf("status = %+v, want error \"boom\"", spans[0].Status)
+	}
+}
+
+func TestBifrostOTelTracer_StartSpanIDNilContextNoSpan(t *testing.T) {
+	tr := NewBifrostOTelTracer()
+	//nolint:staticcheck // SA1012: a nil ctx is the case under test.
+	id, handle := tr.StartSpanID(nil, "llm", schemas.SpanKindLLMCall)
+	if id != "" || handle != nil {
+		t.Fatalf("nil ctx: got (%q, %v), want no span", id, handle)
+	}
+	if n := handleCount(tr); n != 0 {
+		t.Fatalf("nil ctx stored %d handles", n)
+	}
+}
+
+func handleCount(tr *BifrostOTelTracer) int {
+	n := 0
+	tr.handles.Range(func(_, _ any) bool {
+		n++
+		return true
+	})
+	return n
 }

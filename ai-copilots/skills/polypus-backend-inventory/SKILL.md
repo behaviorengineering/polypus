@@ -14,13 +14,13 @@ description: >-
 ## When to load
 
 - Adding or changing a `backends.*` entry, `extension`, or `models.sync` / `models.allow`
-- Editing `inventoryForBackend`, `warmModelsInventory`, or `POST /v1/admin/models/allow`
+- Editing `inventoryForBackend`, `refreshBackend`, `warmInventory`, or `POST /v1/admin/models/allow`
 - Adding `internal/clients/<extension>` for a new remote backend
 - Debugging `model_not_in_inventory` or empty Gemini/OpenRouter catalogs
 
 ## CONSTRAINT: Upstream catalog when sync is on
 
-When `models.sync` is true (default via `BackendModels.ShouldSync()`), `inventoryForBackend` MUST fetch the model list from that backend's upstream list API. Serve warmup (`warmModelsInventory`), `POST /v1/admin/models/allow`, and the periodic refresh (`POLYPUS_MODELS_REFRESH_INTERVAL`, default 30m) MUST use that fetched list (via `invCache` after live GET).
+When `models.sync` is true (default via `BackendModels.ShouldSync()`), `inventoryForBackend` MUST fetch the model list from that backend's upstream list API. Serve warmup (`warmInventory`), `POST /v1/admin/models/allow`, and the periodic refresh (`POLYPUS_MODELS_REFRESH_INTERVAL`, default 30m) MUST fetch it live through `refreshBackend`, which writes `invCache`. Request-time `GET /v1/models` reads `invCache` and calls `refreshBackend` only for a backend with no cached entry.
 
 - Enforcement: `rg 'IsGeminiExtension|IsCloudflareExtension|fetchBackendModels' internal/gateway/models.go`; each extension with sync on has a live path; grep MUST NOT show allow-only return before upstream fetch when `ShouldSync()` is true.
 - Violation: STOP, add `internal/clients/<ext>` `ListModelsStrict` (or OpenAI-compat GET), wire gateway inventory branch, add httptest and admin-allow test, re-verify.
@@ -81,7 +81,15 @@ curl -sS http://127.0.0.1:1320/v1/admin/models/allow | jq .
 
 Enabled list = `GET /v1/apis/openai/models` (git YAML plus overlay). Inventory = `?view=inventory`. `GET /v1/admin/models/allow` returns only the overlay file (`object: allow_overlay`), including slugs that duplicate git YAML.
 
-Landing `GET /` form posts `POST /v1/admin/models/allow` with `{"backend":"<id>","model":"<downstream>"}`. Model MUST appear in inventory for that backend.
+Landing `GET /` form posts `POST /v1/admin/models/allow` with `{"backend":"<id>","model":"<downstream>"}`. Model MUST appear in inventory for that backend. From a shell or a code assistant, send the same body as JSON:
+
+```bash
+curl -sS --json '{"backend":"<id>","model":"<downstream>"}' http://127.0.0.1:1320/v1/admin/models/allow
+```
+
+The POST MUST carry `Content-Type: application/json` (curl `--json` sets it; anything else gets 415). A browser `Origin` from another site gets 403; requests without `Origin` (curl, the CLI, scripts) pass.
+
+`GET /v1/models` and `?view=inventory` serve the inventory cache: they reflect the last refresh (serve warm-up, then every `POLYPUS_MODELS_REFRESH_INTERVAL`), and dial a backend only when it has no cached entry yet. A successful allow refreshes that backend's entry before answering, so the new model lists at once.
 
 ## Related
 

@@ -70,6 +70,11 @@ backends:
         - fish-audio/transcribe-1-pro
       systemone_allow:
         - perplexity/pplx-decider-v1.2
+    # Optional: the models polypus deploy probes after health. Without this block it
+    # picks from the allow lists above; smoke.skip: true leaves a backend out.
+    # smoke:
+    #   chat: [google/gemini-2.5-flash]
+    #   systemone: perplexity/pplx-decider-v1.2
 
   # Turning Claude on, once you have a Console key from the Team plan's organisation:
   #   1. Uncomment claude_team below.
@@ -87,6 +92,20 @@ backends:
   #     allow:
   #       - claude-sonnet-5-5
   #       - claude-haiku-5-5
+
+  # Turning on Typesafe's System One API (jev models) for /v1/systemone:
+  #   1. Uncomment typesafe below.
+  #   2. Store the key: polypus deploy secret set TYPESAFE_API_KEY
+  #   3. Set systemone_backend.default to typesafe.
+  # typesafe:
+  #   remote: true
+  #   extension: typesafe
+  #   auth:
+  #     bearer_env: TYPESAFE_API_KEY
+  #   capabilities: [systemone]
+  #   models:
+  #     systemone_allow:
+  #       - jev-1.14.0
 
 # Named routers (public model ids: router/<name>). turno-acp calls router/turno.
 routers:

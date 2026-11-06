@@ -72,6 +72,19 @@ backends:
   #       - gemma-4-26b-a4b-it
   #       - gemma-4-31b-it
 
+  # Optional Typesafe System One API (extension typesafe; TYPESAFE_API_KEY in env or
+  # keyring). Bifrost's Typesafe provider serves POST /v1/systemone; omit base_url for
+  # its default host. Point systemone_backend.default at it to use it for /v1/systemone.
+  # typesafe:
+  #   remote: true
+  #   extension: typesafe
+  #   auth:
+  #     bearer_env: TYPESAFE_API_KEY
+  #   capabilities: [systemone]
+  #   models:
+  #     systemone_allow:
+  #       - jev-1.14.0
+
 # Optional named routers (public ids: router/<name>). Majordomo tower code tasks use the
 # DeepSeek model id directly; router/code is for ad-hoc local consults (cf_local/... or router/code).
 # routers:

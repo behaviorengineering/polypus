@@ -99,7 +99,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := router.NewClient(rcfg, router.WithCloudflareClientGet(func(b config.BackendDef) (*cloudflare.Client, error) {
+	client, err := router.NewClient(t.Context(), rcfg, router.WithLogger(testShared.log), router.WithCloudflareClientGet(func(b config.BackendDef) (*cloudflare.Client, error) {
 		return cloudflare.NewClient(b)
 	}))
 	if err != nil {
@@ -502,7 +502,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := router.NewClient(rcfg, router.WithCloudflareClientGet(func(b config.BackendDef) (*cloudflare.Client, error) {
+	client, err := router.NewClient(t.Context(), rcfg, router.WithLogger(testShared.log), router.WithCloudflareClientGet(func(b config.BackendDef) (*cloudflare.Client, error) {
 		return cloudflare.NewClient(b)
 	}))
 	if err != nil {

@@ -10,11 +10,12 @@ import (
 	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 
-	"github.com/behaviorengineering/polypus/internal/batch/service"
 	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/clients/gemini"
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/batches"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
 
@@ -23,7 +24,8 @@ type registryProvider interface {
 	Registry() *router.Registry
 }
 
-// chatRouter is the Bifrost/OpenAI chat and embed dial surface (≤4 methods).
+// chatRouter is the Bifrost chat and embed dial surface (≤4 methods). A backend it
+// does not register fails closed: there is no HTTP fallback.
 type chatRouter interface {
 	UsesBifrost(backendID string) bool
 	ChatCompletionRaw(ctx context.Context, call router.Call) ([]byte, error)
@@ -37,47 +39,103 @@ type speechRouter interface {
 	Transcribe(ctx context.Context, req router.TranscriptionRequest) ([]byte, string, error)
 }
 
-// systemOneRouter is the Bifrost Decision dial surface for native OpenRouter SystemOne.
+// systemOneRouter is the Bifrost Decision dial surface for SystemOne on native
+// OpenRouter and Typesafe backends.
 type systemOneRouter interface {
 	SystemOneDecisionRaw(ctx context.Context, call router.Call) ([]byte, error)
 }
 
-// gatewayRouter is the composed gateway dial dependency (Registry + Chat + Speech + SystemOne).
-// Prefer depending on the smaller interfaces at call sites; *router.Client implements all.
-// Batches run through the batch service, not the router.
-type gatewayRouter interface {
-	registryProvider
-	chatRouter
-	speechRouter
-	systemOneRouter
+// routerParts is the router split by the handlers that call it: each handler reads
+// only the part it needs. *router.Client fills every part.
+type routerParts struct {
+	registry  *router.Registry
+	chat      chatRouter
+	speech    speechRouter
+	systemOne systemOneRouter
+	// bifrost is the router when it is a real Bifrost client, for the Anthropic
+	// batches surface; nil for a test fake.
+	bifrost *router.Client
+	// closeRouter releases a router the gateway built itself; nil when injected.
+	closeRouter func()
 }
 
-// routerCloser is optional; owned Bifrost clients implement Close.
-type routerCloser interface {
-	Close()
+// splitRouter fills the parts r implements; the rest answer CodeUnimplemented.
+func splitRouter(r registryProvider) routerParts {
+	parts := routerParts{
+		registry:  r.Registry(),
+		chat:      unsupportedRouter{},
+		speech:    unsupportedRouter{},
+		systemOne: unsupportedRouter{},
+	}
+	if c, ok := r.(chatRouter); ok {
+		parts.chat = c
+	}
+	if sp, ok := r.(speechRouter); ok {
+		parts.speech = sp
+	}
+	if so, ok := r.(systemOneRouter); ok {
+		parts.systemOne = so
+	}
+	if client, ok := r.(*router.Client); ok {
+		parts.bifrost = client
+	}
+	return parts
 }
 
-// cloudflareClientGet constructs extension clients (defaults to cloudflare.GetClient).
+// unsupportedRouter stands in for a router part an injected router lacks.
+type unsupportedRouter struct{}
+
+func unsupported(op string) error {
+	return derrors.New(derrors.CodeUnimplemented, op, "router does not support this call")
+}
+
+func (unsupportedRouter) UsesBifrost(string) bool { return false }
+
+func (unsupportedRouter) ChatCompletionRaw(context.Context, router.Call) ([]byte, error) {
+	return nil, unsupported("gateway.ChatCompletionRaw")
+}
+
+func (unsupportedRouter) ChatCompletionStreamRaw(context.Context, router.Call) (<-chan router.ChatStreamChunk, <-chan error, error) {
+	return nil, nil, unsupported("gateway.ChatCompletionStreamRaw")
+}
+
+func (unsupportedRouter) EmbeddingRaw(context.Context, router.Call) ([]byte, error) {
+	return nil, unsupported("gateway.EmbeddingRaw")
+}
+
+func (unsupportedRouter) Synthesize(context.Context, router.SpeechRequest) ([]byte, error) {
+	return nil, unsupported("gateway.Synthesize")
+}
+
+func (unsupportedRouter) Transcribe(context.Context, router.TranscriptionRequest) ([]byte, string, error) {
+	return nil, "", unsupported("gateway.Transcribe")
+}
+
+func (unsupportedRouter) SystemOneDecisionRaw(context.Context, router.Call) ([]byte, error) {
+	return nil, unsupported("gateway.SystemOneDecisionRaw")
+}
+
+// cloudflareClientGet returns extension clients (defaults to the gateway's cloudflare.Clients.Get).
 type cloudflareClientGet func(config.BackendDef) (*cloudflare.Client, error)
 
-// geminiClientGet constructs Gemini catalog clients (defaults to gemini.GetClient).
+// geminiClientGet returns Gemini catalog clients (defaults to the gateway's gemini.Clients.Get).
 type geminiClientGet func(config.BackendDef) (*gemini.Client, error)
 
-// anthropicClientGet constructs Anthropic catalog clients (defaults to anthropic.GetClient).
+// anthropicClientGet returns Anthropic catalog clients (defaults to the gateway's anthropic.Clients.Get).
 type anthropicClientGet func(config.BackendDef) (*anthropic.Client, error)
 
 // HandlerOption configures NewHandler.
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
-	router         gatewayRouter
+	router         registryProvider
 	cfGet          cloudflareClientGet
 	geminiGet      geminiClientGet
 	anthropicGet   anthropicClientGet
 	overlayPath    string
 	adminKeysPath  string
 	clock          func() time.Time
-	claudeBatches  service.ClaudeBatches
+	claudeBatches  batches.ClaudeBatches
 	policies       *outbound.Policies
 	openRouterGet  func(config.BackendDef) (*openrouter.Client, error)
 	logger         *slog.Logger
@@ -85,11 +143,11 @@ type handlerOptions struct {
 	traceSkipPaths []string
 }
 
-// withRouter injects a gatewayRouter so tests can avoid bifrost.Init.
-// Panics if r is nil.
-func withRouter(r gatewayRouter) HandlerOption {
+// withRouter injects a router so tests can avoid bifrost.Init. The gateway uses the
+// chat, speech and SystemOne surfaces r implements. Panics if r is nil.
+func withRouter(r registryProvider) HandlerOption {
 	if r == nil {
-		panic("gateway: WithRouter(nil)")
+		panic("gateway: withRouter(nil)")
 	}
 	return func(o *handlerOptions) {
 		o.router = r
@@ -110,22 +168,23 @@ func withAnthropicClientGet(fn anthropicClientGet) HandlerOption {
 	}
 }
 
-// WithAdminStateDir sets overlay and admin key paths under dir (tests).
+// WithAdminStateDir keeps the models allow overlay and the admin key store under
+// dir instead of the user config directory. Panics if dir is empty.
 func WithAdminStateDir(dir string) HandlerOption {
 	if strings.TrimSpace(dir) == "" {
 		panic("gateway: WithAdminStateDir(empty)")
 	}
 	return func(o *handlerOptions) {
 		o.overlayPath = filepath.Join(dir, config.ModelsAllowOverlayFile)
-		o.adminKeysPath = filepath.Join(dir, "admin-api-keys.json")
+		o.adminKeysPath = filepath.Join(dir, config.AdminKeysFile)
 	}
 }
 
 // withClaudeBatches sets the Anthropic Message Batches surface the batch service
 // uses (tests). By default it comes from the router client. Panics if b is nil.
-func withClaudeBatches(b service.ClaudeBatches) HandlerOption {
+func withClaudeBatches(b batches.ClaudeBatches) HandlerOption {
 	if b == nil {
-		panic("gateway: WithClaudeBatches(nil)")
+		panic("gateway: withClaudeBatches(nil)")
 	}
 	return func(o *handlerOptions) {
 		o.claudeBatches = b
@@ -181,13 +240,13 @@ func (o *handlerOptions) fillDefaults() error {
 		o.policies = outbound.NewPolicies()
 	}
 	if o.cfGet == nil {
-		o.cfGet = (&cloudflare.Clients{Policies: o.policies, Logger: o.logger}).Get
+		o.cfGet = (&cloudflare.Clients{Policies: o.policies, Logger: o.logger, Now: o.clock, Speech: cloudflare.SpeechDefaultsFromEnv()}).Get
 	}
 	if o.geminiGet == nil {
-		o.geminiGet = (&gemini.Clients{Policies: o.policies, Logger: o.logger}).Get
+		o.geminiGet = (&gemini.Clients{Policies: o.policies, Logger: o.logger, Now: o.clock}).Get
 	}
 	if o.anthropicGet == nil {
-		o.anthropicGet = (&anthropic.Clients{Policies: o.policies, Logger: o.logger}).Get
+		o.anthropicGet = (&anthropic.Clients{Policies: o.policies, Logger: o.logger, Now: o.clock}).Get
 	}
 	if o.openRouterGet == nil {
 		o.openRouterGet = (&openrouter.Clients{Policies: o.policies}).Get
@@ -195,4 +254,8 @@ func (o *handlerOptions) fillDefaults() error {
 	return nil
 }
 
-var _ gatewayRouter = (*router.Client)(nil)
+var (
+	_ chatRouter      = (*router.Client)(nil)
+	_ speechRouter    = (*router.Client)(nil)
+	_ systemOneRouter = (*router.Client)(nil)
+)

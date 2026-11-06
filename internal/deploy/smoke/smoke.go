@@ -1,57 +1,78 @@
+// Package smoke runs a deploy's post-health checks against a running gateway: one
+// chat per backend whose secrets are set, each chat router, and SystemOne, plus the
+// OTLP collector fan-out smoke.
 package smoke
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/behaviorengineering/polypus/pkg/polypus"
-
+	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/deploy/gatewayconfig"
+	"github.com/behaviorengineering/polypus/internal/deploy/progress"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	internalsmoke "github.com/behaviorengineering/polypus/internal/smoke"
 )
 
-const defaultChatModel = polypus.DefaultChatModel
+const defaultChatModel = internalsmoke.DefaultChatModel
 
-// Options configures homelab post-deploy smoke against a running gateway.
+// Options configures post-deploy smoke against a running gateway.
 type Options struct {
+	// BaseURL is the gateway; empty reads POLYPUS_BASE_URL. One of them is required.
 	BaseURL   string
 	ChatModel string
 	// WithRouter smokes every chat router in GatewayConfig.
-	WithRouter     bool
-	WithSystemOne  bool
-	SystemOneModel string
+	WithRouter    bool
+	WithSystemOne bool
+	// SystemOneRequested is set when the operator passed --with-systemone, so a run
+	// that skipped every SystemOne backend says so instead of passing quietly.
+	SystemOneRequested bool
+	SystemOneModel     string
 	// WithProviders runs chat probes per backend from GatewayConfig (secrets gated via EnvDeploy).
 	WithProviders bool
 	GatewayConfig string
 	EnvDeploy     string
 	// APIKey is the gateway's client key, sent with every probe when set.
 	APIKey string
+	// Out receives one line per probe; nil writes to os.Stdout.
+	Out io.Writer
 }
 
-// endpoint is the gateway the probes call and the key they send.
+// endpoint is the gateway the probes call, the key they send and where their
+// results are printed.
 type endpoint struct {
 	url string
 	key string
+	out *progress.Printer
 }
 
 // Run executes direct chat smoke and optional router smoke with selected-leaf checks.
 func Run(ctx context.Context, opts Options) error {
+	const op = "smoke.Run"
 	if ctx == nil {
-		return fmt.Errorf("smoke: context required")
+		return derrors.New(derrors.CodeInvalid, op, "context required")
 	}
 	if _, ok := ctx.Deadline(); !ok {
-		return fmt.Errorf("smoke: missing deadline")
+		return derrors.New(derrors.CodeFailedPrecondition, op, "missing deadline")
 	}
 	opts = opts.withDefaults()
 	base := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	if base == "" {
-		return fmt.Errorf("smoke: base URL required")
+		return derrors.New(derrors.CodeInvalid, op, "base URL required (--health-url or POLYPUS_BASE_URL)")
 	}
-	ep := endpoint{url: base, key: strings.TrimSpace(opts.APIKey)}
+	ep := endpoint{url: base, key: strings.TrimSpace(opts.APIKey), out: progress.New(opts.Out)}
+	if err := run(ctx, ep, opts); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "smoke "+base)
+	}
+	return ep.out.Err()
+}
 
+func run(ctx context.Context, ep endpoint, opts Options) error {
 	if opts.WithProviders {
 		if err := runProviderSmokes(ctx, ep, opts); err != nil {
 			return err
@@ -73,36 +94,47 @@ func Run(ctx context.Context, opts Options) error {
 func (o Options) withDefaults() Options {
 	out := o
 	if strings.TrimSpace(out.BaseURL) == "" {
+		// No localhost default: a smoke with no gateway named fails instead of
+		// probing whatever answers on this machine.
 		out.BaseURL = strings.TrimSpace(os.Getenv("POLYPUS_BASE_URL"))
-		if out.BaseURL == "" {
-			out.BaseURL = "http://127.0.0.1:1320"
-		}
 	}
 	if strings.TrimSpace(out.ChatModel) == "" {
-		out.ChatModel = envOr("POLYPUS_CHAT_SMOKE_MODEL", defaultChatModel)
+		out.ChatModel = config.EnvOr("POLYPUS_CHAT_SMOKE_MODEL", defaultChatModel)
 	}
 	if strings.TrimSpace(out.SystemOneModel) == "" {
-		out.SystemOneModel = envOr("POLYPUS_SYSTEMONE_SMOKE_MODEL", polypus.DefaultSystemOneModel)
+		out.SystemOneModel = config.EnvOr("POLYPUS_SYSTEMONE_SMOKE_MODEL", internalsmoke.DefaultSystemOneModel)
 	}
 	return out
 }
 
 func runChat(ctx context.Context, ep endpoint, model string, requireSelected bool, allowed []string) error {
-	popts := polypus.SmokeOptions{
-		BaseURL:               ep.url,
-		APIKey:                ep.key,
-		Channels:              []string{"chat"},
+	return runProbe(ctx, ep, model, internalsmoke.Options{
+		Channels:              []string{internalsmoke.ChannelChat},
 		ChatModel:             model,
 		MaxTokens:             64,
 		Temperature:           0.2,
 		RequireSelectedModel:  requireSelected,
 		AllowedSelectedModels: allowed,
-	}
-	results, err := polypus.Smoke(ctx, popts)
+	})
+}
+
+func runSystemOne(ctx context.Context, ep endpoint, model string) error {
+	return runProbe(ctx, ep, model, internalsmoke.Options{
+		Channels:       []string{internalsmoke.ChannelSystemOne},
+		SystemOneModel: model,
+	})
+}
+
+// runProbe runs one smoke probe for model against ep and prints each result. A
+// failed result fails the probe.
+func runProbe(ctx context.Context, ep endpoint, model string, popts internalsmoke.Options) error {
+	popts.BaseURL = ep.url
+	popts.APIKey = ep.key
+	results, err := internalsmoke.Run(ctx, popts)
 	for _, r := range results {
-		fmt.Printf("smoke: channel=%s probe=%s model=%s selected=%s status=%s ms=%d detail=%s\n",
+		ep.out.Printf("smoke: channel=%s probe=%s model=%s selected=%s status=%s ms=%d detail=%s\n",
 			r.Channel, r.Probe, r.Model, r.SelectedModel, r.Status, r.Ms, r.Detail)
-		if r.Status == "fail" {
+		if r.Status == internalsmoke.StatusFail {
 			return fmt.Errorf("smoke %s probe %s: %s", model, r.Probe, r.Detail)
 		}
 	}
@@ -146,7 +178,7 @@ func runSystemOneProbes(ctx context.Context, ep endpoint, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("smoke: systemone targets: %w", err)
 	}
-	if err := gatewayconfig.ValidateSystemOneSmokeTargets(targets); err != nil {
+	if err := gatewayconfig.ValidateChatSmokeTargets(targets); err != nil {
 		return err
 	}
 	if len(targets) == 0 {
@@ -156,46 +188,24 @@ func runSystemOneProbes(ctx context.Context, ep endpoint, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("smoke: dotenv: %w", err)
 	}
+	// A backend without its secrets is skipped, as the provider probes do: the
+	// deploy has no key for it, so a probe could only fail.
+	var ran int
 	for _, t := range targets {
 		if !gatewayconfig.SecretsReady(t, present) {
 			miss := gatewayconfig.MissingSecrets(t, present)
-			return fmt.Errorf("smoke: systemone backend=%s model=%s missing %s in %s", t.BackendID, t.Model, strings.Join(miss, ","), opts.EnvDeploy)
+			ep.out.Printf("smoke: skip systemone backend=%s model=%s (missing %s)\n", t.BackendID, t.Model, strings.Join(miss, ","))
+			continue
 		}
-	}
-	for _, t := range targets {
 		if err := runSystemOne(ctx, ep, t.Model); err != nil {
 			return err
 		}
+		ran++
+	}
+	if ran == 0 && opts.SystemOneRequested {
+		ep.out.Printf("smoke: systemone not run: --with-systemone was set but every SystemOne backend is missing a secret in %s\n", opts.EnvDeploy)
 	}
 	return nil
-}
-
-func runSystemOne(ctx context.Context, ep endpoint, model string) error {
-	popts := polypus.SmokeOptions{
-		BaseURL:        ep.url,
-		APIKey:         ep.key,
-		Channels:       []string{"systemone"},
-		SystemOneModel: model,
-	}
-	results, err := polypus.Smoke(ctx, popts)
-	for _, r := range results {
-		fmt.Printf("smoke: channel=%s probe=%s model=%s status=%s ms=%d detail=%s\n",
-			r.Channel, r.Probe, r.Model, r.Status, r.Ms, r.Detail)
-		if r.Status == "fail" {
-			return fmt.Errorf("smoke %s probe %s: %s", model, r.Probe, r.Detail)
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("smoke %s: %w", model, err)
-	}
-	return nil
-}
-
-func envOr(key, def string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return def
 }
 
 func runProviderSmokes(ctx context.Context, ep endpoint, opts Options) error {
@@ -218,7 +228,7 @@ func runProviderSmokes(ctx context.Context, ep endpoint, opts Options) error {
 	for _, t := range targets {
 		if !gatewayconfig.SecretsReady(t, present) {
 			miss := gatewayconfig.MissingSecrets(t, present)
-			fmt.Printf("smoke: skip provider backend=%s model=%s (missing %s)\n", t.BackendID, t.Model, strings.Join(miss, ","))
+			ep.out.Printf("smoke: skip provider backend=%s model=%s (missing %s)\n", t.BackendID, t.Model, strings.Join(miss, ","))
 			continue
 		}
 		if err := runProviderChat(ctx, ep, t.Model, t.ReasoningEffort); err != nil {

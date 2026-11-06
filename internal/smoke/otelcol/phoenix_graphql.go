@@ -53,18 +53,19 @@ func phoenixSpanCountGraphQL(ctx context.Context, opts CollectorOptions, traceID
 	if opts.PhoenixAPIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+opts.PhoenixAPIKey)
 	}
-	resp, err := smokeHTTPDo(ctx, http.DefaultClient, req)
+	ans, err := fetch(ctx, req)
 	if err != nil {
 		return 0, fmt.Errorf("collector smoke: phoenix graphql: %w", err)
 	}
-	body, err := readLimitedBody(resp, 1<<20)
-	if err != nil {
-		return 0, fmt.Errorf("collector smoke: phoenix graphql: %w", err)
+	if !ans.ok() {
+		return 0, fmt.Errorf("phoenix graphql: %s: %s", ans.line, strings.TrimSpace(string(ans.body)))
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("phoenix graphql: %s: %s", resp.Status, strings.TrimSpace(string(body)))
-	}
+	return phoenixGraphQLSpanCount(ans.body, opts.PhoenixProject)
+}
 
+// phoenixGraphQLSpanCount reads the span count for project (default "default") from
+// a PhoenixTraceSpans answer.
+func phoenixGraphQLSpanCount(body []byte, project string) (int, error) {
 	var parsed struct {
 		Data struct {
 			Projects struct {
@@ -95,7 +96,7 @@ func phoenixSpanCountGraphQL(ctx context.Context, opts CollectorOptions, traceID
 		return 0, fmt.Errorf("phoenix graphql: %s", parsed.Errors[0].Message)
 	}
 
-	wantProject := strings.TrimSpace(opts.PhoenixProject)
+	wantProject := strings.TrimSpace(project)
 	if wantProject == "" {
 		wantProject = "default"
 	}

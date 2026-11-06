@@ -16,12 +16,31 @@ const (
 	surfaceSystemOne
 )
 
-// Model list paths of the two API surfaces.
+// Gateway routes. The route table serves them and the API catalog and landing page
+// advertise them, so each is spelled once.
 const (
-	pathOpenAIModels    = "/v1/apis/openai/models"
-	pathSystemOneModels = "/v1/apis/systemone/models"
-	pathFiles           = "/v1/files"
-	pathBatches         = "/v1/batches"
+	pathOpenAIModels        = "/v1/apis/openai/models"
+	pathSystemOneModels     = "/v1/apis/systemone/models"
+	pathAPIs                = "/v1/apis"
+	pathOpenAISpec          = "/v1/apis/openai/openapi.yaml"
+	pathSystemOneSchema     = "/v1/apis/systemone/schema.json"
+	pathFiles               = "/v1/files"
+	pathFilesPrefix         = pathFiles + "/"
+	pathBatches             = "/v1/batches"
+	pathBatchesPrefix       = pathBatches + "/"
+	pathModels              = "/v1/models"
+	pathModelsPrefix        = pathModels + "/"
+	pathChatCompletions     = "/v1/chat/completions"
+	pathEmbeddings          = "/v1/embeddings"
+	pathAudioSpeech         = "/v1/audio/speech"
+	pathAudioTranscriptions = "/v1/audio/transcriptions"
+	pathAudioVoices         = "/v1/audio/voices"
+	pathSystemOne           = "/v1/systemone"
+	pathAdminModelsAllow    = "/v1/admin/models/allow"
+	pathHealth              = "/health"
+	pathHealthBackends      = "/health/backends"
+	pathHealthUpstreams     = "/health/upstreams"
+	pathDebugFailures       = "/debug/failures/"
 )
 
 const openAIModelsCanonicalPath = pathOpenAIModels
@@ -68,15 +87,15 @@ func openAICatalogEntry() apiCatalogEntry {
 		Title:  "OpenAI-compatible",
 		Flavor: apiFlavorOpenAI,
 		Models: pathOpenAIModels,
-		Schema: "/v1/apis/openai/openapi.yaml",
+		Schema: pathOpenAISpec,
 		Operations: map[string]apiOperation{
 			"list_models":          {Method: http.MethodGet, Path: pathOpenAIModels},
-			"retrieve_model":       {Method: http.MethodGet, Path: "/v1/apis/openai/models/{id}"},
-			"chat_completions":     {Method: http.MethodPost, Path: "/v1/chat/completions"},
-			"embeddings":           {Method: http.MethodPost, Path: "/v1/embeddings"},
-			"audio_speech":         {Method: http.MethodPost, Path: "/v1/audio/speech"},
-			"audio_transcriptions": {Method: http.MethodPost, Path: "/v1/audio/transcriptions"},
-			"audio_voices":         {Method: http.MethodGet, Path: "/v1/audio/voices"},
+			"retrieve_model":       {Method: http.MethodGet, Path: pathOpenAIModels + "/{id}"},
+			"chat_completions":     {Method: http.MethodPost, Path: pathChatCompletions},
+			"embeddings":           {Method: http.MethodPost, Path: pathEmbeddings},
+			"audio_speech":         {Method: http.MethodPost, Path: pathAudioSpeech},
+			"audio_transcriptions": {Method: http.MethodPost, Path: pathAudioTranscriptions},
+			"audio_voices":         {Method: http.MethodGet, Path: pathAudioVoices},
 			"files":                {Method: http.MethodGet, Path: pathFiles},
 			"batches":              {Method: http.MethodPost, Path: pathBatches},
 		},
@@ -89,11 +108,11 @@ func systemOneCatalogEntry() apiCatalogEntry {
 		Title:  "SystemOne",
 		Flavor: "systemone",
 		Models: pathSystemOneModels,
-		Schema: "/v1/apis/systemone/schema.json",
+		Schema: pathSystemOneSchema,
 		Operations: map[string]apiOperation{
 			"list_models":    {Method: http.MethodGet, Path: pathSystemOneModels},
-			"retrieve_model": {Method: http.MethodGet, Path: "/v1/apis/systemone/models/{id}"},
-			"evaluate":       {Method: http.MethodPost, Path: "/v1/systemone"},
+			"retrieve_model": {Method: http.MethodGet, Path: pathSystemOneModels + "/{id}"},
+			"evaluate":       {Method: http.MethodPost, Path: pathSystemOne},
 		},
 	}
 }
@@ -102,12 +121,12 @@ type apiCatalogHandler struct{ *shared }
 
 func (h apiCatalogHandler) serveCatalog(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		h.writeMethodNotAllowed(w, allowRead...)
 		return
 	}
 	cfg := config.RouterConfig{}
-	if h.router != nil {
-		cfg = h.router.Registry().Config()
+	if h.registry != nil {
+		cfg = h.registry.Config()
 	}
 	cat := buildAPICatalog(cfg)
 	w.Header().Set("Content-Type", "application/json")
@@ -157,8 +176,9 @@ func backendAndDownstreamForPublicID(cfg config.RouterConfig, publicID string) (
 	if def != "" {
 		return def, config.NormalizeDownstream(def, publicID)
 	}
-	for id, b := range cfg.Backends {
-		if b.HasCapability(config.CapSystemOne) {
+	// Sorted ids, so two SystemOne-capable backends always resolve the same way.
+	for _, id := range cfg.BackendIDs() {
+		if cfg.Backends[id].HasCapability(config.CapSystemOne) {
 			return id, config.NormalizeDownstream(id, publicID)
 		}
 	}

@@ -33,17 +33,35 @@ type routersFile struct {
 	} `yaml:"routers"`
 }
 
+// HasRouters reports whether the gateway YAML defines at least one router under its
+// top-level routers: key. A commented, indented or empty routers: does not count.
+func HasRouters(path string) (bool, error) {
+	f, err := loadRouters(path)
+	if err != nil {
+		return false, err
+	}
+	return len(f.Routers) > 0, nil
+}
+
+func loadRouters(path string) (*routersFile, error) {
+	data, err := readGatewayYAML(path)
+	if err != nil {
+		return nil, err
+	}
+	var f routersFile
+	if err := yaml.Unmarshal(data, &f); err != nil {
+		return nil, fmt.Errorf("gatewayconfig: routers in %q: %w", path, err)
+	}
+	return &f, nil
+}
+
 // HasComposedRouters reports whether the gateway YAML has a router of any
 // capability that Switchyard serves (stage_router, llm_classifier or fallback).
 // The gateway answers passthrough routers itself, so they need no Switchyard.
 func HasComposedRouters(path string) (bool, error) {
-	data, err := readGatewayYAML(path)
+	f, err := loadRouters(path)
 	if err != nil {
 		return false, err
-	}
-	var f routersFile
-	if err := yaml.Unmarshal(data, &f); err != nil {
-		return false, fmt.Errorf("gatewayconfig: routers in %q: %w", path, err)
 	}
 	for _, r := range f.Routers {
 		switch r.Route.Type {
@@ -57,13 +75,9 @@ func HasComposedRouters(path string) (bool, error) {
 // RouterSmokeTargets returns the gateway YAML's chat routers in name order, each
 // with the leaves it can answer with.
 func RouterSmokeTargets(path string) ([]RouterTarget, error) {
-	data, err := readGatewayYAML(path)
+	f, err := loadRouters(path)
 	if err != nil {
 		return nil, err
-	}
-	var f routersFile
-	if err := yaml.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("gatewayconfig: routers in %q: %w", path, err)
 	}
 	names := make([]string, 0, len(f.Routers))
 	for name := range f.Routers {

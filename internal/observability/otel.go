@@ -27,6 +27,7 @@ func Init(cfg Config) (func(context.Context) error, error) {
 	if cfg.Logger == nil {
 		return nil, derrors.New(derrors.CodeInvalid, "observability.Init", "logger is required")
 	}
+	streamChunkDebug.Store(cfg.StreamChunkDebug)
 	serviceName := cfg.ServiceName
 	if serviceName == "" {
 		serviceName = defaultServiceName
@@ -115,11 +116,14 @@ func httpServerSpanName(r *http.Request) string {
 	return defaultServiceName + " SERVER " + r.Method + " " + r.URL.Path
 }
 
+// httpClientSpanName names an outbound span by method and host only. The path stays
+// out of the name: it can carry ids (a Cloudflare account, a batch, a file) that
+// would make every span name unique. redactSpanRequestURL records it as url.path.
 func httpClientSpanName(r *http.Request) string {
 	if r == nil || r.URL == nil {
 		return defaultServiceName + " CLIENT HTTP"
 	}
-	return defaultServiceName + " CLIENT " + r.Method + " " + r.URL.Host + r.URL.Path
+	return defaultServiceName + " CLIENT " + r.Method + " " + r.URL.Host
 }
 
 // WrapTransport injects W3C context on outbound HTTP (backend arms).
@@ -170,34 +174,37 @@ type LLMSpanAttrs struct {
 // StartRouterSpan starts an OpenInference span for a composed router hop via
 // Switchyard; a.BackendURL is the Switchyard URL.
 func StartRouterSpan(ctx context.Context, operation string, a LLMSpanAttrs) (context.Context, trace.Span) {
-	ctx, span := Tracer().Start(ctx, operation, trace.WithSpanKind(trace.SpanKindInternal))
-	span.SetAttributes(
-		attribute.String("openinference.span.kind", "LLM"),
-		attribute.String("llm.model_name", a.Model),
-		attribute.String("llm.provider", "polypus"),
+	return startInferenceSpan(ctx, operation, a.Model, a.BackendURL,
 		attribute.String("polypus.backend_id", "switchyard"),
-		attribute.String("polypus.backend_url", a.BackendURL),
 		attribute.String("polypus.router_name", a.Router),
 	)
-	return WithInterventionState(ctx), span
 }
 
 // StartLLMSpan starts an OpenInference LLM span for a routed inference call.
 func StartLLMSpan(ctx context.Context, operation string, a LLMSpanAttrs) (context.Context, trace.Span) {
+	return startInferenceSpan(ctx, operation, a.Model, a.BackendURL,
+		attribute.String("polypus.backend_id", a.BackendID),
+		attribute.String("polypus.downstream_model", a.Downstream),
+	)
+}
+
+// startInferenceSpan starts an internal OpenInference LLM span with the attributes
+// every inference hop carries, plus extra.
+func startInferenceSpan(ctx context.Context, operation, model, backendURL string, extra ...attribute.KeyValue) (context.Context, trace.Span) {
 	ctx, span := Tracer().Start(ctx, operation, trace.WithSpanKind(trace.SpanKindInternal))
 	span.SetAttributes(
 		attribute.String("openinference.span.kind", "LLM"),
-		attribute.String("llm.model_name", a.Model),
+		attribute.String("llm.model_name", model),
 		attribute.String("llm.provider", "polypus"),
-		attribute.String("polypus.backend_id", a.BackendID),
-		attribute.String("polypus.backend_url", a.BackendURL),
-		attribute.String("polypus.downstream_model", a.Downstream),
+		attribute.String("polypus.backend_url", backendURL),
 	)
+	span.SetAttributes(extra...)
 	return WithInterventionState(ctx), span
 }
 
-// endSpan records err on the span and ends it.
-func endSpan(span trace.Span, err error) {
+// EndSpan records err on span (redacted, with its domain code kept) or marks it OK,
+// then ends it. A nil span is a no-op.
+func EndSpan(span trace.Span, err error) {
 	if span == nil {
 		return
 	}

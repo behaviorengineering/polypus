@@ -7,7 +7,6 @@ import (
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/ratelimit"
-	"github.com/sony/gobreaker"
 )
 
 // Layer values attribute a dial failure to the hop that failed.
@@ -46,9 +45,9 @@ func ClassifyDialFailure(err error, upstreamName string) FailureClass {
 	}
 	upstreamName = ResolveUpstreamName(err, upstreamName)
 	if Unavailable(err) {
-		state := "open"
-		if errors.Is(err, gobreaker.ErrTooManyRequests) {
-			state = "half-open"
+		state := stateOpen
+		if errors.Is(err, ErrHalfOpen) {
+			state = stateHalfOpen
 		}
 		return FailureClass{
 			Layer:        LayerPolypusBreaker,
@@ -62,24 +61,15 @@ func ClassifyDialFailure(err error, upstreamName string) FailureClass {
 			Upstream: upstreamName,
 		}
 	}
-	status := bifrostStatus(err)
+	layer := LayerLeaf
 	if isCloudflareDialFailure(err) {
-		return FailureClass{
-			Layer:      LayerCloudflare,
-			Upstream:   upstreamName,
-			HTTPStatus: status,
-		}
+		layer = LayerCloudflare
 	}
-	if status > 0 {
-		return FailureClass{
-			Layer:      LayerLeaf,
-			Upstream:   upstreamName,
-			HTTPStatus: status,
-		}
-	}
+	// HTTPStatus stays 0 when the chain records no upstream status.
 	return FailureClass{
-		Layer:    LayerLeaf,
-		Upstream: upstreamName,
+		Layer:      layer,
+		Upstream:   upstreamName,
+		HTTPStatus: upstreamStatus(err),
 	}
 }
 
@@ -110,8 +100,9 @@ func upstreamNameFromUnavailable(err error) string {
 	return strings.TrimSpace(derrors.Field(err, FieldUpstream))
 }
 
-// bifrostStatus is the upstream HTTP status the error chain records, or 0.
-func bifrostStatus(err error) int {
+// upstreamStatus is the upstream HTTP status the error chain records, or 0. Every
+// client that dials an upstream sets it (Bifrost, Cloudflare, ratelimit, the router).
+func upstreamStatus(err error) int {
 	n, convErr := strconv.Atoi(strings.TrimSpace(derrors.Field(err, ratelimit.FieldStatus)))
 	if convErr != nil {
 		return 0

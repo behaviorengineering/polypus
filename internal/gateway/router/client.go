@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -18,8 +19,22 @@ import (
 	"github.com/behaviorengineering/polypus/internal/ratelimit"
 	"github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// Error field keys the router sets. The status key is ratelimit.FieldStatus, which
+// upstream reads to attribute a dial failure.
+const (
+	fieldBackend  = "backend"
+	fieldModel    = "model"
+	fieldProvider = "provider"
+	fieldType     = "type"
+)
+
+// msgRequestFailed is the error message when the provider gave none.
+const msgRequestFailed = "request failed"
 
 // Call is one request to a backend through Bifrost.
 type Call struct {
@@ -29,8 +44,23 @@ type Call struct {
 	// Body is the OpenAI-shaped request body.
 	Body []byte
 	// Timeout bounds a non-stream call; streams ignore it (the client's cancel and
-	// the gateway's idle limit bound them).
+	// the gateway's idle limit bound them). A non-stream call with no Timeout needs a
+	// deadline on its context, or it fails closed.
 	Timeout time.Duration
+	// OnResponseHeader, when set, receives the provider's response headers once the
+	// provider has answered: after a non-stream call succeeds, or when a stream has
+	// opened and before its first chunk is sent. It is not called on failure.
+	OnResponseHeader func(http.Header)
+}
+
+// responseHeader hands the provider's response headers to the call's hook, if any.
+func (call Call) responseHeader(bctx *schemas.BifrostContext) {
+	if call.OnResponseHeader == nil {
+		return
+	}
+	if h := bifrostProviderHeader(bctx); h != nil {
+		call.OnResponseHeader(h)
+	}
 }
 
 // Client wraps Bifrost for Polypus multi-backend routing (speech, chat, embed).
@@ -41,14 +71,20 @@ type Client struct {
 	bfTracer         *observability.BifrostOTelTracer
 }
 
-// CloudflareClientGet optionally overrides process-scoped cloudflare.GetClient (tests).
+// CloudflareClientGet returns the Cloudflare client for a backend; the gateway passes
+// its cloudflare.Clients.Get so the speech plugin shares its cache.
 type CloudflareClientGet func(config.BackendDef) (*cloudflare.Client, error)
 
-// NewClient validates backends and initializes Bifrost.
-func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
-	reg, err := NewRegistry(cfg)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "router.NewClient", "registry")
+// NewClient validates backends and initializes Bifrost under ctx, the caller's
+// startup context: Bifrost's own lifetime derives from it, so a cancelled start
+// stops it. WithLogger is required: the plugins log through the gateway's logger,
+// never the process default.
+func NewClient(ctx context.Context, cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
+	if ctx == nil {
+		return nil, derrors.New(derrors.CodeInvalid, "router.NewClient", "context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeCanceled, "router.NewClient", "startup context done")
 	}
 	var co clientOptions
 	for _, opt := range opts {
@@ -57,14 +93,18 @@ func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
 		}
 	}
 	if co.logger == nil {
-		co.logger = slog.Default()
+		return nil, derrors.New(derrors.CodeInvalid, "router.NewClient", "logger is required (WithLogger)")
+	}
+	reg, err := NewRegistry(cfg)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "router.NewClient", "registry")
 	}
 	cfGet := co.cfGet
 	if cfGet == nil {
 		// The gateway passes its own cache; a standalone client builds one.
-		cfGet = (&cloudflare.Clients{Logger: co.logger}).Get
+		cfGet = (&cloudflare.Clients{Logger: co.logger, Now: time.Now, Speech: cloudflare.SpeechDefaultsFromEnv()}).Get
 	}
-	account := newAccount(cfg)
+	acct := newAccount(cfg)
 	var plugins []schemas.LLMPlugin
 	if hasCloudflareBackend(cfg) {
 		lookup := func(provider string) (config.BackendDef, bool) {
@@ -73,8 +113,8 @@ func NewClient(cfg config.RouterConfig, opts ...ClientOption) (*Client, error) {
 		plugins = append(plugins, cloudflare.NewRunSpeechPlugin(lookup, cloudflare.ClientGet(cfGet), co.logger))
 	}
 	bfTracer := observability.NewBifrostOTelTracer()
-	bf, err := bifrost.Init(context.Background(), schemas.BifrostConfig{
-		Account:    account,
+	bf, err := bifrost.Init(ctx, schemas.BifrostConfig{
+		Account:    acct,
 		LLMPlugins: plugins,
 		Tracer:     bfTracer,
 	})
@@ -101,15 +141,16 @@ type clientOptions struct {
 // ClientOption configures NewClient.
 type ClientOption func(*clientOptions)
 
-// WithCloudflareClientGet injects CF client construction (defaults to GetClient).
+// WithCloudflareClientGet injects the Cloudflare client getter (defaults to a
+// standalone cloudflare.Clients).
 func WithCloudflareClientGet(fn CloudflareClientGet) ClientOption {
 	return func(o *clientOptions) {
 		o.cfGet = fn
 	}
 }
 
-// WithLogger sets the logger Polypus's Bifrost plugins write to (slog.Default
-// otherwise). Panics if l is nil.
+// WithLogger sets the logger Polypus's Bifrost plugins write to. NewClient requires
+// it. Panics if l is nil.
 func WithLogger(l *slog.Logger) ClientOption {
 	if l == nil {
 		panic("router: WithLogger(nil)")
@@ -151,7 +192,12 @@ func (c *Client) UsesBifrost(backendID string) bool {
 	return ok
 }
 
-func bifrostRawContext(parent context.Context, timeout time.Duration, useRaw bool) *schemas.BifrostContext {
+// bifrostContext is the Bifrost context for one call under parent, bounded by
+// timeout when it is positive. The caller MUST call the returned cancel when the call
+// is done (a stream: when its goroutine exits): Bifrost runs a watcher goroutine and
+// timer per context, and a stream producer blocks until the context ends. Values
+// such as the provider response headers stay readable after cancel.
+func (c *Client) bifrostContext(parent context.Context, timeout time.Duration, useRaw bool) (*schemas.BifrostContext, context.CancelFunc) {
 	deadline := schemas.NoDeadline
 	if timeout > 0 {
 		deadline = time.Now().Add(timeout)
@@ -160,18 +206,28 @@ func bifrostRawContext(parent context.Context, timeout time.Duration, useRaw boo
 	if useRaw {
 		bctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, true)
 	}
-	return bctx
-}
-
-func (c *Client) bifrostContext(parent context.Context, timeout time.Duration, useRaw bool) *schemas.BifrostContext {
-	bctx := bifrostRawContext(parent, timeout, useRaw)
 	// The request's own trace and parent span ride on its context, so the shared
 	// tracer never has to guess which request a Bifrost span belongs to.
 	if sc := trace.SpanFromContext(parent).SpanContext(); sc.IsValid() {
 		bctx.SetValue(schemas.BifrostContextKeyTraceID, sc.TraceID().String())
 		bctx.SetValue(schemas.BifrostContextKeyParentSpanID, sc.SpanID().String())
 	}
-	return bctx
+	return bctx, bctx.Cancel
+}
+
+// withSwitchyardTrace sends the request's W3C trace context to Switchyard, Polypus's
+// own router process, so its spans join the gateway's trace. Third-party providers
+// get no trace headers.
+func withSwitchyardTrace(bctx *schemas.BifrostContext, parent context.Context, backendID string) {
+	if backendID != ProviderSwitchyard {
+		return
+	}
+	carrier := propagation.HeaderCarrier(http.Header{})
+	otel.GetTextMapPropagator().Inject(parent, carrier)
+	if len(carrier) == 0 {
+		return
+	}
+	bctx.SetValue(schemas.BifrostContextKeyExtraHeaders, map[string][]string(carrier))
 }
 
 func (c *Client) bifrostUseRawChatBody(backendID string) bool {
@@ -263,12 +319,17 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, call Call) ([]byte, erro
 	if c == nil || c.bf == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.ChatCompletionRaw", "bifrost not configured")
 	}
+	if err := requireCallBound(ctx, timeout, "router.ChatCompletionRaw"); err != nil {
+		return nil, err
+	}
 	messages, err := parseChatMessages("router.ChatCompletionRaw", body)
 	if err != nil {
 		return nil, err
 	}
 	useRaw := c.bifrostUseRawChatBody(backendID)
-	bctx := c.bifrostContext(ctx, timeout, useRaw)
+	bctx, cancel := c.bifrostContext(ctx, timeout, useRaw)
+	defer cancel()
+	withSwitchyardTrace(bctx, ctx, backendID)
 	chatReq, err := bifrostChatRequest(backendID, model, messages, body, useRaw)
 	if err != nil {
 		return nil, err
@@ -280,9 +341,10 @@ func (c *Client) ChatCompletionRaw(ctx context.Context, call Call) ([]byte, erro
 	}
 	if resp == nil {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.ChatCompletionRaw", "empty chat response from backend").
-			With("backend", backendID).
-			With("model", model)
+			With(fieldBackend, backendID).
+			With(fieldModel, model)
 	}
+	call.responseHeader(bctx)
 	out, err := json.Marshal(resp)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "router.ChatCompletionRaw", "marshal chat response")
@@ -302,24 +364,31 @@ func (c *Client) ChatCompletionStreamRaw(ctx context.Context, call Call) (<-chan
 	if err != nil {
 		return nil, nil, err
 	}
-	// Streams use client cancel only (no Bifrost wall-clock deadline), matching hop
-	// timeout rules on the HTTP proxy path; the gateway's idle limit bounds a stall.
 	useRaw := c.bifrostUseRawChatBody(backendID)
-	bctx := c.bifrostContext(ctx, 0, useRaw)
 	chatReq, err := bifrostChatRequest(backendID, model, messages, body, useRaw)
 	if err != nil {
 		return nil, nil, err
 	}
 	c.applyAutoPromptCache(backendID, body, chatReq)
+	// Streams use client cancel only (no Bifrost wall-clock deadline), matching hop
+	// timeout rules on the HTTP proxy path; the gateway's idle limit bounds a stall.
+	bctx, cancel := c.bifrostContext(ctx, 0, useRaw)
+	withSwitchyardTrace(bctx, ctx, backendID)
 	stream, berr := c.bf.ChatCompletionStreamRequest(bctx, chatReq)
 	if berr != nil {
+		cancel()
 		return nil, nil, c.chatBifrostErr(backendID, berr, bifrostProviderHeader(bctx))
 	}
+	// The stream is open, so the provider's response headers are on bctx.
+	call.responseHeader(bctx)
 	out := make(chan ChatStreamChunk, 16)
 	errCh := make(chan error, 1)
 	go func() {
 		defer close(out)
 		defer close(errCh)
+		// Runs first: an early return releases Bifrost's producer, which would
+		// otherwise block on the next chunk until the request context ends.
+		defer cancel()
 		for chunk := range stream {
 			if chunk == nil {
 				continue
@@ -353,11 +422,15 @@ func (c *Client) EmbeddingRaw(ctx context.Context, call Call) ([]byte, error) {
 	if c == nil || c.bf == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.EmbeddingRaw", "bifrost not configured")
 	}
+	if err := requireCallBound(ctx, timeout, "router.EmbeddingRaw"); err != nil {
+		return nil, err
+	}
 	input, err := parseEmbeddingInputItems(body)
 	if err != nil {
 		return nil, err
 	}
-	bctx := c.bifrostContext(ctx, timeout, true)
+	bctx, cancel := c.bifrostContext(ctx, timeout, true)
+	defer cancel()
 	resp, berr := c.bf.EmbeddingRequest(bctx, &schemas.BifrostEmbeddingRequest{
 		Provider:       schemas.ModelProvider(backendID),
 		Model:          model,
@@ -369,8 +442,8 @@ func (c *Client) EmbeddingRaw(ctx context.Context, call Call) ([]byte, error) {
 	}
 	if resp == nil {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.EmbeddingRaw", "empty embedding response from backend").
-			With("backend", backendID).
-			With("model", model)
+			With(fieldBackend, backendID).
+			With(fieldModel, model)
 	}
 	out, err := json.Marshal(resp)
 	if err != nil {
@@ -440,22 +513,9 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 	if strings.TrimSpace(req.Input) == "" {
 		return nil, derrors.New(derrors.CodeInvalid, "router.Synthesize", "input required")
 	}
-	backendID, downstream, err := c.reg.ResolveTTS(req.Model)
+	provider, model, err := c.speechTarget("router.Synthesize", "tts", c.reg.ResolveTTS, c.reg.Config().DefaultTTSModel, req.Model)
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeNotFound, "router.Synthesize", "resolve tts")
-	}
-	if _, ok := c.reg.Backend(string(backendID)); !ok {
-		return nil, derrors.New(derrors.CodeNotFound, "router.Synthesize", "backend not found").
-			With("backend", string(backendID))
-	}
-
-	provider := backendID
-	model := downstream
-	if model == "" {
-		model = c.reg.Config().DefaultTTSModel
-	}
-	if model == "" {
-		model = strings.TrimSpace(req.Model)
+		return nil, err
 	}
 	params := &schemas.SpeechParameters{}
 	if f := strings.TrimSpace(req.ResponseFormat); f != "" {
@@ -467,10 +527,11 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 	if req.Speed != nil {
 		params.Speed = req.Speed
 	}
-	if err := requireDeadline(ctx, "router.speech"); err != nil {
+	if err := requireDeadline(ctx, "router.Synthesize"); err != nil {
 		return nil, err
 	}
-	bctx := c.bifrostContext(ctx, 0, false)
+	bctx, cancel := c.bifrostContext(ctx, 0, false)
+	defer cancel()
 	resp, berr := c.bf.SpeechRequest(bctx, &schemas.BifrostSpeechRequest{
 		Provider: provider,
 		Model:    model,
@@ -478,7 +539,7 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, err
 		Params:   params,
 	})
 	if berr != nil {
-		return nil, c.mapBifrostErr("", berr, bifrostProviderHeader(bctx))
+		return nil, c.mapBifrostErr(string(provider), berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil || len(resp.Audio) == 0 {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.Synthesize", "empty speech audio from backend")
@@ -494,22 +555,9 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	if len(req.Audio) == 0 {
 		return nil, "", derrors.New(derrors.CodeInvalid, "router.Transcribe", "audio file required")
 	}
-	backendID, downstream, err := c.reg.ResolveSTT(req.Model)
+	provider, model, err := c.speechTarget("router.Transcribe", "stt", c.reg.ResolveSTT, c.reg.Config().DefaultSTTModel, req.Model)
 	if err != nil {
-		return nil, "", derrors.Wrap(err, derrors.CodeNotFound, "router.Transcribe", "resolve stt")
-	}
-	if _, ok := c.reg.Backend(string(backendID)); !ok {
-		return nil, "", derrors.New(derrors.CodeNotFound, "router.Transcribe", "backend not found").
-			With("backend", string(backendID))
-	}
-
-	provider := backendID
-	model := downstream
-	if model == "" {
-		model = c.reg.Config().DefaultSTTModel
-	}
-	if model == "" {
-		model = strings.TrimSpace(req.Model)
+		return nil, "", err
 	}
 	filename := strings.TrimSpace(req.Filename)
 	if filename == "" {
@@ -525,10 +573,11 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	if lang := strings.TrimSpace(req.Language); lang != "" {
 		params.Language = schemas.Ptr(lang)
 	}
-	if err := requireDeadline(ctx, "router.transcribe"); err != nil {
+	if err := requireDeadline(ctx, "router.Transcribe"); err != nil {
 		return nil, "", err
 	}
-	bctx := c.bifrostContext(ctx, 0, false)
+	bctx, cancel := c.bifrostContext(ctx, 0, false)
+	defer cancel()
 	resp, berr := c.bf.TranscriptionRequest(bctx, &schemas.BifrostTranscriptionRequest{
 		Provider: provider,
 		Model:    model,
@@ -539,7 +588,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 		Params: params,
 	})
 	if berr != nil {
-		return nil, "", c.mapBifrostErr("", berr, bifrostProviderHeader(bctx))
+		return nil, "", c.mapBifrostErr(string(provider), berr, bifrostProviderHeader(bctx))
 	}
 	if resp == nil {
 		return nil, "", derrors.New(derrors.CodeUnavailable, "router.Transcribe", "empty transcription from backend")
@@ -556,13 +605,51 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) ([]by
 	return body, "application/json", nil
 }
 
+// speechResolver is Registry.ResolveTTS or Registry.ResolveSTT.
+type speechResolver func(model string) (schemas.ModelProvider, string, error)
+
+// speechTarget resolves the backend and model of a speech call (what is "tts" or
+// "stt"). A resolve error keeps its own code: a missing default backend stays
+// CodeNotReady and a bad request CodeInvalid. The model is the routed downstream id,
+// else the config default, else the requested model as given.
+func (c *Client) speechTarget(op, what string, resolve speechResolver, defaultModel, requested string) (schemas.ModelProvider, string, error) {
+	backendID, downstream, err := resolve(requested)
+	if err != nil {
+		return "", "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotFound), op, "resolve "+what)
+	}
+	if _, ok := c.reg.Backend(string(backendID)); !ok {
+		return "", "", derrors.New(derrors.CodeNotFound, op, "backend not found").
+			With(fieldBackend, string(backendID))
+	}
+	model := downstream
+	if model == "" {
+		model = defaultModel
+	}
+	if model == "" {
+		model = strings.TrimSpace(requested)
+	}
+	return backendID, model, nil
+}
+
 // requireDeadline fails closed when ctx carries no deadline: the gateway handler
 // sets the speech hop budget, and a leaf never invents one.
 func requireDeadline(ctx context.Context, op string) error {
+	if ctx == nil {
+		return derrors.New(derrors.CodeInvalid, op, "context is required")
+	}
 	if _, ok := ctx.Deadline(); !ok {
 		return derrors.New(derrors.CodeFailedPrecondition, op, "context deadline required")
 	}
 	return nil
+}
+
+// requireCallBound fails closed when a non-stream call has neither a timeout nor a
+// context deadline, so it never falls back to Bifrost's default request timeout.
+func requireCallBound(ctx context.Context, timeout time.Duration, op string) error {
+	if timeout > 0 && ctx != nil {
+		return nil
+	}
+	return requireDeadline(ctx, op)
 }
 
 func bifrostProviderHeader(bctx *schemas.BifrostContext) http.Header {
@@ -584,8 +671,13 @@ func bifrostProviderHeader(bctx *schemas.BifrostContext) http.Header {
 }
 
 // chatBifrostErr maps a chat error from Bifrost. Anthropic backends get the fallback-route
-// classification first; every other backend keeps bifrostErr.
+// classification first, and Switchyard its own; every other backend keeps bifrostErr.
 func (c *Client) chatBifrostErr(backendID string, berr *schemas.BifrostError, header http.Header) error {
+	if backendID == ProviderSwitchyard {
+		if err := switchyardChatErr(berr); err != nil {
+			return err
+		}
+	}
 	if c != nil && c.reg != nil {
 		if b, ok := c.reg.Backend(backendID); ok && b.IsAnthropicExtension() {
 			if err := anthropicChatErr(berr); err != nil {
@@ -604,7 +696,7 @@ func anthropicChatErr(berr *schemas.BifrostError) error {
 	if berr == nil {
 		return nil
 	}
-	status, errType, msg := 0, "", "request failed"
+	status, errType, msg := 0, "", msgRequestFailed
 	if berr.StatusCode != nil {
 		status = *berr.StatusCode
 	}
@@ -625,11 +717,43 @@ func anthropicChatErr(berr *schemas.BifrostError) error {
 	default:
 		code = clientErrorCode(status)
 	}
-	out := derrors.New(code, "router.anthropic", msg).With("status", strconv.Itoa(status))
+	out := derrors.New(code, "router.anthropic", msg)
+	if berr.Error != nil && berr.Error.Error != nil {
+		// Keep the provider's error in the chain, so errors.Is, errors.As and
+		// derrors.Field still reach it.
+		out = derrors.Wrap(berr.Error.Error, code, "router.anthropic", msg)
+	}
+	out = out.With(ratelimit.FieldStatus, strconv.Itoa(status))
 	if errType != "" {
-		out = out.With("type", errType)
+		out = out.With(fieldType, errType)
 	}
 	return out
+}
+
+// switchyardChatErr classifies a Switchyard 4xx other than 429. Switchyard has already
+// tried its fallbacks, so the 4xx is its answer about the request: it reaches the
+// caller as a 4xx and does not count against the Switchyard breaker. Returns nil to
+// defer to bifrostErr (429 with its Retry-After, 5xx, transport failures).
+func switchyardChatErr(berr *schemas.BifrostError) error {
+	if berr == nil || berr.StatusCode == nil {
+		return nil
+	}
+	status := *berr.StatusCode
+	if status < 400 || status >= 500 || status == http.StatusTooManyRequests {
+		return nil
+	}
+	msg := msgRequestFailed
+	if berr.Error != nil {
+		if m := strings.TrimSpace(berr.Error.Message); m != "" {
+			msg = m
+		}
+	}
+	code := clientErrorCode(status)
+	out := derrors.New(code, "router.switchyard", msg)
+	if berr.Error != nil && berr.Error.Error != nil {
+		out = derrors.Wrap(berr.Error.Error, code, "router.switchyard", msg)
+	}
+	return out.With(ratelimit.FieldStatus, strconv.Itoa(status))
 }
 
 // anthropicOverloadedStatus is Anthropic's non-standard overloaded status.
@@ -684,7 +808,7 @@ func bifrostErr(berr *schemas.BifrostError, header http.Header, cloudflare bool)
 	if berr.StatusCode != nil {
 		status = *berr.StatusCode
 	}
-	msg := "request failed"
+	msg := msgRequestFailed
 	if berr.Error != nil && strings.TrimSpace(berr.Error.Message) != "" {
 		msg = strings.TrimSpace(berr.Error.Message)
 	}
@@ -698,20 +822,26 @@ func bifrostErr(berr *schemas.BifrostError, header http.Header, cloudflare bool)
 		classify = ratelimit.Classify
 	}
 	if rl := classify("router.bifrost", status, header, bifrostRawBody(berr), hints...); rl != nil {
-		return derrors.Wrap(rl, derrors.CodeRateLimited, "router.bifrost", "provider rate limited").With("provider", provider)
+		// The rate limit comes first, so its fields (status, Retry-After) win; the
+		// provider's own error stays reachable behind it.
+		var cause error = rl
+		if berr.Error != nil && berr.Error.Error != nil {
+			cause = errors.Join(rl, berr.Error.Error)
+		}
+		return derrors.Wrap(cause, derrors.CodeRateLimited, "router.bifrost", "provider rate limited").With(fieldProvider, provider)
 	}
 	if berr.Error != nil && berr.Error.Error != nil {
 		// Keep a domain code the provider (or a plugin) already set, such as a
 		// rate limit or invalid input; otherwise the provider failed.
 		out := derrors.Wrap(berr.Error.Error, derrors.CodeOr(berr.Error.Error, derrors.CodeUnavailable), "router.bifrost", "provider call")
 		if status > 0 {
-			out = out.With("status", strconv.Itoa(status))
+			out = out.With(ratelimit.FieldStatus, strconv.Itoa(status))
 		}
 		return out
 	}
 	out := derrors.New(derrors.CodeUnavailable, "router.bifrost", msg)
 	if status > 0 {
-		out = out.With("status", strconv.Itoa(status))
+		out = out.With(ratelimit.FieldStatus, strconv.Itoa(status))
 	}
 	return out
 }

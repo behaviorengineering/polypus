@@ -17,28 +17,41 @@ import (
 
 type streamChunkCounterKey struct{}
 
+// chunkDumpSink is where a stream's dropped chunks go.
+type chunkDumpSink struct {
+	// dir receives dropped-chunk dumps; empty turns them off.
+	dir string
+	// log reports a dump that could not be written.
+	log *slog.Logger
+	// now stamps the dump file names.
+	now func() time.Time
+}
+
 type streamChunkCounter struct {
 	mu     sync.Mutex
 	index  int
 	dumped int  // dropped-chunk dumps written for this stream.
 	warned bool // a dump write failure was already logged for this stream.
-	log    *slog.Logger
-	// dumpDir receives dropped-chunk dumps; empty turns them off.
-	dumpDir string
+	sink   chunkDumpSink
 }
 
 // maxChunkDumpsPerStream caps dropped-chunk dumps for one stream: an upstream that
 // keeps streaming after finish_reason would otherwise write a file per chunk.
 const maxChunkDumpsPerStream = 5
 
-func withStreamChunkCounter(ctx context.Context, log *slog.Logger, dumpDir string) context.Context {
+// withStreamChunkCounter starts counting a stream's chunks. A sink with a directory
+// needs a logger and a clock; without them the stream writes no dumps.
+func withStreamChunkCounter(ctx context.Context, sink chunkDumpSink) context.Context {
 	if ctx == nil {
 		return ctx
 	}
 	if _, ok := ctx.Value(streamChunkCounterKey{}).(*streamChunkCounter); ok {
 		return ctx
 	}
-	return context.WithValue(ctx, streamChunkCounterKey{}, &streamChunkCounter{log: log, dumpDir: dumpDir})
+	if sink.log == nil || sink.now == nil {
+		sink.dir = ""
+	}
+	return context.WithValue(ctx, streamChunkCounterKey{}, &streamChunkCounter{sink: sink})
 }
 
 func nextStreamChunkIndex(ctx context.Context) int {
@@ -98,21 +111,21 @@ func warnChunkDumpOnce(c *streamChunkCounter, path, traceID string, err error) {
 	if already {
 		return
 	}
-	c.log.Warn("polypus: stream chunk dump not written", "path", path, "trace_id", traceID, "err", err)
+	c.sink.log.Warn("polypus: stream chunk dump not written", "path", path, "trace_id", traceID, "err", err)
 }
 
 func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProviderJSON []byte) {
 	counter := streamCounter(ctx)
-	if counter == nil || counter.dumpDir == "" || !claimChunkDump(counter) {
+	if counter == nil || counter.sink.dir == "" || !claimChunkDump(counter) {
 		return
 	}
-	dir := counter.dumpDir
+	dir := counter.sink.dir
 	traceID := "unknown"
 	sc := trace.SpanFromContext(ctx).SpanContext()
 	if sc.HasTraceID() {
 		traceID = sc.TraceID().String()
 	}
-	name := fmt.Sprintf("stream-chunk-%s-%d-%d.json", traceID, idx, time.Now().UnixNano())
+	name := fmt.Sprintf("stream-chunk-%s-%d-%d.json", traceID, idx, counter.sink.now().UnixNano())
 	path := filepath.Join(dir, name)
 	payload := map[string]json.RawMessage{
 		apiFlavorOpenAI: openaiJSON,

@@ -134,6 +134,8 @@ backends:
       allow: [...]
 ```
 
+`extension: typesafe` uses Bifrost's Typesafe provider for `POST /v1/systemone` (jev models). Omit `base_url` for its default host (`https://api.typesafe.ai`); a custom `base_url` is the origin, with or without `/v1`.
+
 `extension: gemini` uses Bifrost native `generateContent` (Google AI Studio). Omit `base_url` so Bifrost uses the Developer API default. Setting `https://generativelanguage.googleapis.com/v1beta` makes Bifrost send OpenAI chat JSON to the native API (502: unknown `messages` / `max_tokens`). Generic remote OpenAI backends cannot point at `generativelanguage.googleapis.com`; only `extension: gemini` may.
 
 
@@ -158,8 +160,8 @@ Configure under `routers:` in `config.yaml`. Public model id is always `router/<
 | Route type | Handler | Switchyard TOML |
 |------------|---------|-----------------|
 | `passthrough` | Polypus leaf proxy | omitted |
-| `stage_router` | HTTP to Switchyard `:4000` | emitted |
-| `llm_classifier` (`mode: custom`) | HTTP to Switchyard `:4000` | emitted |
+| `stage_router` | Bifrost provider `switchyard` to `:4000` | emitted |
+| `llm_classifier` (`mode: custom`) | Bifrost provider `switchyard` to `:4000` | emitted |
 
 Generated Switchyard config: `~/.cache/polypus/switchyard/routes.toml` (override with `switchyard.config_path`). Regenerated at gateway startup and by `polypus switchyard-render`. See [docs/switchyard/llm-classifier-custom.md](../../../docs/switchyard/llm-classifier-custom.md) for custom classifier fields.
 
@@ -220,7 +222,7 @@ Optional cache: `POLYPUS_MODELS_CACHE` or `~/.cache/polypus/models-inventory.jso
 
 `GET /v1/admin/models/allow` returns `{"object":"allow_overlay","backends":{...}}` with downstream slugs per backend (empty `backends` when the overlay file is missing). Probe: `curl -sS http://127.0.0.1:1320/v1/admin/models/allow`.
 
-`POST /v1/admin/models/allow` body: `{"backend":"cf_local","model":"@cf/..."}`. The model must appear in backend inventory; the backend must have `models.allow` configured. No dedicated allow Bearer.
+`POST /v1/admin/models/allow` body: `{"backend":"cf_local","model":"@cf/..."}`, sent as `Content-Type: application/json` (`curl -sS --json '{"backend":"<id>","model":"<downstream>"}' http://127.0.0.1:1320/v1/admin/models/allow`); any other Content-Type gets 415 and a cross-site browser `Origin` gets 403. The model must appear in backend inventory; the backend must have `models.allow` configured. No dedicated allow Bearer.
 
 When `admin-api-keys.json` contains at least one key, all routes except `GET|HEAD /health` require a gateway access key: `Authorization: Bearer ppk.<id>.<secret>`, `X-Api-Key`, or HTTP Basic (password = the full `ppk...` token). Plaintext keys print once on `polypus admin-key generate` or `rotate`. `/health` returns only `{"status":"ok"}`. `/health/backends` and `/health/upstreams` name backend URLs and dial upstreams, so they need the key like any other route.
 
@@ -246,7 +248,7 @@ Overlay POST and key-file changes take effect without restarting `polypus serve`
 | embed | `POST /v1/embeddings` | `lm_studio` |
 | tts | `POST /v1/audio/speech` | `mlx_local`, `cf_local` |
 | stt | `POST /v1/audio/transcriptions` | `mlx_local`, `cf_local` |
-| systemone | `POST /v1/systemone` | `cf_local` (TypeSafe / JEV via `/ai/run`); OpenRouter Deciders via Bifrost `Decision` to `/api/alpha/decisions` when backend id is `openrouter` and `capabilities` includes `systemone` |
+| systemone | `POST /v1/systemone` | `cf_local` (TypeSafe / JEV via `/ai/run`); OpenRouter Deciders via Bifrost `Decision` to `/api/alpha/decisions` when backend id is `openrouter` and `capabilities` includes `systemone`; Typesafe's own API via Bifrost `Decision` to `/v1/systemone` with `extension: typesafe`. Any other backend with `systemone` fails config load |
 
 Router picks: (1) model prefix `backend_id/...`, else (2) `default_*_backend`.
 

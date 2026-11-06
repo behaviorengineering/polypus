@@ -38,7 +38,7 @@ func runProviderChat(ctx context.Context, ep endpoint, model, reasoningEffort st
 	}
 	ms := time.Since(start).Milliseconds()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		fmt.Printf("smoke: channel=chat probe=provider model=%s status=fail ms=%d detail=chat status %d: %s\n",
+		ep.out.Printf("smoke: channel=chat probe=provider model=%s status=fail ms=%d detail=chat status %d: %s\n",
 			model, ms, resp.StatusCode, truncateDetail(string(raw)))
 		return fmt.Errorf("smoke %s: chat status %d: %s", model, resp.StatusCode, truncateDetail(string(raw)))
 	}
@@ -50,31 +50,46 @@ func runProviderChat(ctx context.Context, ep endpoint, model, reasoningEffort st
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		fmt.Printf("smoke: channel=chat probe=provider model=%s status=fail ms=%d detail=%s\n", model, ms, err)
+		ep.out.Printf("smoke: channel=chat probe=provider model=%s status=fail ms=%d detail=%s\n", model, ms, err)
 		return fmt.Errorf("smoke %s: parse response: %w", model, err)
 	}
 	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
 		detail := truncateDetail(string(raw))
-		fmt.Printf("smoke: channel=chat probe=provider model=%s status=fail ms=%d detail=empty content: %s\n", model, ms, detail)
+		ep.out.Printf("smoke: channel=chat probe=provider model=%s status=fail ms=%d detail=empty content: %s\n", model, ms, detail)
 		return fmt.Errorf("smoke %s: empty content: %s", model, detail)
 	}
-	fmt.Printf("smoke: channel=chat probe=provider model=%s status=pass ms=%d detail=ok\n", model, ms)
+	ep.out.Printf("smoke: channel=chat probe=provider model=%s status=pass ms=%d detail=ok\n", model, ms)
 	return nil
 }
 
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type chatReasoning struct {
+	Effort string `json:"effort"`
+}
+
+type chatRequest struct {
+	Model       string         `json:"model"`
+	Messages    []chatMessage  `json:"messages"`
+	MaxTokens   int            `json:"max_tokens"`
+	Temperature float64        `json:"temperature"`
+	Reasoning   *chatReasoning `json:"reasoning,omitempty"`
+}
+
 func providerChatBody(model, reasoningEffort string, maxTokens int, temperature float64) ([]byte, error) {
-	payload := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "user", "content": "Reply with the single word: ok"},
-		},
-		"max_tokens":  maxTokens,
-		"temperature": temperature,
+	req := chatRequest{
+		Model:       model,
+		Messages:    []chatMessage{{Role: "user", Content: "Reply with the single word: ok"}},
+		MaxTokens:   maxTokens,
+		Temperature: temperature,
 	}
 	if effort := strings.TrimSpace(reasoningEffort); effort != "" {
-		payload["reasoning"] = map[string]string{"effort": effort}
+		req.Reasoning = &chatReasoning{Effort: effort}
 	}
-	return json.Marshal(payload)
+	return json.Marshal(req)
 }
 
 func truncateDetail(s string) string {

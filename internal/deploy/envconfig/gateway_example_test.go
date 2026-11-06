@@ -8,7 +8,6 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/deploy/gatewayconfig"
-	"github.com/behaviorengineering/polypus/internal/deploy/routers"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
@@ -49,7 +48,7 @@ func TestGatewayExampleNeedsOnlyOpenRouterKey(t *testing.T) {
 }
 
 func TestGatewayExampleHasTurnoRouter(t *testing.T) {
-	has, err := routers.HasTopLevelRouters(writeGatewayExample(t))
+	has, err := gatewayconfig.HasRouters(writeGatewayExample(t))
 	if err != nil {
 		t.Fatal(err)
 	}

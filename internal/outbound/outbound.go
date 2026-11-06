@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -77,7 +80,10 @@ func HTTPStatusPermanent(status int) bool {
 	return status >= 400 && status < 500
 }
 
-// transportRetryable reports whether a transport-level error should be retried.
+// transportRetryable reports whether a transport-level error should be retried. It
+// reads error types only (a network timeout, a reset, refused or broken connection,
+// a cut-off body, a temporary DNS failure), never the error text, so an error that
+// merely mentions "timeout" or "eof" is not retried.
 func transportRetryable(err error) bool {
 	if err == nil || errors.Is(err, ErrAbort) {
 		return false
@@ -89,18 +95,24 @@ func transportRetryable(err error) bool {
 	if errors.As(err, &ne) && ne.Timeout() {
 		return true
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "temporary failure") ||
-		strings.Contains(msg, "eof") ||
-		strings.Contains(msg, "broken pipe")
+	return errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, io.EOF) ||
+		isTemporaryDNS(err)
+}
+
+// isTemporaryDNS reports a DNS lookup that may succeed on another attempt.
+func isTemporaryDNS(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && (dnsErr.IsTemporary || dnsErr.IsTimeout)
 }
 
 func validateCtx(ctx context.Context) error {
-	if ctx == nil {
-		return derrors.New(derrors.CodeInvalid, "outbound", "context required")
+	if err := requireCtx(ctx); err != nil {
+		return err
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		return derrors.New(derrors.CodeFailedPrecondition, "outbound", "missing deadline")
@@ -108,9 +120,17 @@ func validateCtx(ctx context.Context) error {
 	return nil
 }
 
+// requireCtx fails closed on a nil context, without asking for a deadline.
+func requireCtx(ctx context.Context) error {
+	if ctx == nil {
+		return derrors.New(derrors.CodeInvalid, "outbound", "context required")
+	}
+	return nil
+}
+
 // Policies holds the circuit breakers for a set of outbound dependencies. A gateway
 // builds its own, so tests and gateways never share breaker state; calls without
-// one use the process default.
+// one use the process default. The zero value is ready to use.
 type Policies struct {
 	mu       sync.Mutex
 	breakers map[string]failsafe.Policy[any]
@@ -156,6 +176,9 @@ func (p *Policies) breakerFor(name string) failsafe.Policy[any] {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.breakers == nil {
+		p.breakers = map[string]failsafe.Policy[any]{}
+	}
 	if b, ok := p.breakers[name]; ok {
 		return b
 	}
@@ -188,19 +211,19 @@ type statusError struct{ code int }
 
 func (e *statusError) Error() string { return fmt.Sprintf("http status %d", e.code) }
 
-func retryPolicyFor(name string) failsafe.Policy[any] {
-	return retrypolicy.NewBuilder[any]().
-		HandleIf(func(_ any, err error) bool {
-			return retryableErr(err)
-		}).
-		WithMaxRetries(3).
-		WithBackoff(1*time.Second, 8*time.Second).
-		WithJitterFactor(0.2).
-		Build()
-}
+// retryPolicy is the one retry policy every dependency shares: it holds no state
+// between executions, so a single instance serves all of them.
+var retryPolicy = retrypolicy.NewBuilder[any]().
+	HandleIf(func(_ any, err error) bool {
+		return retryableErr(err)
+	}).
+	WithMaxRetries(3).
+	WithBackoff(1*time.Second, 8*time.Second).
+	WithJitterFactor(0.2).
+	Build()
 
 func (p *Policies) policies(name string) []failsafe.Policy[any] {
-	return append(p.breakerOnly(name), retryPolicyFor(name))
+	return append(p.breakerOnly(name), retryPolicy)
 }
 
 // breakerOnly is the policy set for a request that must not be retried.
@@ -240,7 +263,10 @@ func (p *Policies) Run(ctx context.Context, name string, fn func() error) error 
 // Do performs one HTTP request under retry and the breaker for name. req is cloned
 // per attempt. When every attempt ends in an HTTP status (permanent, or retryable
 // with retries spent), Do returns the last response with a nil error for the caller
-// to map.
+// to map. When ctx ends while Do waits between retries, Do returns the last
+// response together with a CodeTimeout (deadline) or CodeCanceled error, so the
+// cause is the deadline and not the upstream status. The caller closes resp.Body
+// whenever resp is not nil, error or not; CloseResponse does that.
 func (p *Policies) Do(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
 	p = p.orDefault()
 	if err := validateCtx(ctx); err != nil {
@@ -274,7 +300,7 @@ func (p *Policies) Do(ctx context.Context, name string, client *http.Client, req
 			if err != nil {
 				return err
 			}
-			retryStatus := name != DepHealth
+			retryStatus := depOf(name) != DepHealth
 			if retryStatus {
 				if HTTPStatusPermanent(r.StatusCode) {
 					resp = r
@@ -293,6 +319,12 @@ func (p *Policies) Do(ctx context.Context, name string, client *http.Client, req
 		})
 	if err != nil {
 		if resp != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				// The deadline ended the retries: keep the last upstream answer for
+				// the caller, and say why it stopped.
+				return resp, derrors.Wrap(ctxErr, contextCode(ctxErr), "outbound."+name, "deadline during retries").
+					With("dependency", name).With("last_status", strconv.Itoa(resp.StatusCode))
+			}
 			return resp, nil
 		}
 		return nil, dialError(name, err)
@@ -300,14 +332,39 @@ func (p *Policies) Do(ctx context.Context, name string, client *http.Client, req
 	return resp, nil
 }
 
+// CloseResponse closes resp's body when there is one. Do can return a response with
+// an error; a caller that returns on the error closes the response here. A failed
+// close of a body nobody reads has nothing left to report.
+func CloseResponse(resp *http.Response) {
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+}
+
+// contextCode maps a context error to its domain code: a deadline is CodeTimeout,
+// a cancel is CodeCanceled.
+func contextCode(err error) derrors.Code {
+	if errors.Is(err, context.Canceled) {
+		return derrors.CodeCanceled
+	}
+	return derrors.CodeTimeout
+}
+
 // DoOnce sends req exactly once under the breaker for name, with no retry. Use it
 // for paid or non-idempotent calls (inference, batch submit), whose upstream status
 // and Retry-After the caller acts on. Like Do, it fails closed without a deadline.
+// An HTTP 5xx counts as a breaker failure, and the response still goes back to the
+// caller with a nil error.
 func (p *Policies) DoOnce(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
-	p = p.orDefault()
 	if err := validateCtx(ctx); err != nil {
 		return nil, err
 	}
+	return p.orDefault().once(ctx, name, client, req)
+}
+
+// once is one attempt under the breaker for name, for DoOnce. ctx is already
+// validated.
+func (p *Policies) once(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
 	if client == nil {
 		return nil, derrors.New(derrors.CodeInvalid, "outbound", "http client is required")
 	}
@@ -323,12 +380,27 @@ func (p *Policies) DoOnce(ctx context.Context, name string, client *http.Client,
 				return err
 			}
 			resp = r
+			if breakerStatusFailure(r.StatusCode) {
+				// The breaker counts the failure; the caller still maps the answer.
+				return &statusError{code: r.StatusCode}
+			}
 			return nil
 		})
 	if err != nil {
+		if resp != nil {
+			return resp, nil
+		}
 		return nil, dialError(name, err)
 	}
 	return resp, nil
+}
+
+// breakerStatusFailure reports an HTTP status that counts against a single-attempt
+// call's breaker: a 5xx says the upstream is unhealthy. A 429 does not, so a quota
+// refusal keeps reaching the caller with its Retry-After instead of opening the
+// breaker.
+func breakerStatusFailure(status int) bool {
+	return status >= 500 && status <= 599
 }
 
 // dialError types a transport or breaker failure as CodeUnavailable for dep name,
@@ -341,9 +413,6 @@ func dialError(name string, err error) error {
 // body is reopened from GetBody for every attempt.
 func cloneRequest(ctx context.Context, req *http.Request) (*http.Request, error) {
 	clone := req.Clone(ctx)
-	if clone == nil {
-		return nil, fmt.Errorf("outbound: clone request")
-	}
 	if req.GetBody != nil && req.Body != nil && req.Body != http.NoBody {
 		body, err := req.GetBody()
 		if err != nil {

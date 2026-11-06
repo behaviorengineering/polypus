@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
 func TestLooksLikeCLIFlag(t *testing.T) {
@@ -87,8 +90,8 @@ func TestRunSecretSet_rejectsFlagShapedPositional(t *testing.T) {
 	}
 }
 
-func TestReadLineStdin_pipe(t *testing.T) {
-	got, err := readLineStdin(strings.NewReader("token-value\n"))
+func TestReadSecretStdin_pipe(t *testing.T) {
+	got, err := readSecretStdin(strings.NewReader("token-value\r\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,13 +100,111 @@ func TestReadLineStdin_pipe(t *testing.T) {
 	}
 }
 
-func TestReadLineStdin_pipeNoNewline(t *testing.T) {
-	got, err := readLineStdin(bytes.NewReader([]byte("only")))
+func TestReadSecretStdin_pipeNoNewline(t *testing.T) {
+	got, err := readSecretStdin(bytes.NewReader([]byte("only")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "only" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestValidateSecretValueRefusesMultiLine(t *testing.T) {
+	for _, v := range []string{"a\nb", "a\rb", "  first\nsecond\n"} {
+		if _, err := validateSecretValue(v); err == nil {
+			t.Errorf("%q: a multi-line value must be refused", v)
+		}
+	}
+	if got, err := validateSecretValue("  tok \n"); err != nil || got != "tok" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+// secretSetFixture declares CF_AI_API_KEY in a temporary config, swaps the keyring
+// for an in-memory one, and feeds stdin to Run. It returns the exit code, stderr
+// and the keyring.
+func secretSetFixture(t *testing.T, stdin string, args ...string) (int, string, *operatorconfig.MemKeyring) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("secrets:\n  - CF_AI_API_KEY\nbackends:\n  b:\n    base_url: http://127.0.0.1:1\n    capabilities: [chat]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+	mem := operatorconfig.NewMemKeyring()
+	operatorconfig.SetTestKeyring(mem)
+	t.Cleanup(func() { operatorconfig.SetTestKeyring(operatorconfig.OSKeyring{}) })
+
+	rIn, wIn, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldIn := os.Stdin
+	os.Stdin = rIn
+	t.Cleanup(func() { os.Stdin = oldIn })
+	go func() {
+		_, _ = io.WriteString(wIn, stdin)
+		_ = wIn.Close()
+	}()
+
+	stderrPath := filepath.Join(t.TempDir(), "stderr")
+	f, err := os.Create(stderrPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldErr := os.Stderr
+	os.Stderr = f
+	code := Run(append([]string{"secret", "set"}, args...))
+	os.Stderr = oldErr
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.ReadFile(stderrPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code, string(out), mem
+}
+
+func TestSecretSetStdinTrimsTrailingNewline(t *testing.T) {
+	code, errOut, mem := secretSetFixture(t, "tok\n", "--stdin", "CF_AI_API_KEY")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	got, err := mem.Get("polypus", "CF_AI_API_KEY")
+	if err != nil || got != "tok" {
+		t.Fatalf("stored %q, %v; want tok", got, err)
+	}
+}
+
+func TestSecretSetStdinRefusesMultiLine(t *testing.T) {
+	pem := "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n"
+	code, errOut, mem := secretSetFixture(t, pem, "--stdin", "CF_AI_API_KEY")
+	if code != 1 || !strings.Contains(errOut, "single-line") {
+		t.Fatalf("exit %d, want 1 with the single-line rule: %s", code, errOut)
+	}
+	if got, err := mem.Get("polypus", "CF_AI_API_KEY"); err == nil {
+		t.Fatalf("nothing should be stored, got %q", got)
+	}
+}
+
+func TestSecretSetStdinRefusesOversize(t *testing.T) {
+	code, errOut, mem := secretSetFixture(t, strings.Repeat("a", secretStdinMax+1), "--stdin", "CF_AI_API_KEY")
+	if code != 1 || !strings.Contains(errOut, "larger than") {
+		t.Fatalf("exit %d, want 1 for an oversize secret: %s", code, errOut)
+	}
+	if got, err := mem.Get("polypus", "CF_AI_API_KEY"); err == nil {
+		t.Fatalf("nothing should be stored, got %q", got)
+	}
+}
+
+func TestSecretSetPasswordRefusesMultiLine(t *testing.T) {
+	code, errOut, mem := secretSetFixture(t, "", "CF_AI_API_KEY", "--password", "line1\nline2")
+	if code != 1 || !strings.Contains(errOut, "single-line") {
+		t.Fatalf("exit %d, want 1 with the single-line rule: %s", code, errOut)
+	}
+	if _, err := mem.Get("polypus", "CF_AI_API_KEY"); err == nil {
+		t.Fatal("nothing should be stored")
 	}
 }
 

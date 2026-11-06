@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/behaviorengineering/polypus/internal/clients/registry"
 )
 
-func readEnvFile(path string) (map[string]string, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // G304: the operator's own images file
-	if err != nil {
-		return nil, fmt.Errorf("images: read %q: %w", path, err)
-	}
+// parseEnv reads KEY=VALUE lines of an images file, skipping blanks and comments.
+// Image pins are never quoted, so values are kept as written.
+func parseEnv(data string) map[string]string {
 	found := make(map[string]string)
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -23,7 +23,15 @@ func readEnvFile(path string) (map[string]string, error) {
 		}
 		found[strings.TrimSpace(key)] = strings.TrimSpace(val)
 	}
-	return found, nil
+	return found
+}
+
+func readEnvFile(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // G304: the operator's own images file
+	if err != nil {
+		return nil, fmt.Errorf("images: read %q: %w", path, err)
+	}
+	return parseEnv(string(data)), nil
 }
 
 func probeRefsFromEnv(path string, keys []string) ([]string, error) {
@@ -55,9 +63,9 @@ func versionFromRefs(refs []string) (string, error) {
 	if len(refs) == 0 {
 		return "", fmt.Errorf("images: no image refs")
 	}
-	_, tag, err := splitImageRef(refs[0])
+	ref, err := registry.ParseRef(refs[0])
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("images: %w", err)
 	}
-	return tag, nil
+	return ref.Tag, nil
 }

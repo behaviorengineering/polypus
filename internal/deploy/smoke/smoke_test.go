@@ -43,10 +43,12 @@ func TestRunSystemOneFromGateway(t *testing.T) {
 	if err := os.WriteFile(gw, []byte(`backends:
   cf_local:
     extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
     capabilities: [systemone]
   openrouter:
+    base_url: https://openrouter.ai/api/v1
     auth:
       bearer_env: OPENROUTER_API_KEY
     capabilities: [systemone]
@@ -111,16 +113,21 @@ func TestRunSystemOneFromGateway(t *testing.T) {
 	}
 }
 
-func TestRunSystemOneRequiresOpenRouterKey(t *testing.T) {
+// systemOneSkipFixture writes a gateway YAML with Cloudflare and OpenRouter
+// SystemOne backends and a dotenv holding only the Cloudflare secrets.
+func systemOneSkipFixture(t *testing.T) (gw, env string) {
+	t.Helper()
 	dir := t.TempDir()
-	gw := filepath.Join(dir, "gw.yaml")
+	gw = filepath.Join(dir, "gw.yaml")
 	if err := os.WriteFile(gw, []byte(`backends:
   cf_local:
     extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
     capabilities: [systemone]
   openrouter:
+    base_url: https://openrouter.ai/api/v1
     auth:
       bearer_env: OPENROUTER_API_KEY
     capabilities: [systemone]
@@ -130,12 +137,16 @@ func TestRunSystemOneRequiresOpenRouterKey(t *testing.T) {
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := filepath.Join(dir, ".env.deploy")
+	env = filepath.Join(dir, ".env.deploy")
 	if err := os.WriteFile(env, []byte("CF_AI_API_KEY=x\nCF_ACCOUNT_ID=1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return gw, env
+}
 
-	var models []string
+// systemOneServer answers /v1/systemone and records each model it was asked for.
+func systemOneServer(t *testing.T, models *[]string) *httptest.Server {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
@@ -148,7 +159,7 @@ func TestRunSystemOneRequiresOpenRouterKey(t *testing.T) {
 			var raw map[string]any
 			_ = json.Unmarshal([]byte(body), &raw)
 			if m, ok := raw["model"].(string); ok {
-				models = append(models, m)
+				*models = append(*models, m)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"answers":{"is_urgent":{"type":"noul","noul":0.9}}}`))
@@ -157,7 +168,14 @@ func TestRunSystemOneRequiresOpenRouterKey(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
+	return srv
+}
 
+func TestSystemOneSmokeSkipsMissingSecret(t *testing.T) {
+	gw, env := systemOneSkipFixture(t)
+	var models []string
+	srv := systemOneServer(t, &models)
+	var out strings.Builder
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	err := Run(ctx, Options{
@@ -165,12 +183,45 @@ func TestRunSystemOneRequiresOpenRouterKey(t *testing.T) {
 		WithSystemOne: true,
 		GatewayConfig: gw,
 		EnvDeploy:     env,
+		Out:           &out,
 	})
-	if err == nil || !strings.Contains(err.Error(), "openrouter/perplexity/pplx-decider-v1.2") {
-		t.Fatalf("expected required openrouter decider error, got %v", err)
+	if err != nil {
+		t.Fatalf("a SystemOne backend without its secret is skipped, not failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "smoke: skip systemone backend=openrouter model=openrouter/perplexity/pplx-decider-v1.2 (missing OPENROUTER_API_KEY)") {
+		t.Fatalf("skip line missing:\n%s", out.String())
+	}
+	if !slices.Equal(models, []string{"cf_local/typesafe/jev"}) {
+		t.Fatalf("probes %v: only the backend with its secrets runs", models)
+	}
+}
+
+func TestSystemOneSmokeSaysWhenRequestedButAllSkipped(t *testing.T) {
+	gw, env := systemOneSkipFixture(t)
+	if err := os.WriteFile(env, []byte("UNRELATED=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var models []string
+	srv := systemOneServer(t, &models)
+	var out strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	err := Run(ctx, Options{
+		BaseURL:            srv.URL,
+		WithSystemOne:      true,
+		SystemOneRequested: true,
+		GatewayConfig:      gw,
+		EnvDeploy:          env,
+		Out:                &out,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(models) != 0 {
-		t.Fatalf("decider must not skip; got probes %v", models)
+		t.Fatalf("no SystemOne probe may run without secrets, got %v", models)
+	}
+	if !strings.Contains(out.String(), "smoke: systemone not run: --with-systemone was set") {
+		t.Fatalf("summary line missing:\n%s", out.String())
 	}
 }
 

@@ -20,9 +20,9 @@ func TestVerifyPublishCompleteTagRefRetries503(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"object":{"sha":"abc123"}}`))
 		case strings.Contains(r.URL.Path, "/actions/runs/9/jobs"):
-			_, _ = w.Write([]byte(`{"jobs":[{"name":"verify","conclusion":"success"}]}`))
+			_, _ = w.Write([]byte(`{"jobs":[{"name":"verify","conclusion":"success","created_at":"2026-01-01T00:00:00Z"}]}`))
 		case strings.Contains(r.URL.Path, "/actions/runs"):
-			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":9,"name":"Auto patch release","conclusion":"success"}]}`))
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":9,"name":"Auto patch release","conclusion":"success","created_at":"2026-01-01T00:00:00Z"}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -50,9 +50,9 @@ func TestVerifyPublishCompleteOK(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_, _ = w.Write([]byte(`{"object":{"sha":"abc123"}}`))
 		case strings.Contains(r.URL.Path, "/actions/runs/9/jobs"):
-			_, _ = w.Write([]byte(`{"jobs":[{"name":"verify","conclusion":"success"}]}`))
+			_, _ = w.Write([]byte(`{"jobs":[{"name":"verify","conclusion":"success","created_at":"2026-01-01T00:00:00Z"}]}`))
 		case strings.Contains(r.URL.Path, "/actions/runs"):
-			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":9,"name":"Auto patch release","conclusion":"success"}]}`))
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":9,"name":"Auto patch release","conclusion":"success","created_at":"2026-01-01T00:00:00Z"}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -79,7 +79,7 @@ func TestVerifyPublishCompleteMissingVerifyJob(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/actions/runs/9/jobs"):
 			_, _ = w.Write([]byte(`{"jobs":[{"name":"verify","conclusion":"failure"}]}`))
 		case strings.Contains(r.URL.Path, "/actions/runs"):
-			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":9,"name":"Auto patch release","conclusion":"success"}]}`))
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":9,"name":"Auto patch release","conclusion":"success","created_at":"2026-01-01T00:00:00Z"}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -101,7 +101,7 @@ func TestVerifyPublishCompleteRebuildOK(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "docker-release.yml") {
-			_, _ = w.Write([]byte(`{"workflow_runs":[{"name":"Docker release","display_title":"0.2.40-r1","conclusion":"success"}]}`))
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"name":"Docker release","display_title":"0.2.40-r1","conclusion":"success","created_at":"2026-01-01T00:00:00Z"}]}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"workflow_runs":[]}`))

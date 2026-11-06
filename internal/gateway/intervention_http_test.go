@@ -3,10 +3,8 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -36,16 +34,9 @@ func TestWriteErrorJSONInterventionHeaderAndBody(t *testing.T) {
 
 func TestMergeReasoningIntoContentSetsIntervention(t *testing.T) {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	ctx := observability.WithInterventionState(context.Background())
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(`{"choices":[{"index":0,"message":{"reasoning_content":"hidden","content":""}}]}`)),
-	}
-	d := chatDial{}
-	if err := d.writeResponse(rec, req.WithContext(ctx), resp, "test"); err != nil {
-		t.Fatal(err)
-	}
+	raw := []byte(`{"choices":[{"index":0,"message":{"reasoning_content":"hidden","content":""}}]}`)
+	_ = normalizeChatCompletion(ctx, rec, raw)
 	if got := rec.Header().Get(config.InterventionHeader); got != "merge_reasoning_into_content" {
 		t.Fatalf("header=%q", got)
 	}

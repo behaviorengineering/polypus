@@ -12,6 +12,7 @@ func TestSystemOneSmokeTargetsOpenRouterDecider(t *testing.T) {
 	body := `backends:
   cf_local:
     extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
     capabilities: [chat, systemone]
@@ -19,6 +20,7 @@ func TestSystemOneSmokeTargetsOpenRouterDecider(t *testing.T) {
       allow:
         - typesafe/jev
   openrouter:
+    base_url: https://openrouter.ai/api/v1
     auth:
       bearer_env: OPENROUTER_API_KEY
     capabilities: [chat, systemone]

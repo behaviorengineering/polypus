@@ -75,17 +75,9 @@ func synthesize(ctx context.Context, opts Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := httpDefaultDo(req)
+	body, err := call(req, "speech", audioBodyMax)
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := ioReadAllLimit(resp.Body, 8<<20)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &statusError{what: "speech", status: resp.StatusCode, body: truncate(string(body), 200)}
 	}
 	if path := strings.TrimSpace(opts.AudioOutPath); path != "" {
 		if err := os.WriteFile(path, body, 0o600); err != nil {
@@ -116,17 +108,9 @@ func transcribeAudio(ctx context.Context, opts Options, audio []byte) (string, e
 		return "", err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	resp, err := httpDefaultDo(req)
+	raw, err := call(req, "transcription", probeBodyMax)
 	if err != nil {
 		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := ioReadAllLimit(resp.Body, 1<<20)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", &statusError{what: "transcription", status: resp.StatusCode, body: truncate(string(raw), 200)}
 	}
 	var flat struct {
 		Text string `json:"text"`

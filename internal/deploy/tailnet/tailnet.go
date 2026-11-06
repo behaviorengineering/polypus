@@ -66,7 +66,7 @@ func cliStatus(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return execx.OutputContext(ctx, bin, []string{"status", "--json"}, nil)
+	return execx.StdoutContext(ctx, bin, []string{"status", "--json"}, nil)
 }
 
 // findCLI looks for tailscale on PATH, then where the desktop apps install it.

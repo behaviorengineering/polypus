@@ -52,11 +52,11 @@ func (a *accessProtector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// One read of the key file decides both whether the gateway is locked and
 		// whether this request's key opens it. A store that cannot be read fails
 		// closed, even for the liveness probe.
-		open, err := a.keys.Authorize(extractAccessCredential(r))
+		open, err := a.keys.Authorize(r.Context(), extractAccessCredential(r))
 		unauthorized := derrors.CodeOf(err) == derrors.CodeUnauthorized
 		switch {
 		case err != nil && !unauthorized:
-			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+			a.gw.writeHandlerError(w, derrors.Wrap(err, derrors.CodeNotReady, "gateway.accessProtector", "access key store unreadable"))
 			return
 		case accessExempt(r):
 			// The liveness probe needs no key.
@@ -81,7 +81,7 @@ func accessExempt(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
-	return r.URL.Path == "/health"
+	return r.URL.Path == pathHealth
 }
 
 func extractAccessCredential(r *http.Request) string {
@@ -125,6 +125,6 @@ func bearerOrBasicToken(header string) string {
 func (a *accessProtector) writeAccessUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Bearer realm="polypus", Basic realm="polypus"`)
 	a.gw.writeOpenAIError(w, http.StatusUnauthorized, openaiError{
-		Message: "gateway access key required", Type: errTypeInvalidRequest, Code: "unauthorized",
+		Message: "gateway access key required", Type: errTypeInvalidRequest, Code: string(derrors.CodeUnauthorized),
 	})
 }

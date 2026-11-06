@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,7 +61,7 @@ func TestApplyAllowOverlaySkipsUngated(t *testing.T) {
 
 func TestOverlayAddRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "overlay.yaml")
-	if err := OverlayAdd(path, "cf", "@cf/new"); err != nil {
+	if err := OverlayAdd(context.Background(), path, "cf", "@cf/new"); err != nil {
 		t.Fatal(err)
 	}
 	file, err := LoadAllowOverlay(path)
@@ -70,7 +71,7 @@ func TestOverlayAddRoundTrip(t *testing.T) {
 	if len(file.Backends["cf"].Allow) != 1 || file.Backends["cf"].Allow[0] != "@cf/new" {
 		t.Fatalf("got %v", file.Backends["cf"].Allow)
 	}
-	if err := OverlayRemove(path, "cf", "@cf/new"); err != nil {
+	if err := OverlayRemove(context.Background(), path, "cf", "@cf/new"); err != nil {
 		t.Fatal(err)
 	}
 	file, err = LoadAllowOverlay(path)

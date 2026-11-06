@@ -9,12 +9,16 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
-// SystemOneDecisionRaw sends a TypeSafe-shaped SystemOne body via Bifrost Decision.
-// The backend must be registered as native OpenRouter (CustomProviderConfig nil).
+// SystemOneDecisionRaw sends a Typesafe-shaped SystemOne body via Bifrost Decision.
+// The backend must be one whose Bifrost provider implements the decision operation:
+// native OpenRouter (CustomProviderConfig nil) or a typesafe extension backend.
 func (c *Client) SystemOneDecisionRaw(ctx context.Context, call Call) ([]byte, error) {
 	backendID, downstream, body, timeout := call.BackendID, call.Model, call.Body, call.Timeout
 	if c == nil || c.bf == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.SystemOneDecisionRaw", "bifrost not configured")
+	}
+	if err := requireCallBound(ctx, timeout, "router.SystemOneDecisionRaw"); err != nil {
+		return nil, err
 	}
 	var native typesafe.TypesafeDecisionRequest
 	if err := json.Unmarshal(body, &native); err != nil {
@@ -23,7 +27,8 @@ func (c *Client) SystemOneDecisionRaw(ctx context.Context, call Call) ([]byte, e
 	if downstream != "" {
 		native.Model = downstream
 	}
-	bctx := c.bifrostContext(ctx, timeout, false)
+	bctx, cancel := c.bifrostContext(ctx, timeout, false)
+	defer cancel()
 	bfReq, err := native.ToBifrostDecisionRequest(bctx)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "router.SystemOneDecisionRaw", "convert decision request")
@@ -38,8 +43,8 @@ func (c *Client) SystemOneDecisionRaw(ctx context.Context, call Call) ([]byte, e
 	}
 	if resp == nil {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.SystemOneDecisionRaw", "empty decision response from backend").
-			With("backend", backendID).
-			With("model", downstream)
+			With(fieldBackend, backendID).
+			With(fieldModel, downstream)
 	}
 	if len(resp.NativeResponse) > 0 {
 		return resp.NativeResponse, nil
@@ -52,6 +57,6 @@ func (c *Client) SystemOneDecisionRaw(ctx context.Context, call Call) ([]byte, e
 		return raw, nil
 	}
 	return nil, derrors.New(derrors.CodeUnavailable, "router.SystemOneDecisionRaw", "decision response missing provider body").
-		With("backend", backendID).
-		With("model", downstream)
+		With(fieldBackend, backendID).
+		With(fieldModel, downstream)
 }

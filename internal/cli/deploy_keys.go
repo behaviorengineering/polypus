@@ -3,7 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
-	"net/http"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -36,7 +36,11 @@ polypus deploy smoke sends it. Run polypus deploy run first.`,
 			if err != nil {
 				return err
 			}
-			cfg := clientkey.Config{Project: env.Name(), KeyName: keyName, Rotate: rotate}
+			url := strings.TrimRight(healthURL, "/")
+			if url == "" {
+				url = env.GatewayURL()
+			}
+			cfg := clientkey.Config{Project: env.Name(), KeyName: keyName, Rotate: rotate, HealthURL: url, SkipVerify: skipVerify}
 			if dryRun {
 				verb := "generate"
 				if rotate {
@@ -46,36 +50,16 @@ polypus deploy smoke sends it. Run polypus deploy run first.`,
 					verb, env.Name(), secrets.ClientKeyName, env.Name())
 				return err
 			}
-			ctx, cancel := context.WithTimeout(cmd.Context(), clientKeyBudget)
-			defer cancel()
-			name, err := clientkey.Create(ctx, cfg)
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			if _, err := fmt.Fprintf(out, "client-key: stored key %s as %s in keyring service %s\n", name, secrets.ClientKeyName, env.Name()); err != nil {
-				return err
-			}
-			if skipVerify {
-				return nil
-			}
-			key, err := secrets.Lookup(nil, env.Name(), secrets.ClientKeyName)
-			if err != nil {
-				return err
-			}
-			url := strings.TrimRight(healthURL, "/")
-			if url == "" {
-				url = env.GatewayURL()
-			}
-			if err := clientkey.Verify(ctx, &http.Client{}, url, key); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(out, "client-key: verified at %s: 401 without the key, 200 with it\n", url)
-			return err
+			return withTracing(cmd, func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(ctx, clientKeyBudget)
+				defer cancel()
+				res, err := clientkey.Lock(ctx, cfg)
+				return reportClientKey(cmd.OutOrStdout(), env, res, err)
+			})
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&config, "config", "", "the environment's config.yaml (default: "+envconfig.ConfigEnv+", then ~/.config/polypus/deploy/config.yaml)")
+	f.StringVar(&config, "config", "", deployConfigHelp)
 	f.StringVar(&keyName, "name", clientkey.DefaultKeyName, "key name in the gateway's key store")
 	f.BoolVar(&rotate, "rotate", false, "replace the existing key of that name instead of adding one")
 	f.BoolVar(&dryRun, "dry-run", false, "print what would happen; change nothing")
@@ -84,11 +68,30 @@ polypus deploy smoke sends it. Run polypus deploy run first.`,
 	return cmd
 }
 
+// reportClientKey prints what clientkey.Lock did: the stored key (even when the
+// verify step then failed) and, when it ran, the verified URL.
+func reportClientKey(out io.Writer, env envconfig.Environment, res clientkey.Result, err error) error {
+	if res.Name != "" {
+		if _, werr := fmt.Fprintf(out, "client-key: stored key %s as %s in keyring service %s\n", res.Name, secrets.ClientKeyName, env.Name()); werr != nil {
+			return werr
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if res.VerifiedURL == "" {
+		return nil
+	}
+	_, err = fmt.Fprintf(out, "client-key: verified at %s: 401 without the key, 200 with it\n", res.VerifiedURL)
+	return err
+}
+
 func newDeploySecretCmd() *cobra.Command {
 	secret := &cobra.Command{
-		Use:   "secret",
-		Short: "Store an environment's secrets in its keyring service",
-		Args:  cobra.NoArgs,
+		Use:     "secret",
+		Short:   "Store an environment's secrets in its keyring service",
+		GroupID: groupSetup,
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := cmd.Help(); err != nil {
 				return err
@@ -121,7 +124,7 @@ YAML, or POLYPUS_API_KEY. The value comes from a hidden prompt, or stdin with --
 				_, err := fmt.Fprintf(cmd.OutOrStdout(), "secret set: would store %s in keyring service %s\n", name, env.Name())
 				return err
 			}
-			value, err := readDeploySecret(name, fromStdin)
+			value, err := readDeploySecret(cmd.ErrOrStderr(), name, fromStdin)
 			if err != nil {
 				return err
 			}
@@ -133,7 +136,7 @@ YAML, or POLYPUS_API_KEY. The value comes from a hidden prompt, or stdin with --
 		},
 	}
 	f := set.Flags()
-	f.StringVar(&config, "config", "", "the environment's config.yaml (default: "+envconfig.ConfigEnv+", then ~/.config/polypus/deploy/config.yaml)")
+	f.StringVar(&config, "config", "", deployConfigHelp)
 	f.BoolVar(&fromStdin, "stdin", false, "read the secret from stdin")
 	f.BoolVar(&dryRun, "dry-run", false, "check the name and print where it would go; write nothing")
 	secret.AddCommand(set)
@@ -154,9 +157,13 @@ func requireEnvironmentSecret(env envconfig.Environment, name string) error {
 	return nil
 }
 
-func readDeploySecret(name string, fromStdin bool) (string, error) {
+func readDeploySecret(errOut io.Writer, name string, fromStdin bool) (string, error) {
 	if fromStdin {
-		return readLineStdin(os.Stdin)
+		return readSecretStdin(os.Stdin)
 	}
-	return readSecretPrompt("polypus deploy secret set", name, os.Stdin)
+	v, err := readSecretPrompt(errOut, "polypus deploy secret set", name, os.Stdin)
+	if err != nil {
+		return "", err
+	}
+	return validateSecretValue(v)
 }

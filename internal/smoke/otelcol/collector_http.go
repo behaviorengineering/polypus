@@ -2,6 +2,7 @@ package otelcol
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,32 +10,46 @@ import (
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
-func smokeHTTPDo(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	return outbound.Do(ctx, outbound.DepHealth, client, req)
+// probeBodyMax caps a backend answer the smoke reads.
+const probeBodyMax = 1 << 20
+
+// probeAnswer is one backend answer: its status and the start of its body.
+type probeAnswer struct {
+	status int
+	line   string // for example "404 Not Found".
+	body   []byte
 }
 
-func readLimitedBody(resp *http.Response, limit int64) ([]byte, error) {
-	if resp == nil || resp.Body == nil {
-		return nil, fmt.Errorf("collector smoke: nil response body")
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+func (a probeAnswer) ok() bool { return a.status >= 200 && a.status < 300 }
+
+// fetch sends req through the outbound seam and reads at most probeBodyMax bytes of
+// the answer, closing the body before it returns.
+func fetch(ctx context.Context, req *http.Request) (probeAnswer, error) {
+	resp, err := outbound.Do(ctx, outbound.DepHealth, http.DefaultClient, req)
 	if err != nil {
-		discardAndClose(resp.Body)
-		return nil, fmt.Errorf("collector smoke: read body: %w", err)
+		outbound.CloseResponse(resp)
+		return probeAnswer{}, err
 	}
-	if err := resp.Body.Close(); err != nil {
-		return body, fmt.Errorf("collector smoke: close body: %w", err)
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, probeBodyMax))
+	if err != nil {
+		return probeAnswer{}, fmt.Errorf("collector smoke: read body: %w", err)
 	}
-	return body, nil
+	return probeAnswer{status: resp.StatusCode, line: resp.Status, body: body}, nil
 }
 
-func discardAndClose(rc io.ReadCloser) {
-	if rc == nil {
-		return
+// decodeListOrData reads a bare JSON array, or an object that holds it under "data".
+func decodeListOrData[T any](body []byte) ([]T, error) {
+	var list []T
+	err := json.Unmarshal(body, &list)
+	if err == nil {
+		return list, nil
 	}
-	_, _ = io.Copy(io.Discard, rc)
-	_ = rc.Close()
+	var wrapped struct {
+		Data []T `json:"data"`
+	}
+	if werr := json.Unmarshal(body, &wrapped); werr != nil {
+		return nil, err
+	}
+	return wrapped.Data, nil
 }

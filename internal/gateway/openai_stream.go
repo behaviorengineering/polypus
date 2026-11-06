@@ -45,97 +45,127 @@ func (st *openAIStreamSanitizer) hasAnyFinished() bool {
 	return false
 }
 
+// sanitizedChunk is what the sanitizer made of one stream chunk.
+type sanitizedChunk struct {
+	// out is the chunk to emit; nil when action is streamSSEDrop.
+	out    []byte
+	action streamSSEAction
+	// alias is set when the chunk carried both reasoning spellings.
+	alias bool
+}
+
 // sanitizeOpenAIStreamChunk enforces the public OpenAI stream contract on one JSON chunk.
 // stripExtraFields removes Bifrost-only extra_fields before emitting to clients.
 // On malformed JSON, fail open: emit the original bytes unchanged.
-func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtraFields bool) ([]byte, streamSSEAction, bool) {
+func sanitizeOpenAIStreamChunk(body []byte, st *openAIStreamSanitizer, stripExtraFields bool) sanitizedChunk {
 	if st == nil {
 		st = newOpenAIStreamSanitizer()
 	}
+	chunk, ok := decodeChatChunk(body)
+	if !ok {
+		if st.hasAnyFinished() {
+			return sanitizedChunk{action: streamSSEDrop}
+		}
+		return sanitizedChunk{out: body, action: streamSSEForward}
+	}
+	changed := stripExtraFields && chunk.deleteRootKey(keyExtraFields)
 	action := streamSSEForward
-	changed := false
-
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(body, &root); err != nil {
-		if st.hasAnyFinished() {
-			return nil, streamSSEDrop, false
+	late := st.afterFinish(chunk.choices)
+	st.markFinished(chunk.choices)
+	if late {
+		if !chunk.hasUsage() {
+			return sanitizedChunk{action: streamSSEDrop}
 		}
-		return body, action, true
-	}
-	if stripExtraFields {
-		if _, has := root["extra_fields"]; has {
-			delete(root, "extra_fields")
-			changed = true
-		}
-	}
-
-	rawChoices, hasChoices := root["choices"]
-	if !hasChoices {
-		if !changed {
-			return body, action, true
-		}
-		out, err := json.Marshal(root)
-		if err != nil {
-			return body, action, true
-		}
-		return out, action, true
-	}
-	var choices []map[string]json.RawMessage
-	if err := json.Unmarshal(rawChoices, &choices); err != nil {
-		if st.hasAnyFinished() {
-			return nil, streamSSEDrop, false
-		}
-		return body, action, true
-	}
-
-	hasUsage := !isJSONNull(root["usage"])
-
-	for _, ch := range choices {
-		idx := streamChoiceIndex(ch)
-		if !st.finished[idx] {
-			continue
-		}
-		if hasUsage {
-			root["choices"] = json.RawMessage("[]")
-			action = streamSSERewriteUsage
-			changed = true
-			break
-		}
-		return nil, streamSSEDrop, false
-	}
-
-	for _, ch := range choices {
-		idx := streamChoiceIndex(ch)
-		if isTerminalStreamFinishReason(ch["finish_reason"]) {
-			st.finished[idx] = true
-		}
-	}
-
-	if fixed, ok := ensureStreamChoiceFinishReasonFromRoot(root); ok {
-		root = fixed
-		changed = true
-		if err := json.Unmarshal(root["choices"], &choices); err != nil {
-			return body, action, true
-		}
-	}
-
-	if stripDualReasoningAlias(choices) {
-		updated, err := json.Marshal(choices)
-		if err != nil {
-			return body, action, true
-		}
-		root["choices"] = updated
+		// The usage tail is legal after finish_reason; late choices are not.
+		chunk.choices = []map[string]json.RawMessage{}
+		action = streamSSERewriteUsage
 		changed = true
 	}
+	changed = ensureChoiceFinishReasons(chunk.choices) || changed
+	alias := stripDualReasoningAlias(chunk.choices)
+	return sanitizedChunk{out: chunk.encodeIfChanged(body, changed || alias), action: action, alias: alias}
+}
 
+// afterFinish reports whether any of choices continues an index that already sent
+// its terminal finish_reason.
+func (st *openAIStreamSanitizer) afterFinish(choices []map[string]json.RawMessage) bool {
+	for _, ch := range choices {
+		if st.finished[streamChoiceIndex(ch)] {
+			return true
+		}
+	}
+	return false
+}
+
+// markFinished records each choice index that sends a terminal finish_reason.
+func (st *openAIStreamSanitizer) markFinished(choices []map[string]json.RawMessage) {
+	for _, ch := range choices {
+		if isTerminalStreamFinishReason(ch[keyFinishReason]) {
+			st.finished[streamChoiceIndex(ch)] = true
+		}
+	}
+}
+
+// chatChunk is one OpenAI chat object, a stream chunk or a whole completion,
+// decoded once so each contract rule edits the same maps.
+type chatChunk struct {
+	root map[string]json.RawMessage
+	// choices is the decoded choices array; nil when root has none.
+	choices []map[string]json.RawMessage
+}
+
+// decodeChatChunk decodes raw. ok is false when raw is not a JSON object or its
+// choices are not an array of objects.
+func decodeChatChunk(raw []byte) (chatChunk, bool) {
+	var c chatChunk
+	if err := json.Unmarshal(raw, &c.root); err != nil {
+		return chatChunk{}, false
+	}
+	rawChoices, ok := c.root[keyChoices]
+	if !ok {
+		return c, true
+	}
+	if err := json.Unmarshal(rawChoices, &c.choices); err != nil {
+		return chatChunk{}, false
+	}
+	return c, true
+}
+
+func (c *chatChunk) deleteRootKey(key string) bool {
+	if _, ok := c.root[key]; !ok {
+		return false
+	}
+	delete(c.root, key)
+	return true
+}
+
+func (c *chatChunk) hasUsage() bool {
+	return !isJSONNull(c.root["usage"])
+}
+
+// encode marshals the chunk with its edited choices.
+func (c *chatChunk) encode() ([]byte, error) {
+	if c.choices != nil {
+		raw, err := json.Marshal(c.choices)
+		if err != nil {
+			return nil, err
+		}
+		c.root[keyChoices] = raw
+	}
+	return json.Marshal(c.root)
+}
+
+// encodeIfChanged returns the re-encoded chunk when changed, else original. A chunk
+// that cannot be encoded fails open to original.
+func (c *chatChunk) encodeIfChanged(original []byte, changed bool) []byte {
 	if !changed {
-		return body, action, true
+		return original
 	}
-	out, err := json.Marshal(root)
+	out, err := c.encode()
 	if err != nil {
-		return body, action, true
+		return original
 	}
-	return out, action, true
+	return out
 }
 
 func streamChoiceIndex(ch map[string]json.RawMessage) int {
@@ -150,28 +180,6 @@ func streamChoiceIndex(ch map[string]json.RawMessage) int {
 	return idx
 }
 
-func openAIStreamJSONEqual(a, b []byte) bool {
-	if bytes.Equal(a, b) {
-		return true
-	}
-	var va, vb any
-	if err := json.Unmarshal(a, &va); err != nil {
-		return false
-	}
-	if err := json.Unmarshal(b, &vb); err != nil {
-		return false
-	}
-	ba, err := json.Marshal(va)
-	if err != nil {
-		return false
-	}
-	bb, err := json.Marshal(vb)
-	if err != nil {
-		return false
-	}
-	return bytes.Equal(ba, bb)
-}
-
 func isTerminalStreamFinishReason(raw json.RawMessage) bool {
 	if isJSONNull(raw) {
 		return false
@@ -183,32 +191,18 @@ func isTerminalStreamFinishReason(raw json.RawMessage) bool {
 	return strings.TrimSpace(s) != ""
 }
 
-func ensureStreamChoiceFinishReasonFromRoot(root map[string]json.RawMessage) (map[string]json.RawMessage, bool) {
-	rawChoices, ok := root["choices"]
-	if !ok {
-		return root, false
-	}
-	var choices []map[string]json.RawMessage
-	if err := json.Unmarshal(rawChoices, &choices); err != nil || len(choices) == 0 {
-		return root, false
-	}
+// ensureChoiceFinishReasons gives every choice a finish_reason key (null mid-stream),
+// which OpenAI-compatible clients such as llm-go require.
+func ensureChoiceFinishReasons(choices []map[string]json.RawMessage) bool {
 	changed := false
-	for i := range choices {
-		if _, has := choices[i]["finish_reason"]; has {
+	for _, ch := range choices {
+		if _, has := ch[keyFinishReason]; has {
 			continue
 		}
-		choices[i]["finish_reason"] = json.RawMessage(jsonNull)
+		ch[keyFinishReason] = json.RawMessage(jsonNull)
 		changed = true
 	}
-	if !changed {
-		return root, false
-	}
-	updatedChoices, err := json.Marshal(choices)
-	if err != nil {
-		return root, false
-	}
-	root["choices"] = updatedChoices
-	return root, true
+	return changed
 }
 
 func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action streamSSEAction) {
@@ -220,38 +214,6 @@ func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action strea
 	dumpIllegalStreamChunk(ctx, idx, openaiJSON, nil)
 }
 
-// choiceHasBothReasoningSpellings reports OpenAI JSON with both reasoning keys on a delta or message.
-func choiceHasBothReasoningSpellings(raw []byte) bool {
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &root); err != nil {
-		return false
-	}
-	rawChoices, ok := root["choices"]
-	if !ok {
-		return false
-	}
-	var choices []map[string]json.RawMessage
-	if err := json.Unmarshal(rawChoices, &choices); err != nil {
-		return false
-	}
-	for _, ch := range choices {
-		for _, field := range []string{"delta", "message"} {
-			rawObj, ok := ch[field]
-			if !ok {
-				continue
-			}
-			var obj map[string]json.RawMessage
-			if err := json.Unmarshal(rawObj, &obj); err != nil {
-				continue
-			}
-			if jsonFieldPresent(obj, "reasoning") && jsonFieldPresent(obj, "reasoning_content") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func jsonFieldPresent(obj map[string]json.RawMessage, key string) bool {
 	raw, ok := obj[key]
 	if !ok {
@@ -260,61 +222,110 @@ func jsonFieldPresent(obj map[string]json.RawMessage, key string) bool {
 	return !isJSONNull(raw)
 }
 
-// stripReasoningAliasJSON drops reasoning_content when reasoning is also present.
-func stripReasoningAliasJSON(raw []byte) ([]byte, bool) {
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &root); err != nil {
-		return raw, false
-	}
-	rawChoices, ok := root["choices"]
+// choiceObjectFields are the choice members that carry a message: delta in a stream
+// chunk, message in a completion.
+var choiceObjectFields = []string{"delta", "message"}
+
+// editChoiceObject decodes ch[field] as an object, runs edit on it and stores it back
+// when edit reports a change.
+func editChoiceObject(ch map[string]json.RawMessage, field string, edit func(obj map[string]json.RawMessage) bool) bool {
+	raw, ok := ch[field]
 	if !ok {
-		return raw, false
+		return false
 	}
-	var choices []map[string]json.RawMessage
-	if err := json.Unmarshal(rawChoices, &choices); err != nil {
-		return raw, false
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return false
 	}
-	if !stripDualReasoningAlias(choices) {
-		return raw, false
+	if !edit(obj) {
+		return false
 	}
-	updated, err := json.Marshal(choices)
+	updated, err := json.Marshal(obj)
 	if err != nil {
-		return raw, false
+		return false
 	}
-	root["choices"] = updated
-	out, err := json.Marshal(root)
-	if err != nil {
-		return raw, false
-	}
-	return out, true
+	ch[field] = updated
+	return true
 }
 
-// stripDualReasoningAlias keeps OpenAI "reasoning" and deletes the OpenRouter alias.
+// stripDualReasoningAlias keeps OpenAI "reasoning" and deletes the OpenRouter alias
+// wherever a delta or message carries both. It reports whether it found any.
 func stripDualReasoningAlias(choices []map[string]json.RawMessage) bool {
 	changed := false
-	for i := range choices {
-		for _, field := range []string{"delta", "message"} {
-			rawObj, ok := choices[i][field]
-			if !ok {
-				continue
-			}
-			var obj map[string]json.RawMessage
-			if err := json.Unmarshal(rawObj, &obj); err != nil {
-				continue
-			}
-			if !jsonFieldPresent(obj, "reasoning") || !jsonFieldPresent(obj, "reasoning_content") {
-				continue
-			}
-			delete(obj, "reasoning_content")
-			updated, err := json.Marshal(obj)
-			if err != nil {
-				continue
-			}
-			choices[i][field] = updated
-			changed = true
+	for _, ch := range choices {
+		for _, field := range choiceObjectFields {
+			changed = editChoiceObject(ch, field, func(obj map[string]json.RawMessage) bool {
+				if !jsonFieldPresent(obj, keyReasoning) || !jsonFieldPresent(obj, keyReasoningContent) {
+					return false
+				}
+				delete(obj, keyReasoningContent)
+				return true
+			}) || changed
 		}
 	}
 	return changed
+}
+
+// mergeReasoningIntoContent copies a message's reasoning into its content when the
+// content is empty, so clients that read only content get the answer.
+func mergeReasoningIntoContent(choices []map[string]json.RawMessage) bool {
+	changed := false
+	for _, ch := range choices {
+		changed = editChoiceObject(ch, "message", func(msg map[string]json.RawMessage) bool {
+			if jsonStringField(msg["content"]) != "" {
+				return false
+			}
+			reasoning := firstNonEmpty(jsonStringField(msg[keyReasoningContent]), jsonStringField(msg[keyReasoning]))
+			if reasoning == "" {
+				return false
+			}
+			raw, err := json.Marshal(reasoning)
+			if err != nil {
+				return false
+			}
+			msg["content"] = raw
+			return true
+		}) || changed
+	}
+	return changed
+}
+
+// completionFixes says which contract fixes normalizeCompletionBody applied.
+type completionFixes struct {
+	merged bool // reasoning was copied into empty content.
+	alias  bool // a duplicate reasoning_content alias was dropped.
+}
+
+// normalizeCompletionBody applies the OpenAI contract fixes to a non-stream chat
+// completion. A body it cannot decode or encode passes through unchanged.
+func normalizeCompletionBody(raw []byte) ([]byte, completionFixes) {
+	chunk, ok := decodeChatChunk(raw)
+	if !ok || len(chunk.choices) == 0 {
+		return raw, completionFixes{}
+	}
+	fixes := completionFixes{merged: mergeReasoningIntoContent(chunk.choices)}
+	fixes.alias = stripDualReasoningAlias(chunk.choices)
+	if !fixes.merged && !fixes.alias {
+		return raw, fixes
+	}
+	out, err := chunk.encode()
+	if err != nil {
+		return raw, completionFixes{}
+	}
+	return out, fixes
+}
+
+// normalizeChatCompletion applies the OpenAI contract fixes to a non-stream body and
+// records each intervention on the response and the span.
+func normalizeChatCompletion(ctx context.Context, w http.ResponseWriter, raw []byte) []byte {
+	out, fixes := normalizeCompletionBody(raw)
+	if fixes.merged {
+		setIntervention(ctx, w, observability.InterventionMergeReasoningIntoContent)
+	}
+	if fixes.alias {
+		setIntervention(ctx, w, observability.InterventionReasoningAlias)
+	}
+	return out
 }
 
 // streamCopyOpts configures delayed HTTP status for proxy SSE.
@@ -324,11 +335,8 @@ type streamCopyOpts struct {
 	delayWriteHeader bool
 }
 
-// copyOpenAIChatStream applies sanitizeOpenAIStreamChunk to each SSE data frame from src.
-func copyOpenAIChatStream(ctx context.Context, dst io.Writer, src io.Reader, stripExtraFields bool) (int64, error) {
-	return copyOpenAIChatStreamWithOpts(ctx, dst, src, stripExtraFields, nil)
-}
-
+// copyOpenAIChatStreamWithOpts applies sanitizeOpenAIStreamChunk to each SSE data
+// frame from src. opts is nil when dst is not the HTTP response.
 func copyOpenAIChatStreamWithOpts(ctx context.Context, dst io.Writer, src io.Reader, stripExtraFields bool, opts *streamCopyOpts) (int64, error) {
 	if ctx == nil {
 		return 0, derrors.New(derrors.CodeInvalid, "gateway.copyOpenAIChatStream", "context required")
@@ -415,20 +423,16 @@ func (c *sseCopier) rewriteLine(line string, out *strings.Builder) {
 		return
 	}
 	original := []byte(data)
-	hadAlias := choiceHasBothReasoningSpellings(original)
-	sanitized, action, emit := sanitizeOpenAIStreamChunk(original, c.san, c.strip)
-	if !emit || action == streamSSEDrop {
-		recordProxyStreamChunk(c.ctx, original, action)
+	res := sanitizeOpenAIStreamChunk(original, c.san, c.strip)
+	if res.action == streamSSEDrop {
+		recordProxyStreamChunk(c.ctx, original, res.action)
 		return
 	}
-	if hadAlias {
+	if res.alias {
 		observability.RecordIntervention(c.ctx, observability.InterventionReasoningAlias)
 	}
-	if !c.strip && action == streamSSEForward && openAIStreamJSONEqual(original, sanitized) {
-		sanitized = original
-	}
 	out.WriteString("data: ")
-	out.Write(sanitized)
+	out.Write(res.out)
 	out.WriteByte('\n')
 }
 

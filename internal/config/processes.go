@@ -47,7 +47,6 @@ func LoadProcessFlags() (ProcessFlags, error) {
 	return out, nil
 }
 
-// loadProcessFlags is LoadProcessFlags before its error is typed at the package boundary.
 // LoadProcessFlagsFrom reads process toggles from the config at path, or from the
 // resolved config when path is empty.
 func LoadProcessFlagsFrom(path string) (ProcessFlags, error) {
@@ -61,6 +60,7 @@ func LoadProcessFlagsFrom(path string) (ProcessFlags, error) {
 	return out, nil
 }
 
+// loadProcessFlags is LoadProcessFlags before its error is typed at the package boundary.
 func loadProcessFlags() (ProcessFlags, error) {
 	path, err := ResolveConfigPathWithError()
 	if err != nil {
@@ -103,17 +103,8 @@ func ParseEnvBool(key string, fallback bool) (bool, error) {
 	if v, ok := ParseBoolishEnv(raw); ok {
 		return v, nil
 	}
-	return fallback, derrors.New(derrors.CodeInvalid, "config.ParseEnvBool", "not a boolean (use 1/0, true/false, yes/no or on/off)").
+	return fallback, derrors.New(derrors.CodeInvalid, "config.ParseEnvBool", key+" is not a boolean (use 1, true, yes, on, 0, false, no or off)").
 		With("env", key).With("value", raw)
-}
-
-// EnvBool reads a boolean env var with ParseBoolishEnv, returning fallback when it is
-// unset or not a recognised word.
-func EnvBool(key string, fallback bool) bool {
-	if v, ok := ParseBoolishEnv(os.Getenv(key)); ok {
-		return v
-	}
-	return fallback
 }
 
 // ParseBoolishEnv maps common truthy/falsey env values. Empty returns ok=false.

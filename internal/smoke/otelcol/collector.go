@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/config"
+
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -35,7 +37,10 @@ type CollectorOptions struct {
 	HyperDXAPIKey    string
 	HyperDXContainer string
 	PollInterval     time.Duration
-	AllowHyperDXCH   bool
+	// DisableHyperDXCH turns off the ClickHouse fallback (docker exec into the HyperDX
+	// container) used when the HyperDX v2 API is unavailable. The zero value allows
+	// it; POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK=0, false or no also turns it off.
+	DisableHyperDXCH bool
 	// SkipHyperDXVerify skips HyperDX routing checks (for example tailnet laptops without /api/v2 or Docker).
 	SkipHyperDXVerify bool
 	// Logger receives progress (endpoints, trace ids, probe counts). Nil discards it,
@@ -181,25 +186,25 @@ func joinProbeErrors(results []probeResult) error {
 func (o CollectorOptions) withCollectorDefaults() CollectorOptions {
 	out := o
 	if strings.TrimSpace(out.OTLPEndpoint) == "" {
-		out.OTLPEndpoint = envOr("POLYPUS_OTLP_ENDPOINT", envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4317"))
+		out.OTLPEndpoint = config.EnvOr("POLYPUS_OTLP_ENDPOINT", config.EnvOr("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4317"))
 	}
 	if strings.TrimSpace(out.PhoenixBaseURL) == "" {
-		out.PhoenixBaseURL = envOr("PHOENIX_BASE_URL", "http://127.0.0.1:6006")
+		out.PhoenixBaseURL = config.EnvOr("PHOENIX_BASE_URL", "http://127.0.0.1:6006")
 	}
 	if strings.TrimSpace(out.PhoenixProject) == "" {
-		out.PhoenixProject = envOr("PHOENIX_PROJECT", "default")
+		out.PhoenixProject = config.EnvOr("PHOENIX_PROJECT", "default")
 	}
 	if strings.TrimSpace(out.PhoenixAPIKey) == "" {
 		out.PhoenixAPIKey = strings.TrimSpace(os.Getenv("PHOENIX_API_KEY"))
 	}
 	if strings.TrimSpace(out.HyperDXBaseURL) == "" {
-		out.HyperDXBaseURL = envOr("HYPERDX_BASE_URL", "http://127.0.0.1:8080")
+		out.HyperDXBaseURL = config.EnvOr("HYPERDX_BASE_URL", "http://127.0.0.1:8080")
 	}
 	if strings.TrimSpace(out.HyperDXAPIKey) == "" {
 		out.HyperDXAPIKey = strings.TrimSpace(os.Getenv("HYPERDX_API_KEY"))
 	}
 	if strings.TrimSpace(out.HyperDXContainer) == "" {
-		out.HyperDXContainer = envOr("POLYPUS_HYPERDX_CONTAINER", "polypus-hyperdx")
+		out.HyperDXContainer = config.EnvOr("POLYPUS_HYPERDX_CONTAINER", "polypus-hyperdx")
 	}
 	if out.PollInterval <= 0 {
 		out.PollInterval = DefaultCollectorPollInterval
@@ -207,10 +212,10 @@ func (o CollectorOptions) withCollectorDefaults() CollectorOptions {
 	if out.Logger == nil {
 		out.Logger = slog.New(slog.DiscardHandler)
 	}
-	out.AllowHyperDXCH = true
+	// The environment can only turn the fallback off; a caller's DisableHyperDXCH stays.
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK"))) {
 	case "0", "false", "no":
-		out.AllowHyperDXCH = false
+		out.DisableHyperDXCH = true
 	}
 	return out
 }
@@ -219,6 +224,16 @@ func exportCollectorSpan(ctx context.Context, endpoint, spanName string, attrs .
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint == "" {
 		return "", fmt.Errorf("missing OTLP endpoint")
+	}
+
+	// Build the resource first, so no exporter (gRPC connection) exists on its error path.
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName("polypus-local-collector-smoke"),
+		),
+	)
+	if err != nil {
+		return "", fmt.Errorf("collector smoke: otlp resource: %w", err)
 	}
 
 	var exp sdktrace.SpanExporter
@@ -244,15 +259,6 @@ func exportCollectorSpan(ctx context.Context, endpoint, spanName string, attrs .
 		if err != nil {
 			return "", fmt.Errorf("collector smoke: otlp http exporter: %w", err)
 		}
-	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName("polypus-local-collector-smoke"),
-		),
-	)
-	if err != nil {
-		return "", fmt.Errorf("collector smoke: otlp resource: %w", err)
 	}
 
 	tp := sdktrace.NewTracerProvider(
@@ -353,20 +359,17 @@ func phoenixSpanCountREST(ctx context.Context, opts CollectorOptions, traceID st
 		req.Header.Set("Authorization", "Bearer "+opts.PhoenixAPIKey)
 	}
 
-	resp, err := smokeHTTPDo(ctx, http.DefaultClient, req)
+	ans, err := fetch(ctx, req)
 	if err != nil {
 		return 0, fmt.Errorf("collector smoke: phoenix: %w", err)
 	}
-	body, err := readLimitedBody(resp, 1<<20)
-	if err != nil {
-		return 0, fmt.Errorf("collector smoke: phoenix: %w", err)
-	}
-	if resp.StatusCode == http.StatusNotFound {
+	if ans.status == http.StatusNotFound {
 		return 0, errPhoenixRESTUnavailable
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("phoenix: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	if !ans.ok() {
+		return 0, fmt.Errorf("phoenix: %s: %s", ans.line, strings.TrimSpace(string(ans.body)))
 	}
+	body := ans.body
 	trim := strings.TrimSpace(string(body))
 	if strings.HasPrefix(trim, "<") || strings.HasPrefix(strings.ToLower(trim), "<!doctype") {
 		return 0, errPhoenixRESTUnavailable
@@ -392,7 +395,7 @@ func hyperdxTraceCount(ctx context.Context, opts CollectorOptions, traceID strin
 	if err == nil {
 		return n, nil
 	}
-	if !errors.Is(err, errHyperDXAPIUnavailable) || !opts.AllowHyperDXCH {
+	if !errors.Is(err, errHyperDXAPIUnavailable) || opts.DisableHyperDXCH {
 		return 0, err
 	}
 	return hyperdxClickhouseDocker(ctx, opts.HyperDXContainer, traceID)
@@ -413,48 +416,60 @@ func hyperdxSearchV2(ctx context.Context, opts CollectorOptions, traceID string)
 	if err != nil {
 		return 0, err
 	}
-	base := strings.TrimRight(opts.HyperDXBaseURL, "/")
-	sourcesURL := base + "/api/v2/sources"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourcesURL, nil)
+	sourceID, err := hyperdxTraceSourceID(ctx, opts)
 	if err != nil {
-		return 0, fmt.Errorf("collector smoke: hyperdx sources request: %w", err)
+		return 0, err
+	}
+	return hyperdxSearchCount(ctx, opts, sourceID, traceID)
+}
+
+// hyperdxRequest builds a HyperDX v2 API request with the API key, when set.
+func hyperdxRequest(ctx context.Context, opts CollectorOptions, method, path string, body []byte) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(opts.HyperDXBaseURL, "/")+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("collector smoke: hyperdx request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	if opts.HyperDXAPIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+opts.HyperDXAPIKey)
 	}
-	resp, err := smokeHTTPDo(ctx, http.DefaultClient, req)
-	if err != nil {
-		return 0, fmt.Errorf("collector smoke: hyperdx sources: %w", err)
-	}
-	body, err := readLimitedBody(resp, 1<<20)
-	if err != nil {
-		return 0, fmt.Errorf("collector smoke: hyperdx sources: %w", err)
-	}
-	if resp.StatusCode == http.StatusNotFound ||
-		(resp.StatusCode == http.StatusUnauthorized && opts.HyperDXAPIKey == "") {
-		return 0, errHyperDXAPIUnavailable
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("hyperdx: sources: %s: %s", resp.Status, strings.TrimSpace(string(body)))
-	}
+	return req, nil
+}
 
-	var sources []hyperdxSource
-	if err := json.Unmarshal(body, &sources); err != nil {
-		var wrapped struct {
-			Data []hyperdxSource `json:"data"`
-		}
-		if err2 := json.Unmarshal(body, &wrapped); err2 != nil {
-			return 0, fmt.Errorf("hyperdx: decode sources: %w", err)
-		}
-		sources = wrapped.Data
+// hyperdxTraceSourceID returns the id of HyperDX's trace source.
+func hyperdxTraceSourceID(ctx context.Context, opts CollectorOptions) (string, error) {
+	req, err := hyperdxRequest(ctx, opts, http.MethodGet, "/api/v2/sources", nil)
+	if err != nil {
+		return "", err
+	}
+	ans, err := fetch(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("collector smoke: hyperdx sources: %w", err)
+	}
+	if ans.status == http.StatusNotFound ||
+		(ans.status == http.StatusUnauthorized && opts.HyperDXAPIKey == "") {
+		return "", errHyperDXAPIUnavailable
+	}
+	if !ans.ok() {
+		return "", fmt.Errorf("hyperdx: sources: %s: %s", ans.line, strings.TrimSpace(string(ans.body)))
+	}
+	sources, err := decodeListOrData[hyperdxSource](ans.body)
+	if err != nil {
+		return "", fmt.Errorf("hyperdx: decode sources: %w", err)
 	}
 	sourceID := pickHyperDXTraceSource(sources)
 	if sourceID == "" {
-		return 0, fmt.Errorf("hyperdx: no trace source in /api/v2/sources")
+		return "", fmt.Errorf("hyperdx: no trace source in /api/v2/sources")
 	}
+	return sourceID, nil
+}
 
+// hyperdxSearchCount counts the rows HyperDX holds for traceID in the last 15 minutes.
+func hyperdxSearchCount(ctx context.Context, opts CollectorOptions, sourceID, traceID string) (int, error) {
 	now := time.Now().UTC()
-	payload := hyperdxSearchPayload{
+	buf, err := json.Marshal(hyperdxSearchPayload{
 		SourceID:      sourceID,
 		StartTime:     now.Add(-15 * time.Minute).Format(time.RFC3339),
 		EndTime:       now.Add(2 * time.Minute).Format(time.RFC3339),
@@ -462,43 +477,27 @@ func hyperdxSearchV2(ctx context.Context, opts CollectorOptions, traceID string)
 		WhereLanguage: "sql",
 		Select:        "TraceId",
 		MaxResults:    10,
-	}
-	buf, err := json.Marshal(payload)
+	})
 	if err != nil {
 		return 0, fmt.Errorf("collector smoke: hyperdx search payload: %w", err)
 	}
-	searchURL := base + "/api/v2/search"
-	sreq, err := http.NewRequestWithContext(ctx, http.MethodPost, searchURL, bytes.NewReader(buf))
-	if err != nil {
-		return 0, fmt.Errorf("collector smoke: hyperdx search request: %w", err)
-	}
-	sreq.Header.Set("Content-Type", "application/json")
-	if opts.HyperDXAPIKey != "" {
-		sreq.Header.Set("Authorization", "Bearer "+opts.HyperDXAPIKey)
-	}
-	sresp, err := smokeHTTPDo(ctx, http.DefaultClient, sreq)
-	if err != nil {
-		return 0, fmt.Errorf("collector smoke: hyperdx search: %w", err)
-	}
-	sbody, err := readLimitedBody(sresp, 1<<20)
+	req, err := hyperdxRequest(ctx, opts, http.MethodPost, "/api/v2/search", buf)
 	if err != nil {
 		return 0, err
 	}
-	if sresp.StatusCode == http.StatusNotFound {
+	ans, err := fetch(ctx, req)
+	if err != nil {
+		return 0, fmt.Errorf("collector smoke: hyperdx search: %w", err)
+	}
+	if ans.status == http.StatusNotFound {
 		return 0, errHyperDXAPIUnavailable
 	}
-	if sresp.StatusCode < 200 || sresp.StatusCode >= 300 {
-		return 0, fmt.Errorf("hyperdx: search: %s: %s", sresp.Status, strings.TrimSpace(string(sbody)))
+	if !ans.ok() {
+		return 0, fmt.Errorf("hyperdx: search: %s: %s", ans.line, strings.TrimSpace(string(ans.body)))
 	}
-	var rows []json.RawMessage
-	if err := json.Unmarshal(sbody, &rows); err != nil {
-		var wrapped struct {
-			Data []json.RawMessage `json:"data"`
-		}
-		if err2 := json.Unmarshal(sbody, &wrapped); err2 != nil {
-			return 0, fmt.Errorf("hyperdx: decode search: %w", err)
-		}
-		rows = wrapped.Data
+	rows, err := decodeListOrData[json.RawMessage](ans.body)
+	if err != nil {
+		return 0, fmt.Errorf("hyperdx: decode search: %w", err)
 	}
 	return len(rows), nil
 }
@@ -583,11 +582,4 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
-}
-
-func envOr(key, def string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return def
 }

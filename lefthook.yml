@@ -1,3 +1,12 @@
-# Fleet hooks from cursor-packs (see lefthook/README.md)
-extends:
-  - .cursor/packs/shared/lefthook/lefthook.yml
+# Git hooks for this repository. Scripts run from the repository root.
+# Install once per clone or worktree: lefthook install
+
+pre-commit:
+  parallel: false
+  commands:
+    default-branch-refuse:
+      run: bash scripts/git-hooks/default-branch-refuse.sh
+    go-format:
+      glob: "*.go"
+      run: bash scripts/git-hooks/go-format-staged.sh {staged_files}
+      stage_fixed: true

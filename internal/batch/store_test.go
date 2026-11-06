@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +23,7 @@ func TestDiskStoreFileRoundTrip(t *testing.T) {
 		Purpose:  FilePurposeBatch,
 	}
 	content := []byte(`{"custom_id":"a","method":"POST","url":"/v1/chat/completions","body":{}}`)
-	if err := store.SaveFile(rec, content); err != nil {
+	if err := store.SaveFile(t.Context(), rec, content); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.GetFile(rec.ID)
@@ -61,13 +62,13 @@ func TestDiskStoreRejectsIDsOutsideRoot(t *testing.T) {
 		if _, err := store.ReadFileContent(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
 			t.Errorf("ReadFileContent(%q): want CodeInvalid, got %v", id, err)
 		}
-		if err := store.DeleteFile(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+		if err := store.DeleteFile(t.Context(), id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
 			t.Errorf("DeleteFile(%q): want CodeInvalid, got %v", id, err)
 		}
 		if _, err := store.GetBatch(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
 			t.Errorf("GetBatch(%q): want CodeInvalid, got %v", id, err)
 		}
-		if err := store.UpdateBatch(Meta{ID: id}); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+		if err := store.UpdateBatch(t.Context(), Meta{ID: id}); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
 			t.Errorf("UpdateBatch(%q): want CodeInvalid, got %v", id, err)
 		}
 	}
@@ -84,7 +85,7 @@ func TestDeleteFileReferencedByBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := &FileRecord{Filename: "in.jsonl", Purpose: FilePurposeBatch}
-	if err := store.SaveFile(rec, []byte("x")); err != nil {
+	if err := store.SaveFile(t.Context(), rec, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
 	meta := &Meta{
@@ -92,10 +93,10 @@ func TestDeleteFileReferencedByBatch(t *testing.T) {
 		InputFileID: rec.ID,
 		Endpoint:    EndpointChatCompletions,
 	}
-	if err := store.SaveBatch(meta); err != nil {
+	if err := store.SaveBatch(t.Context(), meta); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.DeleteFile(rec.ID); err == nil {
+	if err := store.DeleteFile(t.Context(), rec.ID); err == nil {
 		t.Fatal("expected conflict deleting referenced file")
 	}
 }
@@ -119,13 +120,13 @@ func TestDeleteFileFailsClosedOnUnreadableBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := &FileRecord{Filename: "in.jsonl", Purpose: FilePurposeBatch}
-	if err := store.SaveFile(rec, []byte("x")); err != nil {
+	if err := store.SaveFile(t.Context(), rec, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, batchMetaDir, "batch_corrupt.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.DeleteFile(rec.ID); err == nil {
+	if err := store.DeleteFile(t.Context(), rec.ID); err == nil {
 		t.Fatal("an unreadable batch may reference the file; delete must refuse")
 	}
 	if _, err := store.GetFile(rec.ID); err != nil {
@@ -142,7 +143,7 @@ func TestDeleteFileMissingIsNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 	var de *derrors.Error
-	if err := store.DeleteFile("file_missing"); !errors.As(err, &de) || de.Code() != derrors.CodeNotFound {
+	if err := store.DeleteFile(t.Context(), "file_missing"); !errors.As(err, &de) || de.Code() != derrors.CodeNotFound {
 		t.Fatalf("want CodeNotFound, got %v", err)
 	}
 }
@@ -151,5 +152,75 @@ func TestParseBatchJSONLRejectsDuplicateCustomID(t *testing.T) {
 	line := `{"custom_id":"a","method":"POST","url":"/v1/chat/completions","body":{"model":"m","messages":[{"role":"user","content":"hi"}]}}`
 	if _, err := ParseBatchJSONL([]byte(line+"\n"+line), EndpointChatCompletions); err == nil {
 		t.Fatal("duplicate custom_id must be rejected")
+	}
+}
+
+// TestDiskStoreTwoStoresSameRootSerialise stands in for two gateway processes on one
+// batch directory: each DiskStore has its own mutex, so only the file lock under the
+// root keeps their finalises apart. Exactly one may apply, and the loser must not
+// leave output files behind.
+func TestDiskStoreTwoStoresSameRootSerialise(t *testing.T) {
+	root := t.TempDir()
+	fixed := time.Date(2026, 3, 29, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return fixed }
+	first, err := NewDiskStore(root, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewDiskStore(root, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const batches = 8
+	ids := make([]string, batches)
+	for i := range ids {
+		meta := &Meta{Status: StatusInProgress, InputFileID: "file-in", Endpoint: EndpointChatCompletions}
+		if err := first.SaveBatch(t.Context(), meta); err != nil {
+			t.Fatal(err)
+		}
+		ids[i] = meta.ID
+	}
+	patch := FinalizePatch{
+		OkJSONL:       []byte(`{"custom_id":"a"}` + "\n"),
+		RequestCounts: RequestCounts{Total: 1, Completed: 1},
+		Status:        StatusCompleted,
+		CompletedAt:   fixed.Unix(),
+	}
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		applied = map[string]int{}
+	)
+	for _, id := range ids {
+		for _, store := range []*DiskStore{first, second} {
+			wg.Go(func() {
+				_, ok, err := store.TryFinalizeBatch(t.Context(), id, patch)
+				if err != nil {
+					t.Errorf("finalize %s: %v", id, err)
+					return
+				}
+				if ok {
+					mu.Lock()
+					applied[id]++
+					mu.Unlock()
+				}
+			})
+		}
+	}
+	wg.Wait()
+	for _, id := range ids {
+		if applied[id] != 1 {
+			t.Fatalf("batch %s finalised %d times; want exactly once across both stores", id, applied[id])
+		}
+	}
+	files, err := os.ReadDir(filepath.Join(root, fileContentDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != batches {
+		t.Fatalf("want one output file per batch (%d), got %d: a lost race left files behind", batches, len(files))
+	}
+	if _, err := os.Stat(filepath.Join(root, lockBase+".lock")); err != nil {
+		t.Fatalf("the cross-process lock lives under the store root: %v", err)
 	}
 }

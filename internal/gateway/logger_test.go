@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/openaicompat"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -18,6 +19,7 @@ import (
 var testShared = &shared{
 	log:    slog.New(slog.DiscardHandler),
 	compat: openaicompat.Client{HTTP: http.DefaultClient, Policies: outbound.NewPolicies()},
+	clock:  time.Now,
 }
 
 func TestRequestFailureLogsToTheInjectedLogger(t *testing.T) {

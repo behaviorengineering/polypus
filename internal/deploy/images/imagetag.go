@@ -9,7 +9,7 @@ import (
 
 var imageTagPattern = regexp.MustCompile(`^([0-9]+\.[0-9]+\.[0-9]+)(?:-r([1-9][0-9]*))?$`)
 
-// ParsedImageTag is an GHCR pin tag (app semver plus optional rebuild).
+// ParsedImageTag is a GHCR pin tag (app semver plus optional rebuild).
 type ParsedImageTag struct {
 	App     string
 	Rebuild int
@@ -34,22 +34,9 @@ func ParseImageTag(tag string) (ParsedImageTag, error) {
 	return out, nil
 }
 
-// AppGitTag returns vX.Y.Z for git and GitHub Release lookups.
-func AppGitTag(app string) string {
+// appGitTag returns vX.Y.Z for git and GitHub Release lookups.
+func appGitTag(app string) string {
 	app = strings.TrimSpace(app)
 	app = strings.TrimPrefix(app, "v")
 	return "v" + app
-}
-
-// AppVersionFromEnv returns app semver X.Y.Z from POLYPUS_IMAGE (strips -rN).
-func AppVersionFromEnv(path string) (string, error) {
-	pin, err := PolypusVersionFromEnv(path)
-	if err != nil {
-		return "", err
-	}
-	parsed, err := ParseImageTag(pin)
-	if err != nil {
-		return "", err
-	}
-	return parsed.App, nil
 }

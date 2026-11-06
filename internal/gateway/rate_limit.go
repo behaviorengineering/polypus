@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -65,22 +64,10 @@ func setRateLimitExtraHeaders(w http.ResponseWriter, err error) {
 	})
 }
 
-func openaiRateLimitBody(status int, header http.Header, body []byte) ([]byte, bool) {
-	rl := ratelimit.Classify("gateway.proxyChat", status, header, body)
-	if rl == nil {
-		return nil, false
-	}
-	out, err := json.Marshal(openaiErrorBody{Error: openaiRateLimitError(rl)})
-	if err != nil {
-		return nil, false
-	}
-	return out, true
-}
-
 func openaiRateLimitError(err error) openaiError {
 	code := derrors.Field(err, ratelimit.FieldCFCode)
 	if code == "" {
-		code = "rate_limited"
+		code = string(derrors.CodeRateLimited)
 	}
 	return openaiError{
 		Message: rateLimitClientMessage(err),

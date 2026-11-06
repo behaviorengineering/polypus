@@ -78,21 +78,3 @@ func TestWriteRateLimitErrorXRateLimitHeaders(t *testing.T) {
 		t.Fatalf("type=%q", body.Error.Type)
 	}
 }
-
-func TestOpenAIRateLimitBodyFromWorkersJSON(t *testing.T) {
-	raw := []byte(`{"success":false,"errors":[{"code":3040,"message":"Capacity temporarily exceeded, please try again."}]}`)
-	out, ok := openaiRateLimitBody(http.StatusTooManyRequests, nil, raw)
-	if !ok {
-		t.Fatal("expected rewrite")
-	}
-	var body openaiErrorBody
-	if err := json.Unmarshal(out, &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Error.Code != ratelimit.WorkersCapacityCode {
-		t.Fatalf("code=%q", body.Error.Code)
-	}
-	if body.Error.Type != "rate_limit_error" {
-		t.Fatalf("type=%q", body.Error.Type)
-	}
-}

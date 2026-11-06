@@ -1,12 +1,15 @@
-// Package catalog holds what the provider model-catalog clients share: the OpenAI
-// Models API shapes, a TTL cache, a strict list with stale-cache fallback, and a
-// process-scoped client registry.
+// Package catalog holds what the provider clients share: the OpenAI Models API
+// shapes, a TTL cache, a strict list with stale-cache fallback, a process-scoped
+// client registry, one capped JSON GET with status mapping, and the small text
+// helpers their error messages use.
 package catalog
 
 import (
 	"context"
+	"crypto/sha256"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,12 +46,8 @@ type Cache struct {
 	now    func() time.Time
 }
 
-// NewCache returns an empty cache that serves entries younger than ttl.
-func NewCache(ttl time.Duration) *Cache {
-	return NewCacheClock(ttl, time.Now)
-}
-
-// NewCacheClock is NewCache with an injected clock (tests step past the TTL).
+// NewCacheClock returns an empty cache that serves entries younger than ttl, aged by
+// now (the gateway's clock; tests step it past the TTL). Panics on a nil clock.
 func NewCacheClock(ttl time.Duration, now func() time.Time) *Cache {
 	if now == nil {
 		panic("catalog.NewCacheClock: nil clock")
@@ -127,27 +126,40 @@ func ListStrict(ctx context.Context, src Source) (ModelList, error) {
 	return ModelList{Object: ObjectList, Data: models}, nil
 }
 
-// Registry keeps one client per key for the life of the process.
+// Registry keeps one client per key (a backend id) for the life of the process. Each
+// entry remembers a fingerprint of what the client was built from (its token and API
+// base); when that changes, Get builds a new client and drops the old one, so a rotated
+// token neither keeps the old client alive nor grows the map.
 type Registry[T any] struct {
 	mu      sync.Mutex
-	clients map[string]*T
+	clients map[string]registryEntry[T]
 }
 
-// Get returns the client for key, creating it once with create.
-func (r *Registry[T]) Get(key string, create func() (*T, error)) (*T, error) {
+// registryEntry is one cached client and the fingerprint it was built from. The
+// fingerprint is a hash, so the registry holds no token of its own.
+type registryEntry[T any] struct {
+	fingerprint [sha256.Size]byte
+	client      *T
+}
+
+// Get returns the client for key when it was built from the same fingerprint, else
+// builds one with create and replaces the entry. fingerprint carries every input
+// that makes a client stale, such as token + "\x00" + base.
+func (r *Registry[T]) Get(key, fingerprint string, create func() (*T, error)) (*T, error) {
+	fp := sha256.Sum256([]byte(fingerprint))
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if c, ok := r.clients[key]; ok {
-		return c, nil
+	if e, ok := r.clients[key]; ok && e.fingerprint == fp {
+		return e.client, nil
 	}
 	c, err := create()
 	if err != nil {
 		return nil, err
 	}
 	if r.clients == nil {
-		r.clients = map[string]*T{}
+		r.clients = map[string]registryEntry[T]{}
 	}
-	r.clients[key] = c
+	r.clients[key] = registryEntry[T]{fingerprint: fp, client: c}
 	return c, nil
 }
 
@@ -174,10 +186,23 @@ func StatusCode(status int) derrors.Code {
 	}
 }
 
-// Truncate shortens s to at most n bytes for error messages.
+// Truncate trims s and caps it at n runes for error messages, ending a cut string
+// with "...". It cuts on rune boundaries, so upstream text stays valid UTF-8.
 func Truncate(s string, n int) string {
-	if len(s) <= n {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n]
+	return string(r[:max(0, n)]) + "..."
+}
+
+// FirstNonEmpty returns the first value that is not blank, trimmed, or "".
+func FirstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }

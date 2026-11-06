@@ -171,3 +171,41 @@ func TestDockerExecRetryableReadsTheExitStatus(t *testing.T) {
 		t.Fatal("text alone is not a docker failure")
 	}
 }
+
+func TestCollectorDefaultsKeepTheCallersFallbackChoice(t *testing.T) {
+	t.Setenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", "")
+	if got := (CollectorOptions{DisableHyperDXCH: true}).withCollectorDefaults(); !got.DisableHyperDXCH {
+		t.Fatal("a caller's DisableHyperDXCH must survive the defaults")
+	}
+	if got := (CollectorOptions{}).withCollectorDefaults(); got.DisableHyperDXCH {
+		t.Fatal("the zero value allows the fallback")
+	}
+	t.Setenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", "0")
+	if got := (CollectorOptions{}).withCollectorDefaults(); !got.DisableHyperDXCH {
+		t.Fatal("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK=0 still turns the fallback off")
+	}
+}
+
+func TestHyperDXTraceCountSkipsTheDisabledFallback(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	opts := CollectorOptions{HyperDXBaseURL: srv.URL, DisableHyperDXCH: true, HyperDXContainer: "no-such-container"}
+	_, err := hyperdxTraceCount(ctx, opts, "0123456789abcdef0123456789abcdef")
+	if !errors.Is(err, errHyperDXAPIUnavailable) {
+		t.Fatalf("with the fallback off the API error is returned as is, got %v", err)
+	}
+}
+
+func TestDecodeListOrData(t *testing.T) {
+	for _, body := range []string{`[1,2]`, `{"data":[1,2]}`} {
+		got, err := decodeListOrData[int]([]byte(body))
+		if err != nil || len(got) != 2 {
+			t.Fatalf("%s: %v %v", body, got, err)
+		}
+	}
+	if _, err := decodeListOrData[int]([]byte(`"nope"`)); err == nil {
+		t.Fatal("want an error for neither shape")
+	}
+}

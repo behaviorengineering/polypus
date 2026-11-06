@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
-	"github.com/behaviorengineering/polypus/internal/batch/service"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/batches"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
@@ -40,7 +40,7 @@ func (h batchesHandler) serveBatches(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		h.serveBatchList(w, r)
 	default:
-		http.NotFound(w, r)
+		h.writeMethodNotAllowed(w, http.MethodGet, http.MethodPost)
 	}
 }
 
@@ -49,7 +49,7 @@ func (h batchesHandler) serveBatchByID(w http.ResponseWriter, r *http.Request) {
 		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatchByID", "batch store not configured"))
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/v1/batches/")
+	path := strings.TrimPrefix(r.URL.Path, pathBatchesPrefix)
 	path = strings.Trim(path, "/")
 	if strings.HasSuffix(path, "/cancel") {
 		id := strings.TrimSuffix(path, "/cancel")
@@ -58,11 +58,11 @@ func (h batchesHandler) serveBatchByID(w http.ResponseWriter, r *http.Request) {
 			h.serveBatchCancel(w, r, id)
 			return
 		}
-		http.NotFound(w, r)
+		h.writeMethodNotAllowed(w, http.MethodPost)
 		return
 	}
 	if r.Method != http.MethodGet {
-		http.NotFound(w, r)
+		h.writeMethodNotAllowed(w, http.MethodGet)
 		return
 	}
 	h.serveBatchRetrieve(w, r, path)
@@ -70,7 +70,7 @@ func (h batchesHandler) serveBatchByID(w http.ResponseWriter, r *http.Request) {
 
 func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request) {
 	const op = "gateway.serveBatchCreate"
-	reg := h.router.Registry()
+	reg := h.registry
 	if reg.Config().EffectiveBatchBackend() == "" {
 		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, op, "no batch backend configured"))
 		return
@@ -118,7 +118,7 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, op, errBackendNotFound).With("backend", backendID))
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, op, msgBackendNotFound).With("backend", backendID))
 		return
 	}
 
@@ -126,18 +126,18 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		Model: publicModel, BackendID: backendID, BackendURL: backend.BaseURL, Downstream: downstream,
 	})
 	var createErr error
-	defer func() { observability.EndDialSpan(span, createErr, backendID) }()
+	defer func() { endDialSpan(span, createErr, backendID) }()
 	ctx, cancel := h.batchHopContext(ctx, r.Header.Get(config.TimeoutHeader), backendID)
 	defer cancel()
-	meta, createErr := h.batches.Create(ctx, service.CreateRequest{
+	meta, createErr := h.batches.Create(ctx, batches.CreateRequest{
 		Backend:          backend,
 		PublicModel:      publicModel,
 		InputFileID:      inputID,
 		CompletionWindow: req.CompletionWindow,
-		Job:              service.Job{Downstream: downstream, Endpoint: req.Endpoint, Lines: parsed.Lines},
+		Job:              batches.Job{Downstream: downstream, Endpoint: req.Endpoint, Lines: parsed.Lines},
 	})
 	if createErr != nil {
-		h.writeUpstreamDialError(w, createErr, "", backendID, nil)
+		h.writeUpstreamDialError(w, dialFailure{err: createErr, upstream: backendID})
 		return
 	}
 	h.writeJSON(w, http.StatusOK, meta.Public())
@@ -156,9 +156,9 @@ func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Reques
 		h.writeHandlerError(w, err)
 		return
 	}
-	backend, ok := h.router.Registry().Backend(meta.BackendID)
-	if !ok && !batchTerminal(meta.Status) {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveBatchRetrieve", errBackendNotFound).
+	backend, ok := h.registry.Backend(meta.BackendID)
+	if !ok && !meta.Status.Terminal() {
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveBatchRetrieve", msgBackendNotFound).
 			With("backend", meta.BackendID))
 		return
 	}
@@ -196,27 +196,20 @@ func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request,
 		h.writeHandlerError(w, err)
 		return
 	}
-	backend, _ := h.router.Registry().Backend(meta.BackendID)
+	backend, ok := h.registry.Backend(meta.BackendID)
+	if !ok {
+		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveBatchCancel", msgBackendNotFound).
+			With("backend", meta.BackendID))
+		return
+	}
 	ctx, cancel := h.batchHopContext(r.Context(), r.Header.Get(config.TimeoutHeader), meta.BackendID)
 	defer cancel()
 	updated, err := h.batches.Cancel(ctx, backend, meta)
 	if err != nil {
-		h.writeUpstreamDialError(w, err, "", meta.BackendID, nil)
+		h.writeUpstreamDialError(w, dialFailure{err: err, upstream: meta.BackendID})
 		return
 	}
 	h.writeJSON(w, http.StatusOK, updated.Public())
-}
-
-// batchTerminal reports a batch that no refresh changes.
-func batchTerminal(status batch.Status) bool {
-	switch status {
-	case batch.StatusCompleted, batch.StatusFailed, batch.StatusCancelled, batch.StatusExpired:
-		return true
-	case batch.StatusValidating, batch.StatusInProgress, batch.StatusCancelling:
-		return false
-	default:
-		return false
-	}
 }
 
 // isBatchRefreshMiss reports a poll failure that should return the last-known batch
