@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -68,7 +69,7 @@ func loadServeOptions() (ServeOptions, error) {
 		if err != nil {
 			return ServeOptions{}, err
 		}
-		backend = fmt.Sprintf("http://%s:%d", mlxHost, mlxPort)
+		backend = httpBaseURL(mlxHost, mlxPort)
 	}
 	backend = strings.TrimRight(backend, "/")
 	return ServeOptions{
@@ -80,7 +81,7 @@ func loadServeOptions() (ServeOptions, error) {
 
 // ListenAddr returns host:port for the gateway.
 func (o ServeOptions) ListenAddr() string {
-	return fmt.Sprintf("%s:%d", o.Host, o.Port)
+	return joinHostPort(o.Host, o.Port)
 }
 
 // GatewayBaseURL returns the HTTP base URL Switchyard and render use to call back into Polypus.
@@ -98,7 +99,18 @@ func (o ServeOptions) GatewayBaseURL() string {
 	if port <= 0 {
 		port = DefaultPort
 	}
-	return fmt.Sprintf("http://%s:%d", host, port)
+	return httpBaseURL(host, port)
+}
+
+// joinHostPort joins host and port, bracketing an IPv6 host. A host already
+// written in brackets ([::1]) is accepted as well.
+func joinHostPort(host string, port int) string {
+	return net.JoinHostPort(strings.Trim(strings.TrimSpace(host), "[]"), strconv.Itoa(port))
+}
+
+// httpBaseURL is the http:// URL for host and port, bracketing an IPv6 host.
+func httpBaseURL(host string, port int) string {
+	return "http://" + joinHostPort(host, port)
 }
 
 // envPort reads a TCP port from env, or returns def when it is unset.

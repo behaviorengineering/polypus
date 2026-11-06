@@ -39,7 +39,7 @@ func TestGeminiGemmaLive(t *testing.T) {
 			},
 		},
 	}
-	client, err := NewClient(cfg)
+	client, err := NewClient(cfg, WithLogger(testLogger()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestGeminiToolCallLive(t *testing.T) {
 			},
 		},
 	}
-	client, err := NewClient(cfg)
+	client, err := NewClient(cfg, WithLogger(testLogger()))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -90,7 +90,11 @@ jobs:
           EVENT_NAME: ${{ github.event_name == 'workflow_run' && 'push' || github.event_name }}
           MANUAL_BUMP: ${{ github.event.inputs.bump }}
           HEAD_MSG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_commit.message || '' }}
-        run: bash .cursor/packs/shared/scripts/auto-patch-decide.sh
+          # Paths that never change the shipped binaries or images: agent harness,
+          # docs, the website and the release scripts themselves.
+          AUTO_PATCH_EXTRA_HARNESS_PATHS: ".cursor/* ai-copilots/* docs/* site/* scripts/ci/auto-patch-*"
+          AUTO_PATCH_EXTRA_PACKAGING_PATHS: "docker-bake.hcl scripts/ci/switchyard-smoke-routes.toml"
+        run: bash scripts/ci/auto-patch-decide.sh
 
       - name: Skip notice
         if: steps.decide.outputs.skip == 'true'

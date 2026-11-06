@@ -119,3 +119,13 @@ func TestBoardNotReadyTrips(t *testing.T) {
 		t.Fatalf("out-of-credit refusals must open the breaker, got %v", err)
 	}
 }
+
+func TestZeroValueBoardWorks(t *testing.T) {
+	var b Board
+	if err := b.Execute("leaf", func() error { return nil }); err != nil {
+		t.Fatalf("a zero Board must run fn, not panic on a nil map: %v", err)
+	}
+	if snap := b.Snapshot(); len(snap) != 1 || snap[0].Name != "leaf" {
+		t.Fatalf("snapshot=%+v", snap)
+	}
+}

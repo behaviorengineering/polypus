@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/openaicompat"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -16,8 +17,10 @@ import (
 // testShared carries the logger and compat client that handler helpers need; tests
 // of those helpers use it in place of a full gateway.
 var testShared = &shared{
-	log:    slog.New(slog.DiscardHandler),
-	compat: openaicompat.Client{HTTP: http.DefaultClient, Policies: outbound.NewPolicies()},
+	log:       slog.New(slog.DiscardHandler),
+	compat:    openaicompat.Client{HTTP: http.DefaultClient, Policies: outbound.NewPolicies()},
+	transport: newProxyTransport(0, outbound.NewPolicies()),
+	clock:     time.Now,
 }
 
 func TestRequestFailureLogsToTheInjectedLogger(t *testing.T) {

@@ -7,9 +7,12 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
+
+const opCloudflare = "batch.cloudflare"
 
 type cloudflareSubmitter struct {
 	client func() (*cloudflare.Client, error)
@@ -27,7 +30,7 @@ func NewCloudflareSubmitter(client func() (*cloudflare.Client, error), now func(
 
 func (s cloudflareSubmitter) Validate(job Job) error {
 	if !cloudflare.ModelSupportsBatch(job.Downstream) {
-		return derrors.New(derrors.CodeInvalid, "batch.cloudflare", "model does not support cloudflare batch").
+		return derrors.New(derrors.CodeInvalid, opCloudflare, "model does not support cloudflare batch").
 			With(keyModel, job.Downstream)
 	}
 	return nil
@@ -36,12 +39,12 @@ func (s cloudflareSubmitter) Validate(job Job) error {
 func (s cloudflareSubmitter) Submit(ctx context.Context, job Job, meta *batch.Meta) error {
 	client, err := s.client()
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeNotReady, "batch.cloudflare", "client")
+		return derrors.Wrap(err, derrors.CodeNotReady, opCloudflare, "client")
 	}
 	meta.CFModel = cloudflare.NormalizeModel(job.Downstream)
 	id, err := client.SubmitBatch(ctx, job.Downstream, job.Endpoint, job.Lines)
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opCloudflare, "submit").With("batch_id", meta.ID)
 	}
 	meta.CFRequestID = id
 	return nil
@@ -50,11 +53,11 @@ func (s cloudflareSubmitter) Submit(ctx context.Context, job Job, meta *batch.Me
 func (s cloudflareSubmitter) Poll(ctx context.Context, meta batch.Meta) (Poll, error) {
 	client, err := s.client()
 	if err != nil {
-		return Poll{}, derrors.Wrap(err, derrors.CodeNotReady, "batch.cloudflare", "client")
+		return Poll{}, derrors.Wrap(err, derrors.CodeNotReady, opCloudflare, "client")
 	}
 	poll, err := client.PollBatch(ctx, meta.CFModel, meta.CFRequestID)
 	if err != nil {
-		return Poll{}, err
+		return Poll{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opCloudflare, "poll").With("batch_id", meta.ID)
 	}
 	switch poll.State {
 	case cloudflare.BatchPollCompleted:
@@ -69,7 +72,7 @@ func (s cloudflareSubmitter) Poll(ctx context.Context, meta batch.Meta) (Poll, e
 }
 
 func (s cloudflareSubmitter) Cancel(context.Context, batch.Meta) error {
-	return derrors.New(derrors.CodeUnimplemented, "batch.cloudflare", "workers ai batches cannot be cancelled")
+	return derrors.New(derrors.CodeUnimplemented, opCloudflare, "workers ai batches cannot be cancelled")
 }
 
 // cloudflareLines turns Workers AI batch items into batch lines, synthesising the OpenAI
@@ -80,7 +83,7 @@ func cloudflareLines(endpoint, publicModel string, created int64, items []cloudf
 		line := batch.LineResult{CustomID: item.ExternalReference}
 		if !item.Success {
 			line.ErrCode = "batch_failed"
-			line.ErrMessage = firstNonEmpty(strings.TrimSpace(item.ErrorMessage), "workers ai batch line failed")
+			line.ErrMessage = catalog.FirstNonEmpty(item.ErrorMessage, "workers ai batch line failed")
 			out = append(out, line)
 			continue
 		}
@@ -98,7 +101,7 @@ func cloudflareLines(endpoint, publicModel string, created int64, items []cloudf
 
 func synthesizeOpenAIBody(endpoint, publicModel string, created int64, result json.RawMessage) (json.RawMessage, error) {
 	if len(result) == 0 {
-		return nil, derrors.New(derrors.CodeUnavailable, "batch.cloudflare", "empty result")
+		return nil, derrors.New(derrors.CodeUnavailable, opCloudflare, "empty result")
 	}
 	switch endpoint {
 	case batch.EndpointChatCompletions:
@@ -106,7 +109,7 @@ func synthesizeOpenAIBody(endpoint, publicModel string, created int64, result js
 	case batch.EndpointEmbeddings:
 		return synthesizeEmbedBody(publicModel, result)
 	default:
-		return nil, derrors.New(derrors.CodeInvalid, "batch.cloudflare", "unsupported endpoint").With("endpoint", endpoint)
+		return nil, derrors.New(derrors.CodeInvalid, opCloudflare, "unsupported endpoint").With("endpoint", endpoint)
 	}
 }
 
@@ -157,7 +160,7 @@ type embeddingItem struct {
 func synthesizeChatBody(publicModel string, created int64, result json.RawMessage) (json.RawMessage, error) {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(result, &probe); err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, opCloudflare, "decode chat result")
 	}
 	if raw, ok := probe["choices"]; ok && len(raw) > 0 {
 		wrap := map[string]any{"id": "chatcmpl-batch", keyObject: "chat.completion"}
@@ -171,16 +174,19 @@ func synthesizeChatBody(publicModel string, created int64, result json.RawMessag
 	var text struct {
 		Response string `json:"response"`
 	}
-	content := ""
-	if err := json.Unmarshal(result, &text); err == nil && strings.TrimSpace(text.Response) != "" {
-		content = text.Response
+	if err := json.Unmarshal(result, &text); err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, opCloudflare, "decode chat result")
+	}
+	// An unknown shape is a failed line, not an empty completion counted as done.
+	if strings.TrimSpace(text.Response) == "" {
+		return nil, derrors.New(derrors.CodeUnavailable, opCloudflare, "chat result has neither choices nor response")
 	}
 	return json.Marshal(chatCompletionBody{
 		ID:      "chatcmpl-batch",
 		Object:  "chat.completion",
 		Created: created,
 		Model:   publicModel,
-		Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: content}, FinishReason: "stop"}},
+		Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: text.Response}, FinishReason: "stop"}},
 	})
 }
 
@@ -188,7 +194,7 @@ func synthesizeChatBody(publicModel string, created int64, result json.RawMessag
 func synthesizeEmbedBody(publicModel string, result json.RawMessage) (json.RawMessage, error) {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(result, &probe); err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, opCloudflare, "decode embedding result")
 	}
 	if raw, ok := probe["data"]; ok && len(raw) > 0 {
 		return json.Marshal(map[string]any{keyObject: "list", keyModel: publicModel, "data": raw})

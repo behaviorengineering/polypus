@@ -332,3 +332,51 @@ func TestLoadRouterConfigFromPOLYPUS_CONFIG(t *testing.T) {
 		t.Fatal("expected backends from POLYPUS_CONFIG")
 	}
 }
+
+func TestLoadRouterYAMLModelsUnknownKeyFails(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+chat_backend:
+  enabled: true
+  default: cf_local
+backends:
+  cf_local:
+    base_url: http://127.0.0.1:1323
+    capabilities: [chat]
+    models: {alow: [x]}
+`
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+	_, err := LoadRouterConfig(ServeOptions{})
+	if err == nil {
+		t.Fatal("expected an error for the unknown models key alow")
+	}
+	if !strings.Contains(err.Error(), "alow") {
+		t.Fatalf("error does not name the bad key: %v", err)
+	}
+}
+
+func TestLoadRouterConfigEmptyFileMessage(t *testing.T) {
+	for name, content := range map[string]string{
+		"empty":         "",
+		"comments only": "# nothing here\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("POLYPUS_CONFIG", path)
+			_, err := LoadRouterConfig(ServeOptions{})
+			if err == nil {
+				t.Fatal("expected an error for an empty config file")
+			}
+			if !strings.Contains(err.Error(), "polypus init --force") || strings.HasSuffix(err.Error(), "EOF") {
+				t.Fatalf("want a recovery hint instead of a bare EOF, got %v", err)
+			}
+		})
+	}
+}

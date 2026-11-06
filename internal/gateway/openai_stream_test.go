@@ -14,12 +14,12 @@ import (
 func TestOpenAIStreamSanitizerDropsPostStopChoice(t *testing.T) {
 	san := newOpenAIStreamSanitizer()
 	stop := []byte(`{"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
-	_, _, emit := sanitizeOpenAIStreamChunk(stop, san, true)
+	_, _, emit := splitSanitized(sanitizeOpenAIStreamChunk(stop, san, true))
 	if !emit {
 		t.Fatal("stop chunk must emit")
 	}
 	illegal := []byte(`{"id":"c1","choices":[{"index":0,"delta":{"content":"late"}}]}`)
-	_, action, emit := sanitizeOpenAIStreamChunk(illegal, san, true)
+	_, action, emit := splitSanitized(sanitizeOpenAIStreamChunk(illegal, san, true))
 	if emit || action != streamSSEDrop {
 		t.Fatalf("expected drop, emit=%v action=%s", emit, action)
 	}
@@ -30,7 +30,7 @@ func TestOpenAIStreamSanitizerRewritesUsageAfterStop(t *testing.T) {
 	stop := []byte(`{"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
 	sanitizeOpenAIStreamChunk(stop, san, true)
 	usage := []byte(`{"id":"c1","choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`)
-	out, action, emit := sanitizeOpenAIStreamChunk(usage, san, true)
+	out, action, emit := splitSanitized(sanitizeOpenAIStreamChunk(usage, san, true))
 	if !emit || action != streamSSERewriteUsage {
 		t.Fatalf("emit=%v action=%s", emit, action)
 	}
@@ -45,7 +45,7 @@ func TestOpenAIStreamSanitizerRewritesUsageAfterStop(t *testing.T) {
 func TestOpenAIStreamSanitizerStripsExtraFields(t *testing.T) {
 	san := newOpenAIStreamSanitizer()
 	raw := []byte(`{"id":"c1","extra_fields":{"raw_response":{}},"choices":[{"index":0,"delta":{"content":"x"}}]}`)
-	out, _, emit := sanitizeOpenAIStreamChunk(raw, san, true)
+	out, _, emit := splitSanitized(sanitizeOpenAIStreamChunk(raw, san, true))
 	if !emit {
 		t.Fatal("expected emit")
 	}
@@ -64,7 +64,7 @@ func TestWriteBifrostChatSSEDropsIllegalTrailingChunk(t *testing.T) {
 	close(errCh)
 
 	rec := httptest.NewRecorder()
-	if err := writeBifrostChatSSE(context.Background(), rec, chunks, errCh); err != nil {
+	if err := writeBifrostChatSSE(context.Background(), rec, bifrostStream{chunks: chunks, errs: errCh}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	body := rec.Body.String()
@@ -128,7 +128,7 @@ func TestCopyOpenAIChatStreamPreservesDone(t *testing.T) {
 func TestSanitizeFailOpenOnMalformedJSON(t *testing.T) {
 	san := newOpenAIStreamSanitizer()
 	bad := []byte(`not-json`)
-	out, action, emit := sanitizeOpenAIStreamChunk(bad, san, false)
+	out, action, emit := splitSanitized(sanitizeOpenAIStreamChunk(bad, san, false))
 	if !emit || action != streamSSEForward || !bytes.Equal(out, bad) {
 		t.Fatalf("fail open: emit=%v action=%s out=%q", emit, action, out)
 	}
@@ -138,7 +138,7 @@ func TestSanitizePerIndexFinish(t *testing.T) {
 	san := newOpenAIStreamSanitizer()
 	sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":0,"finish_reason":"stop","delta":{}}]}`), san, false)
 	// index 1 still allowed.
-	out, _, emit := sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":1,"delta":{"content":"ok"}}]}`), san, false)
+	out, _, emit := splitSanitized(sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":1,"delta":{"content":"ok"}}]}`), san, false))
 	if !emit || !strings.Contains(string(out), `"content":"ok"`) {
 		t.Fatalf("index 1 should forward: %q", out)
 	}

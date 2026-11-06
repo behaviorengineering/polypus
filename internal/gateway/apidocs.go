@@ -12,24 +12,26 @@ var openAPISpecYAML []byte
 var systemOneSchemaJSON []byte
 
 // serveEmbedded answers GET and HEAD with an embedded document.
-func serveEmbedded(contentType string, doc []byte) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", contentType)
-		w.WriteHeader(http.StatusOK)
-		if r.Method == http.MethodHead {
-			return
-		}
-		if _, err := w.Write(doc); err != nil {
-			return // the client went away mid-body; nothing is left to tell it.
-		}
+func (s *shared) serveEmbedded(w http.ResponseWriter, r *http.Request, contentType string, doc []byte) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		s.writeMethodNotAllowed(w, allowRead...)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+	if _, err := w.Write(doc); err != nil {
+		// The client went away mid-body; nothing is left to tell it.
+		s.log.Debug("polypus: embedded document write failed", "path", r.URL.Path, "err", err)
 	}
 }
 
-var (
-	serveOpenAPISpec     = serveEmbedded("application/yaml", openAPISpecYAML)
-	serveSystemOneSchema = serveEmbedded("application/json", systemOneSchemaJSON)
-)
+func (s *shared) serveOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+	s.serveEmbedded(w, r, "application/yaml", openAPISpecYAML)
+}
+
+func (s *shared) serveSystemOneSchema(w http.ResponseWriter, r *http.Request) {
+	s.serveEmbedded(w, r, "application/json", systemOneSchemaJSON)
+}

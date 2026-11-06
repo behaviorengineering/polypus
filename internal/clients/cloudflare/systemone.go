@@ -5,11 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/ratelimit"
+)
+
+// Op names for the SystemOne errors.
+const (
+	opSystemOne       = "cloudflare.SystemOne"
+	opUnwrapRunResult = "cloudflare.unwrapRunResult"
 )
 
 // SystemOne calls Workers AI typesafe/jev (or another systemone-capable model).
@@ -19,68 +25,50 @@ import (
 // Workers AI {success, result, errors} envelope when present.
 func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]byte, error) {
 	if ctx == nil {
-		return nil, derrors.New(derrors.CodeInvalid, "cloudflare.SystemOne", "context required")
+		return nil, derrors.New(derrors.CodeInvalid, opSystemOne, "context required")
 	}
 	if c == nil {
-		return nil, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.SystemOne", "not configured")
+		return nil, derrors.New(derrors.CodeFailedPrecondition, opSystemOne, "not configured")
 	}
 	model = NormalizeModel(strings.TrimSpace(model))
 	if model == "" {
-		return nil, derrors.New(derrors.CodeInvalid, "cloudflare.SystemOne", "model required")
+		return nil, derrors.New(derrors.CodeInvalid, opSystemOne, "model required")
 	}
 	input, err := stripModelField(body)
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.SystemOne", "request body")
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, opSystemOne, "request body")
 	}
 	payload, err := json.Marshal(struct {
 		Model string          `json:"model"`
 		Input json.RawMessage `json:"input"`
 	}{Model: model, Input: input})
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "cloudflare.SystemOne", "marshal run body")
+		return nil, derrors.Wrap(err, derrors.CodeInternal, opSystemOne, "marshal run body")
 	}
 
 	target := runEndpointURL(c.apiBase)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "cloudflare.SystemOne", "request")
+		return nil, derrors.Wrap(err, derrors.CodeInternal, opSystemOne, "request")
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 
-	resp, err := c.doSystemOne(ctx, httpReq)
+	resp, err := c.runOnce(ctx, opSystemOne, httpReq)
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.SystemOne", "post /run").
-			With("target", target)
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := readCapped(resp.Body, runMaxBody, "cloudflare.SystemOne")
+	raw, err := catalog.ReadCapped(resp.Body, runMaxBody, opSystemOne)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if rl := ratelimit.Classify("cloudflare.SystemOne", resp.StatusCode, resp.Header, raw); rl != nil {
-			return nil, rl
-		}
-		msg := workersAIErrorMessage(raw)
-		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.SystemOne", msg).
-			With("status", strconv.Itoa(resp.StatusCode)).
-			With("body", truncate(string(raw), 256))
+		return nil, upstreamError(opSystemOne, resp, raw)
 	}
 	return unwrapRunResult(raw)
-}
-
-func (c *Client) doSystemOne(ctx context.Context, req *http.Request) (*http.Response, error) {
-	if c == nil || c.speechClient == nil {
-		return nil, derrors.New(derrors.CodeFailedPrecondition, "cloudflare.doSystemOne", "not configured")
-	}
-	resp, err := c.policies.DoOnce(ctx, c.dep(), c.speechClient, req)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.doSystemOne", "post")
-	}
-	return resp, nil
 }
 
 // stripModelField removes top-level "model" from a JSON object so CF /run
@@ -92,7 +80,7 @@ func stripModelField(body []byte) ([]byte, error) {
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "cloudflare.stripModelField", "parse body")
 	}
 	delete(m, "model")
 	return json.Marshal(m)
@@ -109,37 +97,30 @@ func stripModelField(body []byte) ([]byte, error) {
 func unwrapRunResult(raw []byte) ([]byte, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
-		return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "empty response")
+		return nil, derrors.New(derrors.CodeUnavailable, opUnwrapRunResult, "empty response")
 	}
 	cur := raw
 	for range 3 {
 		var envelope struct {
-			Success *bool `json:"success"`
-			Errors  []struct {
-				Message string `json:"message"`
-			} `json:"errors"`
-			Result json.RawMessage `json:"result"`
-			State  string          `json:"state"`
+			Success *bool            `json:"success"`
+			Errors  []workersAIError `json:"errors"`
+			Result  json.RawMessage  `json:"result"`
 		}
 		if err := json.Unmarshal(cur, &envelope); err != nil {
-			return nil, derrors.Wrap(err, derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "parse json")
+			return nil, derrors.Wrap(err, derrors.CodeUnavailable, opUnwrapRunResult, "parse json")
 		}
 		if looksLikeTypeSafeResult(cur) {
 			return cur, nil
 		}
 		if envelope.Success != nil {
 			if !*envelope.Success {
-				if rl := ratelimit.Classify("cloudflare.unwrapRunResult", 0, nil, cur); rl != nil {
+				if rl := ratelimit.Classify(opUnwrapRunResult, 0, nil, cur); rl != nil {
 					return nil, rl
 				}
-				msg := "cloudflare workers ai error"
-				if len(envelope.Errors) > 0 && envelope.Errors[0].Message != "" {
-					msg = envelope.Errors[0].Message
-				}
-				return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapRunResult", msg)
+				return nil, derrors.New(derrors.CodeUnavailable, opUnwrapRunResult, firstErrorMessage(envelope.Errors, "cloudflare workers ai error"))
 			}
 			if len(envelope.Result) == 0 {
-				return nil, derrors.New(derrors.CodeUnavailable, "cloudflare.unwrapRunResult", "empty result")
+				return nil, derrors.New(derrors.CodeUnavailable, opUnwrapRunResult, "empty result")
 			}
 			cur = envelope.Result
 			continue
@@ -167,19 +148,4 @@ func looksLikeTypeSafeResult(raw json.RawMessage) bool {
 
 func runEndpointURL(apiBase string) string {
 	return strings.TrimRight(apiBase, "/") + "/run"
-}
-
-// workersAIErrorMessage prefers Cloudflare's errors[0].message when present.
-func workersAIErrorMessage(raw []byte) string {
-	var envelope struct {
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err == nil && len(envelope.Errors) > 0 {
-		if msg := strings.TrimSpace(envelope.Errors[0].Message); msg != "" {
-			return msg
-		}
-	}
-	return "workers ai error"
 }

@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -37,7 +36,7 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	reg := h.router.Registry()
+	reg := h.registry
 	cfg := reg.Config()
 	if cfg.EffectiveSystemOneBackend() == "" {
 		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveSystemOne", "no systemone backend configured"))
@@ -85,7 +84,7 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		return h.proxySystemOnePassthrough(w, r, call)
 	})
 	if err != nil {
-		h.writeUpstreamDialError(w, err, "", backendID, nil)
+		h.writeUpstreamDialError(w, dialFailure{err: err, upstream: backendID})
 	}
 }
 
@@ -104,10 +103,7 @@ func usesBifrostSystemOne(b config.BackendDef) bool {
 }
 
 func (h systemOneHandler) proxyBifrostSystemOne(w http.ResponseWriter, r *http.Request, c systemOneCall) error {
-	if h.router == nil {
-		return derrors.New(derrors.CodeNotReady, "gateway.proxyBifrostSystemOne", "router not configured")
-	}
-	raw, err := h.router.SystemOneDecisionRaw(r.Context(), router.Call{BackendID: c.backend.ID, Model: c.downstream, Body: c.body, Timeout: c.hop})
+	raw, err := h.systemOne.SystemOneDecisionRaw(r.Context(), router.Call{BackendID: c.backend.ID, Model: c.downstream, Body: c.body, Timeout: c.hop})
 	if err != nil {
 		return gatewayErr(err, "gateway.proxyBifrostSystemOne", "decision").With("backend", c.backend.ID)
 	}
@@ -151,28 +147,16 @@ func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *ht
 	if err != nil {
 		return gatewayErr(err, "gateway.proxySystemOnePassthrough", "rewrite model")
 	}
-	auth, authErr := backendAuth(c.backend)
+	auth, authErr := bearerAuthHeader(c.backend)
 	if authErr != nil {
 		return gatewayErr(authErr, "gateway.proxySystemOnePassthrough", "backend auth").With("backend", c.backend.ID)
 	}
 	target := systemOneURL(c.url)
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(rewritten))
+	req, err := newBackendPOST(r.Context(), r, target, auth, "application/json", rewritten)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxySystemOnePassthrough", "request")
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if auth != "" {
-		req.Header.Set("Authorization", auth)
-	} else if a := r.Header.Get("Authorization"); a != "" {
-		req.Header.Set("Authorization", a)
-	}
-
-	client := h.client
-	if client == nil {
-		client = newChatProxyClient(h.timeouts.Max)
-	}
-	resp, err := outbound.DoOnce(r.Context(), outbound.DepGateway, client, req)
+	resp, err := h.transport.policies.DoOnce(r.Context(), outbound.DepGateway, h.transport.client, req)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxySystemOnePassthrough", "dial").
 			With("target", target)
@@ -235,11 +219,16 @@ func rewriteSystemOneResponseModel(body []byte, publicModel string) ([]byte, err
 	if publicModel == "" {
 		return body, nil
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
+	// RawMessage values pass through byte for byte, so numbers keep their precision.
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
 		return body, nil
 	}
-	payload[keyModel] = publicModel
+	model, err := json.Marshal(publicModel)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteSystemOneResponseModel", "marshal model")
+	}
+	payload[keyModel] = model
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteSystemOneResponseModel", "marshal")

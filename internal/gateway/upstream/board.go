@@ -30,7 +30,7 @@ const (
 var ErrResponseWritten = errors.New("upstream: response already written")
 
 // Board holds lazily created circuit breakers keyed by upstream name
-// (backend id or NameSwitchyard).
+// (backend id or NameSwitchyard). The zero value is ready to use.
 type Board struct {
 	mu sync.Mutex
 	cb map[string]*gobreaker.CircuitBreaker
@@ -75,6 +75,9 @@ func StatusFailure(status int) error {
 func (b *Board) breaker(name string) *gobreaker.CircuitBreaker {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.cb == nil {
+		b.cb = make(map[string]*gobreaker.CircuitBreaker)
+	}
 	if c, ok := b.cb[name]; ok {
 		return c
 	}

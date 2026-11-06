@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/buildinfo"
-	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/smoke"
 	"github.com/spf13/cobra"
 )
@@ -87,35 +85,21 @@ func newSmokeRunCmd() *cobra.Command {
 			if ch := strings.TrimSpace(channels); ch != "" && !strings.EqualFold(ch, "all") {
 				opts.Channels = splitCSV(ch)
 			}
-			ctx, cancel := context.WithTimeout(cmd.Context(), smokeRunBudget)
-			defer cancel()
-			// Trace the probes so a failure shows the client side, not only the
-			// gateway's server spans. Export failures never fail the smoke.
-			otelCfg, err := observability.LoadConfig()
-			if err != nil {
-				return &exitError{code: 2, msg: "polypus-smoke: tracing config: " + err.Error(), err: err}
-			}
-			otelCfg.Logger = slog.Default()
-			shutdown, err := observability.Init(otelCfg)
-			if err != nil {
-				return &exitError{code: 1, msg: "polypus-smoke: tracing: " + err.Error(), err: err}
-			}
-			defer func() {
-				flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer flushCancel()
-				_ = shutdown(flushCtx) //nolint:errcheck // best-effort span flush at exit
-			}()
-			results, runErr := smoke.Run(ctx, opts)
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			for _, r := range results {
-				if err := enc.Encode(r); err != nil {
-					return &exitError{code: 1, msg: "polypus-smoke: write result: " + err.Error(), err: err}
+			return withTracing(cmd, func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(ctx, smokeRunBudget)
+				defer cancel()
+				results, runErr := smoke.Run(ctx, opts)
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				for _, r := range results {
+					if err := enc.Encode(r); err != nil {
+						return &exitError{code: 1, msg: "polypus-smoke: write result: " + err.Error(), err: err}
+					}
 				}
-			}
-			if runErr != nil {
-				return &exitError{code: 1, msg: "polypus-smoke: " + runErr.Error(), err: runErr}
-			}
-			return nil
+				if runErr != nil {
+					return &exitError{code: 1, msg: "polypus-smoke: " + runErr.Error(), err: runErr}
+				}
+				return nil
+			})
 		},
 	}
 	f := cmd.Flags()
@@ -139,13 +123,13 @@ ROLE & BOUNDARIES
   to a gateway that is already serving. Every probe is a paid upstream call.
 
 AGENT OPERATING GUIDE
+  Read AGENTS.md and ai-copilots/skills/polypus-operator/SKILL.md first.
   Probes run only from polypus-smoke run (never bare polypus-smoke).
   Start the gateway first (go tool task serve) and confirm /health.
 
 COMMANDS BY RISK & LIFECYCLE
 `, buildinfo.Version)
-	appendGuideGroup(&b, root, groupInspect, "Inspect & Validate")
-	appendGuideGroup(&b, root, groupMutate, "Execute & Mutate")
+	appendGuideGroups(&b, root)
 	b.WriteString(`
 AUTOMATION RULES FOR AGENTS
   - Unknown commands exit 2; bare invoke exits 0 with this guide.

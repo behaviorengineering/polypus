@@ -11,6 +11,16 @@ import (
 	"path/filepath"
 )
 
+// Compose services of the stack that deploy code addresses by name.
+const (
+	ServiceGateway    = "gateway"
+	ServiceSwitchyard = "switchyard"
+	ServiceTailscale  = "tailscale"
+	ServiceOtelcol    = "otelcol"
+	ServicePhoenix    = "phoenix"
+	ServiceHyperDX    = "hyperdx"
+)
+
 // ComposeFileName is the stack's compose file, written into each environment's folder.
 const ComposeFileName = "docker-compose.deploy.yml"
 

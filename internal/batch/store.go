@@ -110,21 +110,18 @@ func (s *DiskStore) GetFile(id string) (FileRecord, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.readFileMeta(id)
+	return s.readFileMeta("batch.GetFile", id)
 }
 
-func (s *DiskStore) readFileMeta(id string) (FileRecord, error) {
-	metaPath := filepath.Join(s.root, fileMetaDir, id+".json")
-	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return FileRecord{}, derrors.New(derrors.CodeNotFound, "batch.GetFile", "file not found")
-		}
-		return FileRecord{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetFile", "read meta")
-	}
+// readFileMeta reads a file's metadata; op names the caller in errors. id must have
+// passed checkID.
+func (s *DiskStore) readFileMeta(op, id string) (FileRecord, error) {
 	var rec FileRecord
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		return FileRecord{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetFile", "parse meta")
+	if err := readJSON(filepath.Join(s.root, fileMetaDir, id+".json"), &rec); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return FileRecord{}, derrors.New(derrors.CodeNotFound, op, "file not found")
+		}
+		return FileRecord{}, derrors.Wrap(err, derrors.CodeInternal, op, "read meta")
 	}
 	return rec, nil
 }
@@ -162,7 +159,7 @@ func (s *DiskStore) DeleteFile(id string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.readFileMeta(id); err != nil {
+	if _, err := s.readFileMeta("batch.DeleteFile", id); err != nil {
 		return err
 	}
 	if inUse, err := s.fileReferencedByBatchLocked(id); err != nil {
@@ -184,30 +181,39 @@ func (s *DiskStore) removeFileUnlocked(id string) error {
 }
 
 func (s *DiskStore) fileReferencedByBatchLocked(fileID string) (bool, error) {
-	dir := filepath.Join(s.root, batchMetaDir)
-	entries, err := os.ReadDir(dir)
+	inUse := false
+	err := s.eachBatchUnlocked("batch.fileReferencedByBatchLocked", func(meta Meta) bool {
+		inUse = meta.InputFileID == fileID || meta.OutputFileID == fileID || meta.ErrorFileID == fileID
+		return !inUse
+	})
+	// Fail closed: an unreadable batch may reference this file.
+	return inUse, err
+}
+
+// eachBatchUnlocked calls fn with every stored batch until fn returns false. A batch
+// that cannot be read stops the scan with an error. The caller holds s.mu.
+func (s *DiskStore) eachBatchUnlocked(op string, fn func(Meta) bool) error {
+	entries, err := os.ReadDir(filepath.Join(s.root, batchMetaDir))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
+			return nil
 		}
-		return false, derrors.Wrap(err, derrors.CodeInternal, "batch.fileReferencedByBatchLocked", "readdir")
+		return derrors.Wrap(err, derrors.CodeInternal, op, "readdir")
 	}
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		bid := e.Name()[:len(e.Name())-len(".json")]
-		meta, err := s.readBatchMetaUnlocked(bid)
+		id := strings.TrimSuffix(e.Name(), ".json")
+		meta, err := s.readBatchMetaUnlocked(id)
 		if err != nil {
-			// Fail closed: an unreadable batch may reference this file.
-			return false, derrors.Wrap(err, derrors.CodeInternal, "batch.fileReferencedByBatchLocked", "read batch meta").
-				With("batch_id", bid)
+			return derrors.Wrap(err, derrors.CodeInternal, op, "read batch meta").With("batch_id", id)
 		}
-		if meta.InputFileID == fileID || meta.OutputFileID == fileID || meta.ErrorFileID == fileID {
-			return true, nil
+		if !fn(meta) {
+			return nil
 		}
 	}
-	return false, nil
+	return nil
 }
 
 // SaveBatch writes batch metadata.
@@ -226,7 +232,7 @@ func (s *DiskStore) SaveBatch(meta *Meta) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.writeBatchMeta(meta)
+	return s.writeBatchMeta("batch.SaveBatch", meta)
 }
 
 // UpdateBatch replaces batch metadata.
@@ -239,17 +245,18 @@ func (s *DiskStore) UpdateBatch(meta Meta) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.writeBatchMeta(&meta)
+	return s.writeBatchMeta("batch.UpdateBatch", &meta)
 }
 
-func (s *DiskStore) writeBatchMeta(meta *Meta) error {
-	if _, err := checkID("batch.SaveBatch", meta.ID); err != nil {
+// writeBatchMeta stores meta; op names the caller in errors. The caller holds s.mu.
+func (s *DiskStore) writeBatchMeta(op string, meta *Meta) error {
+	if _, err := checkID(op, meta.ID); err != nil {
 		return err
 	}
 	metaPath := filepath.Join(s.root, batchMetaDir, meta.ID+".json")
 	raw, err := json.Marshal(meta)
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "batch.SaveBatch", "marshal")
+		return derrors.Wrap(err, derrors.CodeInternal, op, "marshal")
 	}
 	return writeFileAtomic(metaPath, raw)
 }
@@ -265,17 +272,18 @@ func (s *DiskStore) GetBatch(id string) (Meta, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	metaPath := filepath.Join(s.root, batchMetaDir, id+".json")
-	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return Meta{}, derrors.New(derrors.CodeNotFound, "batch.GetBatch", "batch not found")
-		}
-		return Meta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "read")
+	return s.getBatchUnlocked("batch.GetBatch", id)
+}
+
+// getBatchUnlocked reads one batch, mapping a missing one to CodeNotFound; op names
+// the caller. id must have passed checkID, and the caller holds s.mu.
+func (s *DiskStore) getBatchUnlocked(op, id string) (Meta, error) {
+	meta, err := s.readBatchMetaUnlocked(id)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Meta{}, derrors.New(derrors.CodeNotFound, op, "batch not found")
 	}
-	var meta Meta
-	if err := json.Unmarshal(raw, &meta); err != nil {
-		return Meta{}, derrors.Wrap(err, derrors.CodeInternal, "batch.GetBatch", "parse")
+	if err != nil {
+		return Meta{}, derrors.Wrap(err, derrors.CodeInternal, op, "read")
 	}
 	return meta, nil
 }
@@ -288,38 +296,34 @@ func (s *DiskStore) ListBatches() ([]Meta, error) {
 	// Read the directory under the lock, so a batch saved meanwhile is not missed.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	dir := filepath.Join(s.root, batchMetaDir)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "batch.ListBatches", "readdir")
-	}
-	out := make([]Meta, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		id := e.Name()[:len(e.Name())-len(".json")]
-		meta, err := s.readBatchMetaUnlocked(id)
-		if err != nil {
-			return nil, derrors.Wrap(err, derrors.CodeInternal, "batch.ListBatches", "read batch meta").
-				With("batch_id", id)
-		}
+	out := []Meta{}
+	if err := s.eachBatchUnlocked("batch.ListBatches", func(meta Meta) bool {
 		out = append(out, meta)
+		return true
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
 
+// readBatchMetaUnlocked reads a batch's metadata; a missing batch keeps
+// fs.ErrNotExist in the chain. id must have passed checkID.
 func (s *DiskStore) readBatchMetaUnlocked(id string) (Meta, error) {
-	metaPath := filepath.Join(s.root, batchMetaDir, id+".json")
-	raw, err := os.ReadFile(metaPath) //nolint:gosec // G304: id passed checkID, so the path stays under the store root
-	if err != nil {
-		return Meta{}, err
-	}
 	var meta Meta
-	if err := json.Unmarshal(raw, &meta); err != nil {
+	if err := readJSON(filepath.Join(s.root, batchMetaDir, id+".json"), &meta); err != nil {
 		return Meta{}, err
 	}
 	return meta, nil
+}
+
+// readJSON decodes the JSON file at path into out. Every caller builds path from an
+// id that passed checkID, so it stays under the store root.
+func readJSON(path string, out any) error {
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: callers build path from an id that passed checkID
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
 }
 
 func writeFileAtomic(path string, content []byte) error {
@@ -332,18 +336,16 @@ func writeFileAtomic(path string, content []byte) error {
 		return derrors.Wrap(err, derrors.CodeInternal, "batch.writeFileAtomic", "temp")
 	}
 	tmpName := tmp.Name()
+	// Cleanup errors join the cause, so a leftover .tmp-* file leaves a trace.
 	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return derrors.Wrap(err, derrors.CodeInternal, "batch.writeFileAtomic", "write")
+		cleanup := errors.Join(tmp.Close(), os.Remove(tmpName))
+		return derrors.Wrap(errors.Join(err, cleanup), derrors.CodeInternal, "batch.writeFileAtomic", "write")
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return derrors.Wrap(err, derrors.CodeInternal, "batch.writeFileAtomic", "close")
+		return derrors.Wrap(errors.Join(err, os.Remove(tmpName)), derrors.CodeInternal, "batch.writeFileAtomic", "close")
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return derrors.Wrap(err, derrors.CodeInternal, "batch.writeFileAtomic", "rename")
+		return derrors.Wrap(errors.Join(err, os.Remove(tmpName)), derrors.CodeInternal, "batch.writeFileAtomic", "rename")
 	}
 	return nil
 }

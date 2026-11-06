@@ -1,6 +1,7 @@
 package keys
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -50,12 +51,11 @@ type filePayload struct {
 	Keys    []Record `json:"keys"`
 }
 
-// CreateStore opens the key store at cfg.Path.
-
 // tokenPrefix starts every gateway access key: ppk.<id>.<secret>. parseToken must
 // match it exactly.
 const tokenPrefix = "ppk."
 
+// CreateStore opens the key store at cfg.Path.
 func (cfg Config) CreateStore() (*Store, error) {
 	if strings.TrimSpace(cfg.Path) == "" {
 		return nil, derrors.New(derrors.CodeInvalid, "keys.CreateStore", "path required")
@@ -77,24 +77,19 @@ type GenerateResult struct {
 }
 
 // Generate adds a new named key.
-func (s *Store) Generate(name string) (GenerateResult, error) {
+func (s *Store) Generate(ctx context.Context, name string) (GenerateResult, error) {
 	name = strings.TrimSpace(name)
 	if !namePattern.MatchString(name) {
 		return GenerateResult{}, derrors.New(derrors.CodeInvalid, "keys.Generate", "invalid name")
 	}
 	var out GenerateResult
-	err := statefile.WithFileLock(s.path, func() error {
+	err := statefile.WithFileLock(ctx, s.path, func() error {
 		file, err := s.read()
 		if err != nil {
 			return err
 		}
-		if len(file.Keys) >= maxKeys {
-			return derrors.New(derrors.CodeFailedPrecondition, "keys.Generate", "max keys reached")
-		}
-		for _, k := range file.Keys {
-			if k.Name == name {
-				return derrors.New(derrors.CodeConflict, "keys.Generate", "name already exists")
-			}
+		if err := canAdd(file, name); err != nil {
+			return err
 		}
 		id, secret, token, err := s.newToken()
 		if err != nil {
@@ -121,11 +116,38 @@ func (s *Store) Generate(name string) (GenerateResult, error) {
 	return out, err
 }
 
+// CheckGenerate reports whether Generate would accept name now, without writing:
+// the name is valid, free, and the store is below its key limit.
+func (s *Store) CheckGenerate(name string) error {
+	name = strings.TrimSpace(name)
+	if !namePattern.MatchString(name) {
+		return derrors.New(derrors.CodeInvalid, "keys.CheckGenerate", "invalid name")
+	}
+	file, err := s.read()
+	if err != nil {
+		return err
+	}
+	return canAdd(file, name)
+}
+
+// canAdd checks the key limit and that name is not taken.
+func canAdd(file filePayload, name string) error {
+	if len(file.Keys) >= maxKeys {
+		return derrors.New(derrors.CodeFailedPrecondition, "keys.Generate", "max keys reached")
+	}
+	for _, k := range file.Keys {
+		if k.Name == name {
+			return derrors.New(derrors.CodeConflict, "keys.Generate", "name already exists")
+		}
+	}
+	return nil
+}
+
 // Rotate replaces the secret for an existing name.
-func (s *Store) Rotate(name string) (GenerateResult, error) {
+func (s *Store) Rotate(ctx context.Context, name string) (GenerateResult, error) {
 	name = strings.TrimSpace(name)
 	var out GenerateResult
-	err := statefile.WithFileLock(s.path, func() error {
+	err := statefile.WithFileLock(ctx, s.path, func() error {
 		file, err := s.read()
 		if err != nil {
 			return err
@@ -160,9 +182,9 @@ func (s *Store) Rotate(name string) (GenerateResult, error) {
 }
 
 // Delete removes a key by name.
-func (s *Store) Delete(name string) error {
+func (s *Store) Delete(ctx context.Context, name string) error {
 	name = strings.TrimSpace(name)
-	return statefile.WithFileLock(s.path, func() error {
+	return statefile.WithFileLock(ctx, s.path, func() error {
 		file, err := s.read()
 		if err != nil {
 			return err

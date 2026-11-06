@@ -36,7 +36,7 @@ tasks:
 
   build:
     desc: Build gateway and switchyard-server binaries
-    summary: "Builds bin/polypus (go build) and bin/switchyard-server (cargo install from providers/switchyard). Needs Go and a Rust toolchain."
+    summary: "Copies config.yaml.example into internal/config/ (the embedded example), then builds bin/polypus (go build) and bin/switchyard-server (cargo install from providers/switchyard). Needs Go and a Rust toolchain."
     deps: [build-gateway, switchyard-build]
 
   serve:
@@ -61,7 +61,7 @@ tasks:
 
   init:
     desc: Write XDG config from example via polypus init
-    summary: "Builds the gateway, then runs polypus init to write ~/.config/polypus/config.yaml from the example."
+    summary: "Copies config.yaml.example into internal/config/ and builds the gateway, then runs polypus init to write ~/.config/polypus/config.yaml from the example."
     deps: [build-gateway]
     cmds:
       - '{{.BINARY}} init'
@@ -79,16 +79,16 @@ tasks:
       - go vet ./...
 
   lint:
-    desc: Run golangci-lint on cmd, internal, and pkg
-    summary: "go tool golangci-lint over cmd, internal and pkg with .golangci.yml."
+    desc: Run golangci-lint on cmd, internal, pkg and media
+    summary: "go tool golangci-lint over cmd, internal, pkg and media with .golangci.yml."
     cmds:
-      - go tool golangci-lint run --timeout 5m ./cmd/... ./internal/... ./pkg/...
+      - go tool golangci-lint run --timeout 5m ./cmd/... ./internal/... ./pkg/... ./media/...
 
   format:
     desc: Format Go sources with gofumpt
-    summary: "go tool gofumpt -w over cmd, internal and pkg (rewrites files)."
+    summary: "go tool gofumpt -w over cmd, internal, pkg and media (rewrites files)."
     cmds:
-      - go tool gofumpt -w ./cmd ./internal ./pkg
+      - go tool gofumpt -w ./cmd ./internal ./pkg ./media
 
   tidy:
     desc: Run go mod tidy
@@ -103,7 +103,7 @@ tasks:
       - go mod tidy -diff
       - task: check-config-example
       - |
-        unformatted=$(go tool gofumpt -l ./cmd ./internal ./pkg)
+        unformatted=$(go tool gofumpt -l ./cmd ./internal ./pkg ./media)
         if [ -n "$unformatted" ]; then
           echo "gofumpt needed (go tool task format):"
           echo "$unformatted"
@@ -206,8 +206,8 @@ tasks:
       - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeAll$'
 
   smoke-otel:
-    desc: Integration smoke OTLP fan-out
-    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). OTLP fan-out (POLYPUS_SMOKE_OTEL=1)."
+    desc: Integration smoke OTLP fan-out (needs Docker)
+    summary: "Starts phoenix, hyperdx and otelcol from docker-compose.yml (left running; stop them with docker compose down), then runs TestSmokeOtelFanout against them (POLYPUS_SMOKE_OTEL=1, 15m timeout)."
     env:
       POLYPUS_SMOKE_OTEL: "1"
     cmds:

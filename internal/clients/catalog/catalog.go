@@ -1,12 +1,14 @@
-// Package catalog holds what the provider model-catalog clients share: the OpenAI
-// Models API shapes, a TTL cache, a strict list with stale-cache fallback, and a
-// process-scoped client registry.
+// Package catalog holds what the provider clients share: the OpenAI Models API
+// shapes, a TTL cache, a strict list with stale-cache fallback, a process-scoped
+// client registry, one capped JSON GET with status mapping, and the small text
+// helpers their error messages use.
 package catalog
 
 import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,12 +45,8 @@ type Cache struct {
 	now    func() time.Time
 }
 
-// NewCache returns an empty cache that serves entries younger than ttl.
-func NewCache(ttl time.Duration) *Cache {
-	return NewCacheClock(ttl, time.Now)
-}
-
-// NewCacheClock is NewCache with an injected clock (tests step past the TTL).
+// NewCacheClock returns an empty cache that serves entries younger than ttl, aged by
+// now (the gateway's clock; tests step it past the TTL). Panics on a nil clock.
 func NewCacheClock(ttl time.Duration, now func() time.Time) *Cache {
 	if now == nil {
 		panic("catalog.NewCacheClock: nil clock")
@@ -174,10 +172,23 @@ func StatusCode(status int) derrors.Code {
 	}
 }
 
-// Truncate shortens s to at most n bytes for error messages.
+// Truncate trims s and caps it at n runes for error messages, ending a cut string
+// with "...". It cuts on rune boundaries, so upstream text stays valid UTF-8.
 func Truncate(s string, n int) string {
-	if len(s) <= n {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n]
+	return string(r[:max(0, n)]) + "..."
+}
+
+// FirstNonEmpty returns the first value that is not blank, trimmed, or "".
+func FirstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }

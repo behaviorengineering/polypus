@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -54,7 +55,7 @@ func runModelsRefreshLoop(ctx context.Context, interval time.Duration, newTicker
 // warmInventory prefetches model catalogs (the GET /v1/models path): the enabled
 // models at startup, or the full inventory view on refresh.
 func (h modelsHandler) warmInventory(ctx context.Context, asInventory bool) {
-	if h.shared == nil || h.router == nil {
+	if h.shared == nil || h.registry == nil {
 		return
 	}
 	// Warmup has no caller, so no inbound credential reaches local backends.
@@ -62,9 +63,11 @@ func (h modelsHandler) warmInventory(ctx context.Context, asInventory bool) {
 	h.log.Info("polypus: models inventory warmed", "inventory_view", asInventory, "count", len(models))
 }
 
-func (h modelsHandler) startModelsRefreshLoop(refreshCtx context.Context, cfg config.RouterConfig) {
+// startModelsRefreshLoop runs the refresh loop until refreshCtx is done. wait blocks
+// until the loop, and any refresh in flight, has stopped; it is never nil.
+func (h modelsHandler) startModelsRefreshLoop(refreshCtx context.Context, cfg config.RouterConfig) (wait func()) {
 	if !h.models.RefreshEnabled() {
-		return
+		return func() {}
 	}
 	interval := h.models.RefreshInterval
 	warm := func(iterCtx context.Context) {
@@ -73,5 +76,7 @@ func (h modelsHandler) startModelsRefreshLoop(refreshCtx context.Context, cfg co
 		defer cancel()
 		h.warmInventory(runCtx, true)
 	}
-	go runModelsRefreshLoop(refreshCtx, interval, nil, warm)
+	var wg sync.WaitGroup
+	wg.Go(func() { runModelsRefreshLoop(refreshCtx, interval, nil, warm) })
+	return wg.Wait
 }

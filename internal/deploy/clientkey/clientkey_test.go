@@ -130,3 +130,71 @@ func TestVerifyWrongKey(t *testing.T) {
 		t.Fatalf("err = %v, want the key rejected", err)
 	}
 }
+
+func TestLockStoresThenVerifies(t *testing.T) {
+	t.Setenv(secrets.ClientKeyName, "")
+	srv := gateway(t, "pk_secret", http.StatusUnauthorized)
+	var calls [][]string
+	res, err := Lock(ctx(t), Config{
+		Project:   "polypus-work",
+		Keyring:   operatorconfig.NewMemKeyring(),
+		Docker:    fakeDocker("c\n", `{"name":"client","key":"pk_secret"}`, nil, &calls),
+		HealthURL: srv.URL + "/",
+		HTTP:      srv.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Name != "client" || res.VerifiedURL != srv.URL {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestLockSkipVerify(t *testing.T) {
+	t.Setenv(secrets.ClientKeyName, "")
+	var calls [][]string
+	res, err := Lock(ctx(t), Config{
+		Project:    "polypus-work",
+		Keyring:    operatorconfig.NewMemKeyring(),
+		Docker:     fakeDocker("c\n", `{"name":"client","key":"pk_secret"}`, nil, &calls),
+		SkipVerify: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Name != "client" || res.VerifiedURL != "" {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestLockVerifyFailureKeepsStoredName(t *testing.T) {
+	t.Setenv(secrets.ClientKeyName, "")
+	srv := gateway(t, "pk_secret", http.StatusOK) // still open: verify must fail.
+	var calls [][]string
+	res, err := Lock(ctx(t), Config{
+		Project:   "polypus-work",
+		Keyring:   operatorconfig.NewMemKeyring(),
+		Docker:    fakeDocker("c\n", `{"name":"client","key":"pk_secret"}`, nil, &calls),
+		HealthURL: srv.URL,
+		HTTP:      srv.Client(),
+	})
+	if err == nil {
+		t.Fatal("want the open gateway reported")
+	}
+	if res.Name != "client" || res.VerifiedURL != "" {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestLockNeedsHealthURLToVerify(t *testing.T) {
+	t.Setenv(secrets.ClientKeyName, "")
+	var calls [][]string
+	_, err := Lock(ctx(t), Config{
+		Project: "polypus-work",
+		Keyring: operatorconfig.NewMemKeyring(),
+		Docker:  fakeDocker("c\n", `{"name":"client","key":"pk_secret"}`, nil, &calls),
+	})
+	if err == nil || !strings.Contains(err.Error(), "health URL required") {
+		t.Fatalf("err = %v", err)
+	}
+}

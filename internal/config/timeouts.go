@@ -84,57 +84,58 @@ func DefaultTimeouts() Timeouts {
 	}
 }
 
+// durationField is one YAML duration and the Timeouts field it overlays.
+type durationField struct {
+	key string
+	raw string
+	dst *time.Duration
+}
+
+// overlayDurations overlays each raw value onto its field; prefix names the
+// YAML block in errors.
+func overlayDurations(prefix string, fields []durationField) error {
+	for _, f := range fields {
+		d, err := overlayDuration(f.raw, *f.dst)
+		if err != nil {
+			return fmt.Errorf("%s.%s: %w", prefix, f.key, err)
+		}
+		*f.dst = d
+	}
+	return nil
+}
+
 func parseTimeoutsFile(file timeoutsFile) (Timeouts, error) {
 	out := DefaultTimeouts()
-	var err error
-	if out.Min, err = overlayDuration(file.Min, out.Min); err != nil {
-		return Timeouts{}, fmt.Errorf("timeouts.min: %w", err)
+	if err := overlayDurations("timeouts", []durationField{
+		{"min", file.Min, &out.Min},
+		{"max", file.Max, &out.Max},
+		{"chat", file.Chat, &out.Chat},
+		{"chat_thinking", file.ChatThinking, &out.ChatThinking},
+		{"vision", file.Vision, &out.Vision},
+		{"embed", file.Embed, &out.Embed},
+		{"speech", file.Speech, &out.Speech},
+		{"stream_idle", file.StreamIdle, &out.StreamIdle},
+	}); err != nil {
+		return Timeouts{}, err
 	}
-	if out.Max, err = overlayDuration(file.Max, out.Max); err != nil {
-		return Timeouts{}, fmt.Errorf("timeouts.max: %w", err)
+	if len(file.Backends) > 0 && out.Backends == nil {
+		out.Backends = map[string]BackendTimeouts{}
 	}
-	if out.Chat, err = overlayDuration(file.Chat, out.Chat); err != nil {
-		return Timeouts{}, fmt.Errorf("timeouts.chat: %w", err)
-	}
-	if out.ChatThinking, err = overlayDuration(file.ChatThinking, out.ChatThinking); err != nil {
-		return Timeouts{}, fmt.Errorf("timeouts.chat_thinking: %w", err)
-	}
-	if out.Vision, err = overlayDuration(file.Vision, out.Vision); err != nil {
-		return Timeouts{}, fmt.Errorf("timeouts.vision: %w", err)
-	}
-	if out.Embed, err = overlayDuration(file.Embed, out.Embed); err != nil {
-		return Timeouts{}, fmt.Errorf("timeouts.embed: %w", err)
-	}
-	if out.Speech, err = overlayDuration(file.Speech, out.Speech); err != nil {
-		return Timeouts{}, fmt.Errorf("timeouts.speech: %w", err)
-	}
-	if out.StreamIdle, err = overlayDuration(file.StreamIdle, out.StreamIdle); err != nil {
-		return Timeouts{}, fmt.Errorf("timeouts.stream_idle: %w", err)
-	}
-	if len(file.Backends) > 0 {
-		if out.Backends == nil {
-			out.Backends = map[string]BackendTimeouts{}
+	for id, entry := range file.Backends {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
 		}
-		for id, entry := range file.Backends {
-			id = strings.TrimSpace(id)
-			if id == "" {
-				continue
-			}
-			cur := out.Backends[id]
-			if cur.Chat, err = overlayDuration(entry.Chat, cur.Chat); err != nil {
-				return Timeouts{}, fmt.Errorf("timeouts.backends.%s.chat: %w", id, err)
-			}
-			if cur.ChatThinking, err = overlayDuration(entry.ChatThinking, cur.ChatThinking); err != nil {
-				return Timeouts{}, fmt.Errorf("timeouts.backends.%s.chat_thinking: %w", id, err)
-			}
-			if cur.Vision, err = overlayDuration(entry.Vision, cur.Vision); err != nil {
-				return Timeouts{}, fmt.Errorf("timeouts.backends.%s.vision: %w", id, err)
-			}
-			if cur.StreamIdle, err = overlayDuration(entry.StreamIdle, cur.StreamIdle); err != nil {
-				return Timeouts{}, fmt.Errorf("timeouts.backends.%s.stream_idle: %w", id, err)
-			}
-			out.Backends[id] = cur
+		cur := out.Backends[id]
+		if err := overlayDurations("timeouts.backends."+id, []durationField{
+			{"chat", entry.Chat, &cur.Chat},
+			{"chat_thinking", entry.ChatThinking, &cur.ChatThinking},
+			{"vision", entry.Vision, &cur.Vision},
+			{"stream_idle", entry.StreamIdle, &cur.StreamIdle},
+		}); err != nil {
+			return Timeouts{}, err
 		}
+		out.Backends[id] = cur
 	}
 	if out.Min <= 0 || out.Max < out.Min {
 		return Timeouts{}, fmt.Errorf("timeouts: max must be >= min")

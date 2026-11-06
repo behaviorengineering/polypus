@@ -5,8 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
-
-	"github.com/behaviorengineering/polypus/internal/config"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -40,7 +39,7 @@ func RecordChatStreamChunk(ctx context.Context, c StreamChunk) {
 	if len(c.RawProviderJSON) > 0 {
 		attrs = append(attrs, attribute.String("polypus.stream.raw_sha256", sha256Hex(c.RawProviderJSON)))
 	}
-	if debugStreamChunks() {
+	if streamChunkDebug.Load() {
 		if p := cappedRedacted(string(c.OpenAIJSON)); p != "" {
 			attrs = append(attrs, attribute.String("polypus.stream.openai_preview", p))
 		}
@@ -53,9 +52,9 @@ func RecordChatStreamChunk(ctx context.Context, c StreamChunk) {
 	span.AddEvent("polypus.bifrost.stream_chunk", trace.WithAttributes(attrs...))
 }
 
-func debugStreamChunks() bool {
-	return config.EnvBool("POLYPUS_STREAM_CHUNK_DEBUG", false)
-}
+// streamChunkDebug is Config.StreamChunkDebug, set once by Init rather than read from
+// the environment on every chunk.
+var streamChunkDebug atomic.Bool
 
 func sha256Hex(b []byte) string {
 	if len(b) == 0 {

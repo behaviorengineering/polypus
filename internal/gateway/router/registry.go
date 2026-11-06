@@ -18,15 +18,19 @@ type Registry struct {
 	cfg atomic.Pointer[config.RouterConfig]
 }
 
-// NewRegistry validates backend URLs and builds the routing table.
+// NewRegistry validates backend URLs and builds the routing table. A backend the
+// config gets wrong is CodeInvalid, with the backend id in the error.
 func NewRegistry(cfg config.RouterConfig) (*Registry, error) {
+	const op = "router.NewRegistry"
 	for id, b := range cfg.Backends {
 		if err := validateBackend(b, cfg.Policy); err != nil {
-			return nil, fmt.Errorf("backends.%s: %w", id, err)
+			return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), op, "backends."+id).
+				With(fieldBackend, id)
 		}
 		if b.IsCloudflareExtension() {
 			if _, err := cloudflare.AIBaseURL(b.BaseURL); err != nil {
-				return nil, fmt.Errorf("backends.%s: %w", id, err)
+				return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), op, "backends."+id).
+					With(fieldBackend, id)
 			}
 		}
 	}
@@ -106,19 +110,19 @@ func (r *Registry) ResolveBatch(model string) (string, string, error) {
 	return resolveCapability(cfg, config.CapBatch, cfg.EffectiveBatchBackend(), strings.TrimSpace(model))
 }
 
-// resolveCapability picks the backend and downstream model for cap from one config
+// resolveCapability picks the backend and downstream model for capability from one config
 // snapshot. A "backend/model" prefix selects that backend; otherwise the default.
 // Errors are typed: a request the gateway cannot route is CodeInvalid, and a
 // default that the config does not provide is CodeNotReady.
-func resolveCapability(cfg config.RouterConfig, cap config.Capability, defaultBackend, model string) (string, string, error) {
+func resolveCapability(cfg config.RouterConfig, capability config.Capability, defaultBackend, model string) (string, string, error) {
 	const op = "router.resolve"
 	model = strings.TrimSpace(model)
 	if model == "" {
-		if cap != config.CapTTS && cap != config.CapSTT {
-			return "", "", derrors.New(derrors.CodeInvalid, op, "model required").With("capability", string(cap))
+		if capability != config.CapTTS && capability != config.CapSTT {
+			return "", "", derrors.New(derrors.CodeInvalid, op, "model required").With("capability", string(capability))
 		}
 		// Speech may omit the model: the default backend picks its own.
-		if err := checkDefaultBackend(cfg, cap, defaultBackend); err != nil {
+		if err := checkDefaultBackend(cfg, capability, defaultBackend); err != nil {
 			return "", "", err
 		}
 		return defaultBackend, "", nil
@@ -126,41 +130,41 @@ func resolveCapability(cfg config.RouterConfig, cap config.Capability, defaultBa
 	if i := strings.Index(model, "/"); i > 0 {
 		prefix := model[:i]
 		if b, ok := cfg.Backends[prefix]; ok {
-			if !b.HasCapability(cap) {
-				return "", "", withEmbedIntervention(cap, derrors.New(derrors.CodeInvalid, op, fmt.Sprintf("backend %q does not support %s", prefix, cap)).
-					With("backend", prefix))
+			if !b.HasCapability(capability) {
+				return "", "", withEmbedIntervention(capability, derrors.New(derrors.CodeInvalid, op, fmt.Sprintf("backend %q does not support %s", prefix, capability)).
+					With(fieldBackend, prefix))
 			}
 			rest := strings.TrimSpace(model[i+1:])
 			if rest == "" {
-				return "", "", derrors.New(derrors.CodeInvalid, op, "model required after backend prefix").With("backend", prefix)
+				return "", "", derrors.New(derrors.CodeInvalid, op, "model required after backend prefix").With(fieldBackend, prefix)
 			}
 			return prefix, rest, nil
 		}
 	}
-	if err := checkDefaultBackend(cfg, cap, defaultBackend); err != nil {
+	if err := checkDefaultBackend(cfg, capability, defaultBackend); err != nil {
 		return "", "", err
 	}
 	return defaultBackend, model, nil
 }
 
-// checkDefaultBackend reports whether defaultBackend exists and serves cap.
-func checkDefaultBackend(cfg config.RouterConfig, cap config.Capability, defaultBackend string) error {
+// checkDefaultBackend reports whether defaultBackend exists and serves capability.
+func checkDefaultBackend(cfg config.RouterConfig, capability config.Capability, defaultBackend string) error {
 	const op = "router.resolve"
 	if defaultBackend == "" {
-		return withEmbedIntervention(cap, derrors.New(derrors.CodeInvalid, op, fmt.Sprintf("no default backend for %s; prefix the model with a backend id", cap)))
+		return withEmbedIntervention(capability, derrors.New(derrors.CodeInvalid, op, fmt.Sprintf("no default backend for %s; prefix the model with a backend id", capability)))
 	}
 	b, ok := cfg.Backends[defaultBackend]
 	if !ok {
-		return withEmbedIntervention(cap, derrors.New(derrors.CodeNotReady, op, fmt.Sprintf("default backend %q not found", defaultBackend)))
+		return withEmbedIntervention(capability, derrors.New(derrors.CodeNotReady, op, fmt.Sprintf("default backend %q not found", defaultBackend)))
 	}
-	if !b.HasCapability(cap) {
-		return withEmbedIntervention(cap, derrors.New(derrors.CodeNotReady, op, fmt.Sprintf("default backend %q does not support %s", defaultBackend, cap)))
+	if !b.HasCapability(capability) {
+		return withEmbedIntervention(capability, derrors.New(derrors.CodeNotReady, op, fmt.Sprintf("default backend %q does not support %s", defaultBackend, capability)))
 	}
 	return nil
 }
 
-func withEmbedIntervention(cap config.Capability, err *derrors.Error) *derrors.Error {
-	if cap != config.CapEmbed || err == nil {
+func withEmbedIntervention(capability config.Capability, err *derrors.Error) *derrors.Error {
+	if capability != config.CapEmbed || err == nil {
 		return err
 	}
 	return err.With(derrors.FieldIntervention, string(observability.InterventionEmbedCapabilityMissing))

@@ -72,7 +72,7 @@ func refusedDial(t *testing.T) error {
 func TestWriteUpstreamDialErrorSwitchyardUnreachableNoRetryAfter(t *testing.T) {
 	err := refusedDial(t)
 	rec := httptest.NewRecorder()
-	testShared.writeUpstreamDialError(rec, err, "polypus: switchyard unavailable: ", upstream.NameSwitchyard, isSwitchyardUnreachable)
+	testShared.writeUpstreamDialError(rec, dialFailure{err: err, prefix: "polypus: switchyard unavailable: ", upstream: upstream.NameSwitchyard, unreachable: isSwitchyardUnreachable})
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d", rec.Code)
 	}
@@ -100,7 +100,7 @@ func TestWriteUpstreamDialErrorRateLimitPrecedence(t *testing.T) {
 		"provider rate limited",
 	)
 	rec := httptest.NewRecorder()
-	testShared.writeUpstreamDialError(rec, err, "", "cf_local", nil)
+	testShared.writeUpstreamDialError(rec, dialFailure{err: err, prefix: "", upstream: "cf_local", unreachable: nil})
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -120,7 +120,7 @@ func TestWriteUpstreamDialErrorResponseWrittenNoOp(t *testing.T) {
 	err := fmt.Errorf("stream: %w", upstream.ErrResponseWritten)
 	rec := httptest.NewRecorder()
 	rec.WriteHeader(http.StatusOK)
-	testShared.writeUpstreamDialError(rec, err, "", "cf_local", nil)
+	testShared.writeUpstreamDialError(rec, dialFailure{err: err, prefix: "", upstream: "cf_local", unreachable: nil})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d", rec.Code)
 	}

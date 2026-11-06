@@ -17,6 +17,7 @@ func TestRunWithProviders(t *testing.T) {
 	if err := os.WriteFile(gw, []byte(`backends:
   cf_local:
     extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
     capabilities: [chat]
@@ -156,6 +157,7 @@ func TestRunWithProvidersSkipsMissingSecrets(t *testing.T) {
 	if err := os.WriteFile(gw, []byte(`backends:
   cf_local:
     extension: cloudflare
+    base_url: https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1
     auth:
       bearer_env: CF_AI_API_KEY
     capabilities: [chat]

@@ -10,8 +10,13 @@ import (
 	"time"
 )
 
+func fixedClock() func() time.Time {
+	now := time.Unix(1_000, 0)
+	return func() time.Time { return now }
+}
+
 func TestCacheGetPutCopies(t *testing.T) {
-	c := NewCache(time.Minute)
+	c := NewCacheClock(time.Minute, fixedClock())
 	if _, ok := c.Get(); ok {
 		t.Fatal("empty cache must miss")
 	}
@@ -28,16 +33,17 @@ func TestCacheGetPutCopies(t *testing.T) {
 }
 
 func TestCacheExpires(t *testing.T) {
-	c := NewCache(time.Nanosecond)
+	now := time.Unix(1_000, 0)
+	c := NewCacheClock(time.Minute, func() time.Time { return now })
 	c.Put([]Model{{ID: "a"}})
-	time.Sleep(time.Millisecond)
+	now = now.Add(2 * time.Minute)
 	if _, ok := c.Get(); ok {
 		t.Fatal("expired entries must miss")
 	}
 }
 
 func TestListStrictFetchesThenServesCache(t *testing.T) {
-	c := NewCache(time.Minute)
+	c := NewCacheClock(time.Minute, fixedClock())
 	calls := 0
 	fetch := func(context.Context) ([]Model, error) {
 		calls++
@@ -56,7 +62,7 @@ func TestListStrictFetchesThenServesCache(t *testing.T) {
 
 func TestListStrictReturnsErrorWithoutCache(t *testing.T) {
 	boom := errors.New("boom")
-	_, err := ListStrict(context.Background(), Source{Provider: "test", Cache: NewCache(time.Minute), Fetch: func(context.Context) ([]Model, error) {
+	_, err := ListStrict(context.Background(), Source{Provider: "test", Cache: NewCacheClock(time.Minute, fixedClock()), Fetch: func(context.Context) ([]Model, error) {
 		return nil, boom
 	}})
 	if !errors.Is(err, boom) {
@@ -84,8 +90,23 @@ func TestRegistryCreatesOnce(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	if Truncate("abcdef", 3) != "abc" || Truncate("ab", 3) != "ab" {
-		t.Fatal("truncate")
+	if got := Truncate("abcdef", 3); got != "abc..." {
+		t.Fatalf("Truncate cut = %q", got)
+	}
+	if got := Truncate("  ab  ", 3); got != "ab" {
+		t.Fatalf("Truncate short = %q", got)
+	}
+	if got := Truncate("héllo wörld", 2); got != "hé..." {
+		t.Fatalf("Truncate must cut on runes, got %q", got)
+	}
+}
+
+func TestFirstNonEmpty(t *testing.T) {
+	if got := FirstNonEmpty("", "  ", " b ", "c"); got != "b" {
+		t.Fatalf("FirstNonEmpty = %q, want trimmed b", got)
+	}
+	if got := FirstNonEmpty(" ", ""); got != "" {
+		t.Fatalf("FirstNonEmpty blank = %q", got)
 	}
 }
 

@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func TestSubmitAndPollBatch(t *testing.T) {
@@ -45,7 +47,7 @@ func TestSubmitAndPollBatch(t *testing.T) {
 	defer srv.Close()
 
 	apiBase := srv.URL + "/accounts/acct/ai"
-	c, err := newClient(apiBase, "token")
+	c, err := newClient(apiBase, "token", time.Now, SpeechDefaults{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +76,7 @@ func TestSubmitAndPollBatch(t *testing.T) {
 
 func TestParsePollResultMapsLineError(t *testing.T) {
 	raw := []byte(`{"result":{"responses":[{"external_reference":"x","success":false,"error":{"message":"boom"}}]}}`)
-	poll, err := parsePollResult(raw)
+	poll, err := unwrapThenParse(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestParsePollResultMapsLineError(t *testing.T) {
 
 func TestParsePollResultRejectsUnknownStatus(t *testing.T) {
 	raw := []byte(`{"result":{"status":"weird_state"}}`)
-	_, err := parsePollResult(raw)
+	_, err := unwrapThenParse(raw)
 	if err == nil {
 		t.Fatal("expected error for unknown status")
 	}
@@ -104,7 +106,7 @@ func TestParsePollResultEmptyStatusIsQueued(t *testing.T) {
 		[]byte(`{"result":{}}`),
 	}
 	for _, raw := range cases {
-		poll, err := parsePollResult(raw)
+		poll, err := unwrapThenParse(raw)
 		if err != nil {
 			t.Fatalf("parsePollResult(%s): %v", raw, err)
 		}
@@ -145,5 +147,47 @@ func TestBatchLinesKeepLargeIntegersExact(t *testing.T) {
 	}
 	if got := string(items[0]["external_reference"]); got != `"a"` {
 		t.Fatalf("external_reference = %s", got)
+	}
+}
+
+// unwrapThenParse reads a poll reply the way PollBatch does: envelope first.
+func unwrapThenParse(raw []byte) (BatchPollResult, error) {
+	inner, err := unwrapBatchEnvelope(raw)
+	if err != nil {
+		return BatchPollResult{}, err
+	}
+	return parsePollResult(inner)
+}
+
+func TestEmbeddingInputToText(t *testing.T) {
+	for raw, want := range map[string]string{`"hello"`: "hello", `["one"]`: "one"} {
+		got, err := embeddingInputToText(json.RawMessage(raw))
+		if err != nil || got != want {
+			t.Fatalf("%s: got %q, %v", raw, got, err)
+		}
+	}
+	for _, raw := range []string{``, `""`, `["a","b"]`, `[1]`, `42`, `{"x":1}`, `[" "]`} {
+		if _, err := embeddingInputToText(json.RawMessage(raw)); err == nil {
+			t.Fatalf("%q: want an error", raw)
+		}
+	}
+}
+
+func TestPostBatchRunMapsUpstream4xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"success":false,"errors":[{"message":"no such model"}]}`))
+	}))
+	defer srv.Close()
+	c, err := newClient(srv.URL+"/accounts/acct/ai", "token", time.Now, SpeechDefaults{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.PollBatch(hopCtx(t), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", "req-1")
+	if got := derrors.CodeOf(err); got != derrors.CodeNotFound {
+		t.Fatalf("code %q, want not_found (err %v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "no such model") {
+		t.Fatalf("want Cloudflare's message, got %v", err)
 	}
 }

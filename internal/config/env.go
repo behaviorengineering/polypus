@@ -36,14 +36,27 @@ type BackendAuth struct {
 }
 
 // ResolveBearerToken reads the bearer token for a remote backend from the environment.
+// Both failures are CodeNotReady: the operator config is incomplete, not the caller's
+// request, so a gateway answers 503 rather than 400 or 500.
 func (a BackendAuth) ResolveBearerToken() (string, error) {
+	const op = "config.ResolveBearerToken"
 	env := strings.TrimSpace(a.BearerEnv)
 	if env == "" {
-		return "", fmt.Errorf("auth.bearer_env required for remote backend")
+		return "", derrors.New(derrors.CodeNotReady, op, "auth.bearer_env required for remote backend")
 	}
 	token := operatorconfig.SanitizeSecret(os.Getenv(env))
 	if token == "" {
-		return "", fmt.Errorf("environment variable %q required for remote backend", env)
+		return "", derrors.New(derrors.CodeNotReady, op,
+			fmt.Sprintf("environment variable %q required for remote backend", env)).With("env", env)
 	}
 	return token, nil
+}
+
+// EnvOr returns the trimmed value of the environment variable key, or def when it
+// is unset or blank.
+func EnvOr(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return def
 }

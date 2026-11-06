@@ -91,9 +91,6 @@ backends:
 	if !strings.Contains(openaiBody, "cf_local/@cf/a") {
 		t.Fatalf("missing chat model: %s", openaiBody)
 	}
-	link := rec.Header().Get("Link")
-	_ = link
-
 	sysBody := getModelsList(t, handler, "/v1/apis/systemone/models")
 	if strings.Contains(sysBody, `"id":"typesafe/jev"`) {
 		t.Fatalf("systemone should not list bare alias duplicate: %s", sysBody)
@@ -125,7 +122,7 @@ func getModelsList(t *testing.T, handler http.Handler, path string) string {
 		t.Fatalf("%s status %d %s", path, rec.Code, rec.Body.String())
 	}
 	if path == "/v1/models" || path == "/v1/apis/openai/models" {
-		if link := rec.Header().Get("Link"); !strings.Contains(link, openAIModelsCanonicalPath) {
+		if link := rec.Header().Get("Link"); link != "<"+openAIModelsCanonicalPath+">; rel=\"canonical\"" {
 			t.Fatalf("%s missing canonical Link: %q", path, link)
 		}
 	}

@@ -23,7 +23,8 @@ func (c *Client) SystemOneDecisionRaw(ctx context.Context, call Call) ([]byte, e
 	if downstream != "" {
 		native.Model = downstream
 	}
-	bctx := c.bifrostContext(ctx, timeout, false)
+	bctx, cancel := c.bifrostContext(ctx, timeout, false)
+	defer cancel()
 	bfReq, err := native.ToBifrostDecisionRequest(bctx)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "router.SystemOneDecisionRaw", "convert decision request")
@@ -38,8 +39,8 @@ func (c *Client) SystemOneDecisionRaw(ctx context.Context, call Call) ([]byte, e
 	}
 	if resp == nil {
 		return nil, derrors.New(derrors.CodeUnavailable, "router.SystemOneDecisionRaw", "empty decision response from backend").
-			With("backend", backendID).
-			With("model", downstream)
+			With(fieldBackend, backendID).
+			With(fieldModel, downstream)
 	}
 	if len(resp.NativeResponse) > 0 {
 		return resp.NativeResponse, nil
@@ -52,6 +53,6 @@ func (c *Client) SystemOneDecisionRaw(ctx context.Context, call Call) ([]byte, e
 		return raw, nil
 	}
 	return nil, derrors.New(derrors.CodeUnavailable, "router.SystemOneDecisionRaw", "decision response missing provider body").
-		With("backend", backendID).
-		With("model", downstream)
+		With(fieldBackend, backendID).
+		With(fieldModel, downstream)
 }

@@ -1,8 +1,13 @@
+// Package cli is the Cobra command tree for the polypus and polypus-smoke
+// binaries: bare invoke prints the agent guide, and each command calls one
+// service package.
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -24,19 +29,20 @@ func execute(root *cobra.Command, args []string) int {
 	if err == nil {
 		return 0
 	}
+	errOut := root.ErrOrStderr()
 	var ex *exitError
 	if errors.As(err, &ex) {
 		if ex.msg != "" {
-			fmt.Fprintln(os.Stderr, ex.msg)
+			errorf(errOut, "%s\n", ex.msg)
 		}
 		return ex.code
 	}
 	var usage *usageError
 	if errors.As(err, &usage) {
-		fmt.Fprintf(os.Stderr, "%s: %v\nRun '%s help' for the command list.\n", root.Name(), err, root.Name())
+		errorf(errOut, "%s: %v\nRun '%s help' for the command list.\n", root.Name(), err, root.Name())
 		return 2
 	}
-	fmt.Fprintln(os.Stderr, err)
+	errorf(errOut, "%v\n", err)
 	return 1
 }
 
@@ -83,4 +89,34 @@ func polypusCommands(root *cobra.Command) []*cobra.Command {
 	}
 	walk(root)
 	return out
+}
+
+// cmdIO is a command's context and output streams, handed to run functions so
+// they write through Cobra's writers (SetOut and SetErr reach them) and can be
+// tested without a Cobra tree.
+type cmdIO struct {
+	ctx    context.Context
+	out    io.Writer
+	errOut io.Writer
+}
+
+// ioFor reads cmd's context and writers.
+func ioFor(cmd *cobra.Command) cmdIO {
+	return cmdIO{ctx: cmd.Context(), out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr()}
+}
+
+// errorf writes one diagnostic to the error stream. A failed write to stderr has
+// nowhere left to be reported, so it is dropped here, in one place.
+func errorf(w io.Writer, format string, a ...any) {
+	_, _ = fmt.Fprintf(w, format, a...) //nolint:errcheck // stderr is the last resort; see above.
+}
+
+// errorf writes one diagnostic to the command's error stream.
+func (c cmdIO) errorf(format string, a ...any) { errorf(c.errOut, format, a...) }
+
+// printf writes to the command's output stream. Output is the command's result,
+// so a failed write is the caller's to report.
+func (c cmdIO) printf(format string, a ...any) error {
+	_, err := fmt.Fprintf(c.out, format, a...)
+	return err
 }

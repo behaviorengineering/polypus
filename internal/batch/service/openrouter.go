@@ -6,9 +6,12 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
+
+const opOpenRouter = "batch.openrouter"
 
 type openRouterSubmitter struct {
 	client func() (*openrouter.Client, error)
@@ -28,7 +31,7 @@ func NewOpenRouterSubmitter(client func() (*openrouter.Client, error)) Submitter
 func (s openRouterSubmitter) Validate(job Job) error {
 	for _, line := range job.Lines {
 		if hasInlineMedia(line.Body) {
-			return derrors.New(derrors.CodeInvalid, "batch.openrouter",
+			return derrors.New(derrors.CodeInvalid, opOpenRouter,
 				"openrouter batches take text and public https image URLs only (no base64 images or audio)").
 				With("custom_id", line.CustomID)
 		}
@@ -67,11 +70,11 @@ func hasInlineMedia(body json.RawMessage) bool {
 func (s openRouterSubmitter) Submit(ctx context.Context, job Job, meta *batch.Meta) error {
 	client, err := s.client()
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeNotReady, "batch.openrouter", "client")
+		return derrors.Wrap(err, derrors.CodeNotReady, opOpenRouter, "client")
 	}
 	id, err := client.SubmitBatch(ctx, job.Downstream, job.Endpoint, job.Lines)
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opOpenRouter, "submit").With("batch_id", meta.ID)
 	}
 	meta.UpstreamBatchID = id
 	return nil
@@ -80,11 +83,11 @@ func (s openRouterSubmitter) Submit(ctx context.Context, job Job, meta *batch.Me
 func (s openRouterSubmitter) Poll(ctx context.Context, meta batch.Meta) (Poll, error) {
 	client, err := s.client()
 	if err != nil {
-		return Poll{}, derrors.Wrap(err, derrors.CodeNotReady, "batch.openrouter", "client")
+		return Poll{}, derrors.Wrap(err, derrors.CodeNotReady, opOpenRouter, "client")
 	}
 	b, err := client.GetBatch(ctx, meta.UpstreamBatchID)
 	if err != nil {
-		return Poll{}, err
+		return Poll{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opOpenRouter, "poll").With("batch_id", meta.ID)
 	}
 	switch b.Status {
 	case openrouter.StatusCompleted:
@@ -104,7 +107,7 @@ func (s openRouterSubmitter) Poll(ctx context.Context, meta batch.Meta) (Poll, e
 }
 
 func (s openRouterSubmitter) Cancel(context.Context, batch.Meta) error {
-	return derrors.New(derrors.CodeUnimplemented, "batch.openrouter", "openrouter batches cannot be cancelled")
+	return derrors.New(derrors.CodeUnimplemented, opOpenRouter, "openrouter batches cannot be cancelled")
 }
 
 // openRouterLines turns OpenRouter results into batch lines. Success bodies already have
@@ -115,8 +118,8 @@ func openRouterLines(results []openrouter.BatchResult, publicModel string) []bat
 		line := batch.LineResult{CustomID: r.CustomID}
 		switch {
 		case r.Error != nil:
-			line.ErrCode = firstNonEmpty(r.Error.Type, "batch_failed")
-			line.ErrMessage = firstNonEmpty(r.Error.Message, "openrouter batch line failed")
+			line.ErrCode = catalog.FirstNonEmpty(r.Error.Type, "batch_failed")
+			line.ErrMessage = catalog.FirstNonEmpty(r.Error.Message, "openrouter batch line failed")
 		case r.Response == nil || r.Response.StatusCode < 200 || r.Response.StatusCode >= 300:
 			line.ErrCode = "batch_failed"
 			line.ErrMessage = "openrouter batch line returned no successful response"
@@ -152,12 +155,3 @@ const (
 	keyModel  = "model"
 	keyObject = "object"
 )
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}

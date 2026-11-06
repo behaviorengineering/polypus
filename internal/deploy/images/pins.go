@@ -22,12 +22,11 @@ func VersionPins(base []byte, version string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("images: build version %q has no release images; pass --images with pinned images: %w", version, err)
 	}
-	data := base
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Written by polypus deploy for release %s. Do not edit.\n", tag.App)
 	fmt.Fprintf(&b, "%s=%s:%s\n", polypusImageKey, polypusImageRepo, tag.App)
 	fmt.Fprintf(&b, "%s=%s:%s\n", switchyardImageKey, switchyardImageRepo, tag.App)
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(string(base), "\n") {
 		key, _, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok || strings.HasPrefix(key, "#") || key == polypusImageKey || key == switchyardImageKey {
 			continue

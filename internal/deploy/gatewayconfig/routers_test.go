@@ -107,3 +107,27 @@ func TestRouterSmokeTargetsUnknownType(t *testing.T) {
 		t.Fatal("expected an unknown route type rejected")
 	}
 }
+
+func TestHasRouters(t *testing.T) {
+	for _, tc := range []struct {
+		name, yaml string
+		want       bool
+	}{
+		{"router", "routers:\n  investigator:\n    capability: chat\n", true},
+		{"commented", "# routers:\n#   x:\n", false},
+		{"empty map", "routers: {}\n", false},
+		{"indented key under another block", "backends:\n  cf_local:\n    routers:\n      x: 1\n", false},
+		{"none", "backends: {}\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "gateway.yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := HasRouters(path)
+			if err != nil || got != tc.want {
+				t.Fatalf("HasRouters = %v, %v want %v", got, err, tc.want)
+			}
+		})
+	}
+}

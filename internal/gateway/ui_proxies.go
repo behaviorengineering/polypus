@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -26,7 +25,7 @@ func (s *shared) buildUIMounts(proxies []config.UIProxy) ([]uiProxyMount, error)
 	for _, p := range proxies {
 		target, err := url.Parse(p.URL)
 		if err != nil {
-			return nil, fmt.Errorf("gateway: ui_proxies %q: %w", p.Path, err)
+			return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.buildUIMounts", "ui_proxies url").With("path", p.Path)
 		}
 		mounts = append(mounts, uiProxyMount{
 			prefix:  p.Path,

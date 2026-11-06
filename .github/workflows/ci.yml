@@ -11,15 +11,10 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    env:
-      # v0.1.0 is new; sum.golang.org may lag until the module is indexed.
-      GONOSUMDB: github.com/behaviorengineering/operatorconfig
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-          # Full history so lint can compare against the base branch.
-          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -48,18 +43,15 @@ jobs:
 
       - name: gofumpt
         run: |
-          unformatted=$(go tool gofumpt -l ./cmd ./internal ./pkg)
+          unformatted=$(go tool gofumpt -l ./cmd ./internal ./pkg ./media)
           if [ -n "$unformatted" ]; then
             echo "gofumpt needed (go tool task format):"
             echo "$unformatted"
             exit 1
           fi
 
-      # Lints only the lines a pull request changes. Drop --new-from-rev once the
-      # older baseline is cleared, so the whole module is gated.
-      - name: golangci-lint (new code)
-        if: github.event_name == 'pull_request'
-        run: go tool golangci-lint run --timeout 5m --new-from-rev "origin/${{ github.base_ref }}" ./cmd/... ./internal/... ./pkg/...
+      - name: golangci-lint
+        run: go tool golangci-lint run --timeout 5m ./cmd/... ./internal/... ./pkg/... ./media/...
 
       - name: go vet
         run: go vet ./...

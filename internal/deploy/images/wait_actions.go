@@ -2,7 +2,6 @@ package images
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,21 +9,32 @@ import (
 	"strings"
 	"time"
 
-	"github.com/behaviorengineering/polypus/internal/outbound"
+	"github.com/behaviorengineering/polypus/internal/clients/github"
+	"github.com/behaviorengineering/polypus/internal/deploy/progress"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
-// WaitOptions configures GitHub Actions polling when GHCR tags are missing.
+// conclusionSuccess is a GitHub Actions run or job that passed.
+const conclusionSuccess = "success"
+
+// runsPerPage is how many recent runs of each workflow file a poll reads.
+const runsPerPage = 20
+
+// WaitOptions configures GitHub Actions polling when registry tags are missing.
 type WaitOptions struct {
 	OwnerRepo     string
 	WorkflowFiles []string
 	PollInterval  time.Duration
 	Timeout       time.Duration
-	HTTPClient    *http.Client
-	Token         string
-	// WorkflowRunsBaseURL is optional (tests). Default https://api.github.com/repos/{owner}/{repo}/actions/workflows
-	WorkflowRunsBaseURL string
-	// GitHubAPIBaseURL is optional (tests). Default https://api.github.com
+	// GitHub reads the workflow runs. Nil builds one from HTTPClient, Token and
+	// GitHubAPIBaseURL.
+	GitHub     *github.Client
+	HTTPClient *http.Client
+	Token      string
+	// GitHubAPIBaseURL is optional (tests). Default https://api.github.com.
 	GitHubAPIBaseURL string
+	// Out receives progress lines; nil writes to os.Stdout.
+	Out io.Writer
 }
 
 // DefaultWaitOptions returns deploy defaults (20m cap, 30s poll).
@@ -58,62 +68,74 @@ func applyWaitDefaults(opts WaitOptions) WaitOptions {
 	return opts
 }
 
-// ErrImageNeverPublished means no matching Actions run exists for the version.
-var ErrImageNeverPublished = errors.New("images never published for version")
+// githubClient returns opts.GitHub, or a client built from the token (else
+// GHCR_TOKEN, GITHUB_TOKEN or GH_TOKEN) and the other fields.
+func (o WaitOptions) githubClient() (*github.Client, error) {
+	if o.GitHub != nil {
+		return o.GitHub, nil
+	}
+	token := strings.TrimSpace(o.Token)
+	if token == "" {
+		token = registryToken()
+	}
+	return github.Config{
+		HTTP:      o.HTTPClient,
+		Token:     token,
+		BaseURL:   o.GitHubAPIBaseURL,
+		OwnerRepo: o.OwnerRepo,
+	}.CreateClient()
+}
 
 // ErrImageBuildFailed means the latest matching Actions run failed.
 var ErrImageBuildFailed = errors.New("image build workflow failed")
 
-// WaitForImages polls GitHub Actions until docker release work finishes or fails fast.
+// WaitForImages polls GitHub Actions until the release's image workflow succeeds,
+// fails, or opts.Timeout passes. It waits while no matching run exists yet.
 func WaitForImages(ctx context.Context, version string, opts WaitOptions) error {
+	const op = "images.WaitForImages"
 	if ctx == nil {
-		return fmt.Errorf("images: context required")
+		return derrors.New(derrors.CodeInvalid, op, "context required")
 	}
 	version = strings.TrimSpace(version)
 	if version == "" {
-		return fmt.Errorf("images: empty version for wait")
+		return derrors.New(derrors.CodeInvalid, op, "empty version for wait")
 	}
 	opts = applyWaitDefaults(opts)
-
-	client := opts.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 45 * time.Second}
+	gh, err := opts.githubClient()
+	if err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeFailedPrecondition), op, "wait for image builds")
 	}
-	token := opts.Token
-	if token == "" {
-		token = registryToken()
-	}
-	if token == "" {
-		return fmt.Errorf("images: GITHUB_TOKEN or GH_TOKEN required to wait for image builds")
-	}
-
-	deadline := time.Now().Add(opts.Timeout)
 	parsed, err := ParseImageTag(version)
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeInvalid, op, "parse version")
 	}
-	tag := AppGitTag(parsed.App)
+	tag := appGitTag(parsed.App)
 	pinTag := version
 	if parsed.Rebuild == 0 {
 		pinTag = parsed.App
 	}
-
+	out := progress.New(opts.Out)
+	deadline := time.Now().Add(opts.Timeout)
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return derrors.Wrap(err, derrors.CodeCanceled, op, "wait for "+tag)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("images: timed out waiting for GHCR tags for %s", tag)
+			return derrors.New(derrors.CodeTimeout, op, "timed out waiting for image tags").
+				With("tag", tag).With("timeout", opts.Timeout.String())
 		}
-		runs, err := listMatchingRuns(ctx, client, token, opts, tag, pinTag)
+		runs, err := listMatchingRuns(ctx, gh, opts.WorkflowFiles, tag, pinTag)
 		if err != nil {
-			return err
+			return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "list workflow runs")
 		}
-		if done, err := imageRunsDone(runs, tag); done || err != nil {
+		if done, err := imageRunsDone(out, runs, tag); done || err != nil {
+			if err == nil {
+				err = out.Err()
+			}
 			return err
 		}
 		if err := sleepCtx(ctx, opts.PollInterval); err != nil {
-			return err
+			return derrors.Wrap(err, derrors.CodeCanceled, op, "wait for "+tag)
 		}
 	}
 }
@@ -121,21 +143,22 @@ func WaitForImages(ctx context.Context, version string, opts WaitOptions) error 
 // imageRunsDone reads one poll of the matching workflow runs: done with a nil error
 // when the latest run succeeded, done with an error when it failed, and not done
 // while no run exists yet or one is still running.
-func imageRunsDone(runs []workflowRun, tag string) (bool, error) {
+func imageRunsDone(out *progress.Printer, runs []github.WorkflowRun, tag string) (bool, error) {
 	if len(runs) == 0 {
-		fmt.Printf("deploy: waiting for image workflow to appear for %s\n", tag)
+		out.Printf("deploy: waiting for image workflow to appear for %s\n", tag)
 		return false, nil
 	}
 	latest, inProgress := latestRun(runs)
 	if inProgress {
-		fmt.Printf("deploy: waiting for image build %s\n", latest.HTMLURL)
+		out.Printf("deploy: waiting for image build %s\n", latest.HTMLURL)
 		return false, nil
 	}
 	switch strings.ToLower(latest.Conclusion) {
-	case "success":
+	case conclusionSuccess:
 		return true, nil
 	case "failure", "cancelled", "timed_out", "action_required", "stale":
-		return true, fmt.Errorf("%w: %s (%s)", ErrImageBuildFailed, tag, latest.HTMLURL)
+		return true, derrors.Wrap(fmt.Errorf("%w: %s (%s)", ErrImageBuildFailed, tag, latest.HTMLURL),
+			derrors.CodeFailedPrecondition, "images.WaitForImages", "image build failed")
 	default:
 		return false, nil
 	}
@@ -143,7 +166,7 @@ func imageRunsDone(runs []workflowRun, tag string) (bool, error) {
 
 // latestRun returns the most recently created run in runs (which must not be
 // empty), and whether any run is still in progress.
-func latestRun(runs []workflowRun) (workflowRun, bool) {
+func latestRun(runs []github.WorkflowRun) (github.WorkflowRun, bool) {
 	latest := runs[0]
 	inProgress := false
 	for _, r := range runs {
@@ -157,44 +180,12 @@ func latestRun(runs []workflowRun) (workflowRun, bool) {
 	return latest, inProgress
 }
 
-type workflowRun struct {
-	Status       string
-	Conclusion   string
-	HeadBranch   string
-	DisplayTitle string
-	Name         string
-	HTMLURL      string
-	CreatedAt    time.Time
-}
-
-type workflowRunsResponse struct {
-	WorkflowRuns []struct {
-		Status       string `json:"status"`
-		Conclusion   string `json:"conclusion"`
-		HeadBranch   string `json:"head_branch"`
-		DisplayTitle string `json:"display_title"`
-		Name         string `json:"name"`
-		HTMLURL      string `json:"html_url"`
-		CreatedAt    string `json:"created_at"`
-	} `json:"workflow_runs"`
-}
-
-func listMatchingRuns(ctx context.Context, client *http.Client, token string, opts WaitOptions, tag string, version string) ([]workflowRun, error) {
-	var matched []workflowRun
-	for _, wf := range opts.WorkflowFiles {
-		url := workflowRunsURL(opts, wf)
-		var page []workflowRun
-		var fetchErr error
-		err := outbound.Run(ctx, outbound.DepGitHub, func() error {
-			page, fetchErr = fetchWorkflowRuns(ctx, client, token, url)
-			if fetchErr == nil {
-				return nil
-			}
-			if !githubActionsRetryable(fetchErr) {
-				return outbound.Abort(fetchErr)
-			}
-			return outbound.Retry(fetchErr)
-		})
+// listMatchingRuns reads each workflow file's recent runs once; the client's
+// outbound policy is the only retry.
+func listMatchingRuns(ctx context.Context, gh *github.Client, workflowFiles []string, tag, version string) ([]github.WorkflowRun, error) {
+	var matched []github.WorkflowRun
+	for _, wf := range workflowFiles {
+		page, err := gh.WorkflowRuns(ctx, wf, runsPerPage)
 		if err != nil {
 			return nil, err
 		}
@@ -207,15 +198,8 @@ func listMatchingRuns(ctx context.Context, client *http.Client, token string, op
 	return matched, nil
 }
 
-func workflowRunsURL(opts WaitOptions, workflowFile string) string {
-	if strings.TrimSpace(opts.WorkflowRunsBaseURL) != "" {
-		return strings.TrimRight(opts.WorkflowRunsBaseURL, "/") + "/" + workflowFile + "/runs?per_page=20"
-	}
-	return fmt.Sprintf("https://api.github.com/repos/%s/actions/workflows/%s/runs?per_page=20", opts.OwnerRepo, workflowFile)
-}
-
 // runMatchesVersion prefers tag head_branch; otherwise title/name must contain the full vX.Y.Z tag.
-func runMatchesVersion(r workflowRun, tag string, version string) bool {
+func runMatchesVersion(r github.WorkflowRun, tag string, version string) bool {
 	hb := strings.TrimSpace(r.HeadBranch)
 	if hb == tag || hb == version {
 		return true
@@ -261,53 +245,13 @@ func containsTagToken(blob, tagLower string) bool {
 	}
 }
 
-func runInProgress(r workflowRun) bool {
+func runInProgress(r github.WorkflowRun) bool {
 	switch strings.ToLower(r.Status) {
 	case "queued", "in_progress", "waiting", "requested", "pending":
 		return true
 	default:
 		return false
 	}
-}
-
-func fetchWorkflowRuns(ctx context.Context, client *http.Client, token string, url string) ([]workflowRun, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	resp, err := outbound.Do(ctx, outbound.DepGitHub, client, req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github actions: HTTP %d: %s", resp.StatusCode, truncate(body, 200))
-	}
-	var doc workflowRunsResponse
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return nil, fmt.Errorf("github actions: parse runs: %w", err)
-	}
-	var out []workflowRun
-	for _, wr := range doc.WorkflowRuns {
-		created, _ := time.Parse(time.RFC3339, wr.CreatedAt)
-		out = append(out, workflowRun{
-			Status:       wr.Status,
-			Conclusion:   wr.Conclusion,
-			HeadBranch:   wr.HeadBranch,
-			DisplayTitle: wr.DisplayTitle,
-			Name:         wr.Name,
-			HTMLURL:      wr.HTMLURL,
-			CreatedAt:    created,
-		})
-	}
-	return out, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -319,24 +263,4 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
-}
-
-func githubActionsRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "github actions: http 429") ||
-		strings.Contains(msg, "github actions: http 5") ||
-		strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "temporary failure")
-}
-
-func truncate(b []byte, n int) string {
-	s := strings.TrimSpace(string(b))
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

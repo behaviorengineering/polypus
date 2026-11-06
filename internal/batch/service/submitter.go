@@ -16,9 +16,11 @@ type Job struct {
 // PollState is where an upstream batch stands.
 type PollState int
 
-// Upstream batch states.
+// Upstream batch states. The zero value is no state: a Submitter that returns
+// Poll{} by mistake fails the refresh instead of reading as still running.
 const (
-	PollRunning   PollState = iota // still processing.
+	pollUnknown   PollState = iota // zero value: the Submitter set no state.
+	PollRunning                    // still processing.
 	PollDone                       // finished; Poll.Lines holds every line.
 	PollFailed                     // the batch failed as a whole, no output.
 	PollExpired                    // the provider expired it, no output.

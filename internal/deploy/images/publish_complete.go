@@ -2,264 +2,107 @@ package images
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
-	"time"
 
-	"github.com/behaviorengineering/polypus/internal/outbound"
+	"github.com/behaviorengineering/polypus/internal/clients/github"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // ErrPublishIncomplete means upstream auto-patch did not finish green through verify for the tag.
 var ErrPublishIncomplete = errors.New("upstream auto-patch publish incomplete")
 
+// autoPatchWorkflow is the run name of the auto-patch release workflow.
+const autoPatchWorkflow = "Auto patch release"
+
+// verifyJob is the auto-patch job that marks a release published.
+const verifyJob = "verify"
+
+// rebuildRunsPerPage is how many recent runs of each rebuild workflow are checked.
+const rebuildRunsPerPage = 30
+
 // VerifyPublishComplete checks that behaviorengineering/polypus Auto patch release succeeded
 // through the verify job for the commit tagged vX.Y.Z (publish-complete gate).
 func VerifyPublishComplete(ctx context.Context, version string, opts WaitOptions) error {
+	const op = "images.VerifyPublishComplete"
 	if ctx == nil {
-		return fmt.Errorf("images: context required")
+		return derrors.New(derrors.CodeInvalid, op, "context required")
 	}
 	version = strings.TrimSpace(version)
 	if version == "" {
-		return fmt.Errorf("images: empty version for publish-complete check")
+		return derrors.New(derrors.CodeInvalid, op, "empty version for publish-complete check")
 	}
 	parsed, err := ParseImageTag(version)
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeInvalid, op, "parse version")
 	}
 	opts = applyWaitDefaults(opts)
-	token := strings.TrimSpace(opts.Token)
-	if token == "" {
-		token = registryToken()
+	gh, err := opts.githubClient()
+	if err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeFailedPrecondition), op, "publish-complete check")
 	}
-	if token == "" {
-		return fmt.Errorf("images: GITHUB_TOKEN or GH_TOKEN required for publish-complete check")
-	}
-
 	if parsed.Rebuild >= 1 {
-		return verifyDockerReleasePublishComplete(ctx, version, opts, token)
+		return verifyDockerReleasePublishComplete(ctx, gh, version)
 	}
-
-	tag := AppGitTag(parsed.App)
-	client := opts.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 45 * time.Second}
-	}
-
-	apiBase := githubAPIBase(opts)
-	sha, err := resolveTagCommit(ctx, client, token, opts.OwnerRepo, tag, apiBase)
+	tag := appGitTag(parsed.App)
+	sha, err := gh.TagCommit(ctx, tag)
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "resolve tag "+tag).
+			With("owner_repo", opts.OwnerRepo)
 	}
-
-	runs, err := fetchRunsForHeadSHA(ctx, client, token, opts.OwnerRepo, sha, apiBase)
+	runs, err := gh.RunsForSHA(ctx, sha)
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "runs for "+sha)
 	}
 	for _, run := range runs {
-		if !strings.EqualFold(run.Name, "Auto patch release") {
+		if !strings.EqualFold(run.Name, autoPatchWorkflow) || !strings.EqualFold(run.Conclusion, conclusionSuccess) {
 			continue
 		}
-		if !strings.EqualFold(run.Conclusion, "success") {
-			continue
-		}
-		ok, err := runHasSuccessfulJob(ctx, client, token, opts.OwnerRepo, run.ID, "verify", apiBase)
+		ok, err := runHasSuccessfulJob(ctx, gh, run.ID, verifyJob)
 		if err != nil {
-			return err
+			return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "jobs of run "+run.HTMLURL)
 		}
 		if ok {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: no successful Auto patch release with verify for %s (%s)", ErrPublishIncomplete, tag, sha)
+	return derrors.Wrap(fmt.Errorf("%w: no successful %s with %s for %s (%s)", ErrPublishIncomplete, autoPatchWorkflow, verifyJob, tag, sha),
+		derrors.CodeFailedPrecondition, op, "publish incomplete")
 }
 
 // verifyDockerReleasePublishComplete gates -rN pins on a successful Docker release workflow run.
-func verifyDockerReleasePublishComplete(ctx context.Context, imageTag string, opts WaitOptions, token string) error {
-	client := opts.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 45 * time.Second}
-	}
-	apiBase := githubAPIBase(opts)
+func verifyDockerReleasePublishComplete(ctx context.Context, gh *github.Client, imageTag string) error {
+	const op = "images.VerifyPublishComplete"
 	want := strings.ToLower(strings.TrimSpace(imageTag))
 	for _, wf := range []string{"docker-release.yml", "packaging-rebuild.yml"} {
-		url := fmt.Sprintf("%s/repos/%s/actions/workflows/%s/runs?per_page=30", apiBase, opts.OwnerRepo, wf)
-		body, status, err := githubGET(ctx, client, token, url)
+		runs, err := gh.WorkflowRuns(ctx, wf, rebuildRunsPerPage)
 		if err != nil {
-			return err
+			return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "runs of "+wf)
 		}
-		if status != http.StatusOK {
-			return fmt.Errorf("github: workflow runs HTTP %d: %s", status, truncate(body, 200))
-		}
-		var doc actionsRunsListResponse
-		if err := json.Unmarshal(body, &doc); err != nil {
-			return fmt.Errorf("github: parse workflow runs: %w", err)
-		}
-		for _, wr := range doc.WorkflowRuns {
-			if !strings.EqualFold(wr.Conclusion, "success") {
+		for _, wr := range runs {
+			if !strings.EqualFold(wr.Conclusion, conclusionSuccess) {
 				continue
 			}
-			blob := strings.ToLower(wr.Name + "\n" + wr.DisplayTitle)
-			if strings.Contains(blob, want) {
+			if strings.Contains(strings.ToLower(wr.Name+"\n"+wr.DisplayTitle), want) {
 				return nil
 			}
 		}
 	}
-	return fmt.Errorf("%w: no successful Docker release for image tag %s", ErrPublishIncomplete, imageTag)
+	return derrors.Wrap(fmt.Errorf("%w: no successful Docker release for image tag %s", ErrPublishIncomplete, imageTag),
+		derrors.CodeFailedPrecondition, op, "publish incomplete")
 }
 
-type gitRefResponse struct {
-	Object struct {
-		Type string `json:"type"`
-		SHA  string `json:"sha"`
-	} `json:"object"`
-}
-
-type gitTagResponse struct {
-	Object struct {
-		SHA string `json:"sha"`
-	} `json:"object"`
-}
-
-func githubAPIBase(opts WaitOptions) string {
-	if strings.TrimSpace(opts.GitHubAPIBaseURL) != "" {
-		return strings.TrimRight(opts.GitHubAPIBaseURL, "/")
-	}
-	return "https://api.github.com"
-}
-
-func resolveTagCommit(ctx context.Context, client *http.Client, token string, ownerRepo string, tag string, apiBase string) (string, error) {
-	url := fmt.Sprintf("%s/repos/%s/git/ref/tags/%s", apiBase, ownerRepo, tag)
-	body, status, err := githubGET(ctx, client, token, url)
-	if err != nil {
-		return "", err
-	}
-	if status == http.StatusNotFound {
-		return "", fmt.Errorf("images: tag %s not found on %s", tag, ownerRepo)
-	}
-	if status != http.StatusOK {
-		return "", fmt.Errorf("github: tag ref HTTP %d: %s", status, truncate(body, 200))
-	}
-	var doc gitRefResponse
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return "", fmt.Errorf("github: parse tag ref: %w", err)
-	}
-	sha := strings.TrimSpace(doc.Object.SHA)
-	if sha == "" {
-		return "", fmt.Errorf("images: empty object for tag %s", tag)
-	}
-	if strings.EqualFold(doc.Object.Type, "tag") {
-		return peelAnnotatedTag(ctx, client, token, ownerRepo, sha, apiBase)
-	}
-	return sha, nil
-}
-
-func peelAnnotatedTag(ctx context.Context, client *http.Client, token string, ownerRepo string, tagSHA string, apiBase string) (string, error) {
-	url := fmt.Sprintf("%s/repos/%s/git/tags/%s", apiBase, ownerRepo, tagSHA)
-	body, status, err := githubGET(ctx, client, token, url)
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusOK {
-		return "", fmt.Errorf("github: tag object HTTP %d: %s", status, truncate(body, 200))
-	}
-	var doc gitTagResponse
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return "", fmt.Errorf("github: parse tag object: %w", err)
-	}
-	sha := strings.TrimSpace(doc.Object.SHA)
-	if sha == "" {
-		return "", fmt.Errorf("images: annotated tag %s has no commit", tagSHA)
-	}
-	return sha, nil
-}
-
-type actionsRunsListResponse struct {
-	WorkflowRuns []struct {
-		ID           int64  `json:"id"`
-		Name         string `json:"name"`
-		DisplayTitle string `json:"display_title"`
-		Conclusion   string `json:"conclusion"`
-	} `json:"workflow_runs"`
-}
-
-type actionRunSummary struct {
-	ID         int64
-	Name       string
-	Conclusion string
-}
-
-func fetchRunsForHeadSHA(ctx context.Context, client *http.Client, token string, ownerRepo string, sha string, apiBase string) ([]actionRunSummary, error) {
-	url := fmt.Sprintf("%s/repos/%s/actions/runs?head_sha=%s&per_page=20", apiBase, ownerRepo, sha)
-	body, status, err := githubGET(ctx, client, token, url)
-	if err != nil {
-		return nil, err
-	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("github: actions runs HTTP %d: %s", status, truncate(body, 200))
-	}
-	var doc actionsRunsListResponse
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return nil, fmt.Errorf("github: parse actions runs: %w", err)
-	}
-	var out []actionRunSummary
-	for _, wr := range doc.WorkflowRuns {
-		out = append(out, actionRunSummary{ID: wr.ID, Name: wr.Name, Conclusion: wr.Conclusion})
-	}
-	return out, nil
-}
-
-type actionsJobsResponse struct {
-	Jobs []struct {
-		Name       string `json:"name"`
-		Conclusion string `json:"conclusion"`
-	} `json:"jobs"`
-}
-
-func runHasSuccessfulJob(ctx context.Context, client *http.Client, token string, ownerRepo string, runID int64, jobName string, apiBase string) (bool, error) {
-	url := fmt.Sprintf("%s/repos/%s/actions/runs/%d/jobs?per_page=30", apiBase, ownerRepo, runID)
-	body, status, err := githubGET(ctx, client, token, url)
+func runHasSuccessfulJob(ctx context.Context, gh *github.Client, runID int64, jobName string) (bool, error) {
+	jobs, err := gh.RunJobs(ctx, runID)
 	if err != nil {
 		return false, err
 	}
-	if status != http.StatusOK {
-		return false, fmt.Errorf("github: actions jobs HTTP %d: %s", status, truncate(body, 200))
-	}
-	var doc actionsJobsResponse
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return false, fmt.Errorf("github: parse actions jobs: %w", err)
-	}
 	want := strings.ToLower(strings.TrimSpace(jobName))
-	for _, j := range doc.Jobs {
-		if strings.ToLower(strings.TrimSpace(j.Name)) != want {
-			continue
-		}
-		if strings.EqualFold(j.Conclusion, "success") {
+	for _, j := range jobs {
+		if strings.ToLower(strings.TrimSpace(j.Name)) == want && strings.EqualFold(j.Conclusion, conclusionSuccess) {
 			return true, nil
 		}
 	}
 	return false, nil
-}
-
-func githubGET(ctx context.Context, client *http.Client, token string, url string) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	resp, err := outbound.Do(ctx, outbound.DepGitHub, client, req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-	return body, resp.StatusCode, nil
 }

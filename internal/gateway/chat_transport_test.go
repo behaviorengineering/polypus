@@ -18,7 +18,7 @@ func TestWriteBifrostChatSSEErrorBeforeStart(t *testing.T) {
 	close(errCh)
 
 	rec := httptest.NewRecorder()
-	err := writeBifrostChatSSE(context.Background(), rec, chunks, errCh)
+	err := writeBifrostChatSSE(context.Background(), rec, bifrostStream{chunks: chunks, errs: errCh})
 	if err == nil || !strings.Contains(err.Error(), "upstream boom") {
 		t.Fatalf("err=%v", err)
 	}
@@ -36,7 +36,7 @@ func TestWriteBifrostChatSSEInjectsNullFinishReason(t *testing.T) {
 	close(errCh)
 
 	rec := httptest.NewRecorder()
-	if err := writeBifrostChatSSE(context.Background(), rec, chunks, errCh); err != nil {
+	if err := writeBifrostChatSSE(context.Background(), rec, bifrostStream{chunks: chunks, errs: errCh}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	body := rec.Body.String()

@@ -42,6 +42,18 @@ const (
 	StatusExpired    Status = "expired"
 )
 
+// Terminal reports whether a batch in this state is finished and never changes again.
+func (st Status) Terminal() bool {
+	switch st {
+	case StatusCompleted, StatusFailed, StatusCancelled, StatusExpired:
+		return true
+	case StatusValidating, StatusInProgress, StatusCancelling:
+		return false
+	default:
+		return false
+	}
+}
+
 // Meta is persisted batch job state for the OpenAI facade.
 type Meta struct {
 	ID               string `json:"id"`
@@ -56,7 +68,8 @@ type Meta struct {
 	PublicModel      string `json:"public_model"`
 	CFModel          string `json:"cf_model"`
 	CFRequestID      string `json:"cf_request_id"`
-	// UpstreamBatchID is the provider batch id for non-Cloudflare backends (Claude Message Batches).
+	// UpstreamBatchID is the provider batch id for non-Cloudflare backends (Claude
+	// Message Batches and OpenRouter batches); Cloudflare uses CFRequestID.
 	UpstreamBatchID string        `json:"upstream_batch_id,omitempty"`
 	RequestCounts   RequestCounts `json:"request_counts"`
 	CreatedAt       int64         `json:"created_at"`

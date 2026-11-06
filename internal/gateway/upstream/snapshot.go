@@ -44,15 +44,23 @@ func (b *Board) Snapshot() []Snapshot {
 	return out
 }
 
+// Breaker state names, as /health/upstreams and dial failures report them.
+const (
+	stateClosed   = "closed"
+	stateOpen     = "open"
+	stateHalfOpen = "half-open"
+	stateUnknown  = "unknown"
+)
+
 func breakerStateString(state gobreaker.State) string {
 	switch state {
 	case gobreaker.StateClosed:
-		return "closed"
+		return stateClosed
 	case gobreaker.StateOpen:
-		return "open"
+		return stateOpen
 	case gobreaker.StateHalfOpen:
-		return "half-open"
+		return stateHalfOpen
 	default:
-		return unknownUpstream
+		return stateUnknown
 	}
 }

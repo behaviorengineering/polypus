@@ -23,73 +23,73 @@ type InputLine struct {
 	Body     json.RawMessage `json:"body"`
 }
 
-// ParsedInput is validated batch input ready for Cloudflare translation.
+// ParsedInput is validated batch input, ready for any provider's submitter
+// (Cloudflare, OpenRouter or Claude).
 type ParsedInput struct {
-	Endpoint    string
-	Model       string
-	Lines       []InputLine
-	BodyByID    map[string]json.RawMessage
-	CustomOrder []string
+	Endpoint string
+	Model    string
+	Lines    []InputLine
+	BodyByID map[string]json.RawMessage
 }
+
+const opParseBatchJSONL = "batch.ParseBatchJSONL"
 
 // ParseBatchJSONL validates OpenAI batch input for chat or embeddings.
 func ParseBatchJSONL(raw []byte, endpoint string) (ParsedInput, error) {
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint != EndpointChatCompletions && endpoint != EndpointEmbeddings {
-		return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "unsupported endpoint").
+		return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "unsupported endpoint").
 			With("endpoint", endpoint)
 	}
 	lines := splitJSONL(raw)
 	if len(lines) == 0 {
-		return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "empty input")
+		return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "empty input")
 	}
 	out := ParsedInput{
-		Endpoint:    endpoint,
-		BodyByID:    make(map[string]json.RawMessage, len(lines)),
-		CustomOrder: make([]string, 0, len(lines)),
+		Endpoint: endpoint,
+		BodyByID: make(map[string]json.RawMessage, len(lines)),
 	}
 	var model string
 	for i, line := range lines {
 		var req InputLine
 		if err := json.Unmarshal(line, &req); err != nil {
-			return ParsedInput{}, derrors.Wrap(err, derrors.CodeInvalid, "batch.ParseBatchJSONL", "parse line").
+			return ParsedInput{}, derrors.Wrap(err, derrors.CodeInvalid, opParseBatchJSONL, "parse line").
 				With("line", strconv.Itoa(i+1))
 		}
 		req.CustomID = strings.TrimSpace(req.CustomID)
 		if req.CustomID == "" {
-			return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "custom_id required").
+			return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "custom_id required").
 				With("line", strconv.Itoa(i+1))
 		}
 		if strings.ToUpper(strings.TrimSpace(req.Method)) != "POST" {
-			return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "method must be POST").
+			return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "method must be POST").
 				With("line", strconv.Itoa(i+1))
 		}
 		if strings.TrimSpace(req.URL) != endpoint {
-			return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "line url must match batch endpoint").
+			return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "line url must match batch endpoint").
 				With("line", strconv.Itoa(i+1))
 		}
 		lineModel, err := extractModelFromBody(req.Body)
 		if err != nil {
-			return ParsedInput{}, derrors.Wrap(err, derrors.CodeInvalid, "batch.ParseBatchJSONL", "model in body").
+			return ParsedInput{}, derrors.Wrap(err, derrors.CodeInvalid, opParseBatchJSONL, "model in body").
 				With("line", strconv.Itoa(i+1))
 		}
 		if model == "" {
 			model = lineModel
 		} else if model != lineModel {
-			return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "all lines must use the same model")
+			return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "all lines must use the same model")
 		}
 		if err := validateBodyForEndpoint(endpoint, req.Body); err != nil {
-			return ParsedInput{}, derrors.Wrap(err, derrors.CodeInvalid, "batch.ParseBatchJSONL", "body").
+			return ParsedInput{}, derrors.Wrap(err, derrors.CodeInvalid, opParseBatchJSONL, "body").
 				With("line", strconv.Itoa(i+1))
 		}
 		if _, dup := out.BodyByID[req.CustomID]; dup {
 			// Results are matched back by custom_id, so it must be unique.
-			return ParsedInput{}, derrors.New(derrors.CodeInvalid, "batch.ParseBatchJSONL", "duplicate custom_id").
+			return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "duplicate custom_id").
 				With("line", strconv.Itoa(i+1)).With("custom_id", req.CustomID)
 		}
 		out.Lines = append(out.Lines, req)
 		out.BodyByID[req.CustomID] = req.Body
-		out.CustomOrder = append(out.CustomOrder, req.CustomID)
 	}
 	out.Model = model
 	return out, nil

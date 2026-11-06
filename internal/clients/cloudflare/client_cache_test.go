@@ -2,12 +2,13 @@ package cloudflare
 
 import (
 	"testing"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 )
 
 func TestClientsReuseSameInstance(t *testing.T) {
-	cs := &Clients{}
+	cs := &Clients{Now: time.Now}
 	t.Setenv("CF_CACHE_KEY", "secret-a")
 	b := config.BackendDef{
 		ID:        "cf_local",
@@ -30,7 +31,7 @@ func TestClientsReuseSameInstance(t *testing.T) {
 }
 
 func TestClientsNewInstanceOnTokenChange(t *testing.T) {
-	cs := &Clients{}
+	cs := &Clients{Now: time.Now}
 	t.Setenv("CF_CACHE_KEY", "secret-a")
 	b := config.BackendDef{
 		ID:        "cf_local",
@@ -54,7 +55,7 @@ func TestClientsNewInstanceOnTokenChange(t *testing.T) {
 }
 
 func TestClientsRejectNonCloudflare(t *testing.T) {
-	cs := &Clients{}
+	cs := &Clients{Now: time.Now}
 	_, err := cs.Get(config.BackendDef{
 		ID:        "leaf",
 		BaseURL:   "http://127.0.0.1:9",

@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"net/http"
 	"strings"
@@ -16,31 +15,27 @@ import (
 
 const embedMaxBody = 8 << 20
 
-func (h chatHandler) proxyEmbeddings(w http.ResponseWriter, r *http.Request, t backendTarget, body []byte, hopTimeout time.Duration) error {
-	client, backendAuth := h.client, t.auth
-	target := embeddingsURL(t.url)
-	hopTimeout = hopBudget(hopTimeout, config.DefaultTimeouts().Embed)
-	ctx, cancel := context.WithTimeout(r.Context(), hopTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
-	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyEmbeddings", "request")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if backendAuth != "" {
-		req.Header.Set("Authorization", backendAuth)
-	} else if auth := r.Header.Get("Authorization"); auth != "" {
-		req.Header.Set("Authorization", auth)
-	}
-	req.Header.Set(config.TimeoutHeader, hopTimeout.String())
+// embedCall is one embeddings request for a resolved backend.
+type embedCall struct {
+	target backendTarget
+	body   []byte
+	hop    time.Duration
+}
 
-	if client == nil {
-		client = newChatProxyClient(0)
-	}
-	resp, err := outbound.DoOnce(ctx, outbound.DepGateway, client, req)
+func (h chatHandler) proxyEmbeddings(w http.ResponseWriter, r *http.Request, c embedCall) error {
+	const op = "gateway.proxyEmbeddings"
+	target := embeddingsURL(c.target.url)
+	hop := hopBudget(c.hop, config.DefaultTimeouts().Embed)
+	ctx, cancel := context.WithTimeout(r.Context(), hop)
+	defer cancel()
+	req, err := newBackendPOST(ctx, r, target, c.target.auth, "application/json", c.body)
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyEmbeddings", "post").
+		return derrors.Wrap(err, derrors.CodeInternal, op, "request")
+	}
+	req.Header.Set(config.TimeoutHeader, hop.String())
+	resp, err := h.transport.policies.DoOnce(ctx, outbound.DepGateway, h.transport.client, req)
+	if err != nil {
+		return derrors.Wrap(err, derrors.CodeUnavailable, op, "post").
 			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()

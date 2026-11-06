@@ -56,9 +56,9 @@ func TestSystemOneUnwrapsEnvelope(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := &Client{
-		apiBase:      srv.URL + "/client/v4/accounts/acct/ai",
-		apiKey:       "test-key",
-		speechClient: srv.Client(),
+		apiBase:    srv.URL + "/client/v4/accounts/acct/ai",
+		apiKey:     "test-key",
+		httpClient: srv.Client(),
 	}
 	reqBody := []byte(`{
 		"model": "cf_local/typesafe/jev",
@@ -99,9 +99,9 @@ func TestSystemOneBareResponse(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := &Client{
-		apiBase:      srv.URL + "/client/v4/accounts/acct/ai",
-		apiKey:       "k",
-		speechClient: srv.Client(),
+		apiBase:    srv.URL + "/client/v4/accounts/acct/ai",
+		apiKey:     "k",
+		httpClient: srv.Client(),
 	}
 	out, err := c.SystemOne(hopCtx(t), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
 	if err != nil {
@@ -130,9 +130,9 @@ func TestSystemOneUnwrapsUnifiedGateway(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := &Client{
-		apiBase:      srv.URL + "/client/v4/accounts/acct/ai",
-		apiKey:       "k",
-		speechClient: srv.Client(),
+		apiBase:    srv.URL + "/client/v4/accounts/acct/ai",
+		apiKey:     "k",
+		httpClient: srv.Client(),
 	}
 	out, err := c.SystemOne(hopCtx(t), "typesafe/jev", []byte(`{"state":"s","questions":{"is_urgent":{"type":"noul","instructions":"?"}}}`))
 	if err != nil {
@@ -178,9 +178,9 @@ func TestSystemOneUnwrapsClassicThenUnified(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := &Client{
-		apiBase:      srv.URL + "/client/v4/accounts/acct/ai",
-		apiKey:       "k",
-		speechClient: srv.Client(),
+		apiBase:    srv.URL + "/client/v4/accounts/acct/ai",
+		apiKey:     "k",
+		httpClient: srv.Client(),
 	}
 	out, err := c.SystemOne(hopCtx(t), "typesafe/jev", []byte(`{"state":"s","questions":{"is_urgent":{"type":"noul","instructions":"?"}}}`))
 	if err != nil {
@@ -209,9 +209,9 @@ func TestSystemOneSuccessFalse(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := &Client{
-		apiBase:      srv.URL + "/client/v4/accounts/acct/ai",
-		apiKey:       "k",
-		speechClient: srv.Client(),
+		apiBase:    srv.URL + "/client/v4/accounts/acct/ai",
+		apiKey:     "k",
+		httpClient: srv.Client(),
 	}
 	_, err := c.SystemOne(hopCtx(t), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
 	if err == nil || !strings.Contains(err.Error(), "quota exceeded") {
@@ -232,9 +232,9 @@ func TestSystemOneHTTPErrorUsesCFMessage(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := &Client{
-		apiBase:      srv.URL + "/client/v4/accounts/acct/ai",
-		apiKey:       "k",
-		speechClient: srv.Client(),
+		apiBase:    srv.URL + "/client/v4/accounts/acct/ai",
+		apiKey:     "k",
+		httpClient: srv.Client(),
 	}
 	_, err := c.SystemOne(hopCtx(t), "typesafe/jev", []byte(`{"state":"s","questions":{"x":{"type":"noul","instructions":"?"}}}`))
 	if err == nil || !strings.Contains(err.Error(), "Insufficient balance") {

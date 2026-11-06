@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/config"
+
 	"github.com/behaviorengineering/polypus/internal/smoke"
 )
 
@@ -260,8 +262,8 @@ func childEnv(configPath, tmpRoot, home string, cfg childEnvConfig) []string {
 		"POLYPUS_OTEL":      "0",
 		"POLYPUS_PHOENIX":   "0",
 		"POLYPUS_HYPERDX":   "0",
-		"CF_AI_API_KEY":     envOr("CF_AI_API_KEY", "test-token"),
-		"CF_ACCOUNT_ID":     envOr("CF_ACCOUNT_ID", "test"),
+		"CF_AI_API_KEY":     config.EnvOr("CF_AI_API_KEY", "test-token"),
+		"CF_ACCOUNT_ID":     config.EnvOr("CF_ACCOUNT_ID", "test"),
 	}
 	if cfg.disableSwitchyard {
 		overrides["POLYPUS_SWITCHYARD"] = "0"
@@ -290,13 +292,6 @@ func childEnv(configPath, tmpRoot, home string, cfg childEnvConfig) []string {
 		out = append(out, k+"="+v)
 	}
 	return out
-}
-
-func envOr(key, def string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return def
 }
 
 func (h *Harness) startServe(port int) error {

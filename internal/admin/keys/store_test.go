@@ -1,6 +1,7 @@
 package keys
 
 import (
+	"context"
 	"crypto/rand"
 	"os"
 	"strings"
@@ -23,7 +24,7 @@ func testStore(t *testing.T) (*Store, string) {
 
 func TestGenerateVerifyRotateDelete(t *testing.T) {
 	s, path := testStore(t)
-	gen, err := s.Generate("ops")
+	gen, err := s.Generate(context.Background(), "ops")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,7 @@ func TestGenerateVerifyRotateDelete(t *testing.T) {
 	if _, err := s.Verify(gen.Key); err != nil {
 		t.Fatal(err)
 	}
-	rot, err := s.Rotate("ops")
+	rot, err := s.Rotate(context.Background(), "ops")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestGenerateVerifyRotateDelete(t *testing.T) {
 	if _, err := s.Verify(rot.Key); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Delete("ops"); err != nil {
+	if err := s.Delete(context.Background(), "ops"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Verify(rot.Key); err == nil {

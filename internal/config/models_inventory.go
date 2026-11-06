@@ -59,9 +59,14 @@ func envDurationOrOff(key string, fallback time.Duration) (time.Duration, error)
 	if on, ok := ParseBoolishEnv(raw); ok && !on {
 		return 0, nil
 	}
+	const op = "config.envDurationOrOff"
 	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return fallback, derrors.New(derrors.CodeInvalid, "config.envDurationOrOff", "not a positive duration or off").
+	if err != nil {
+		return fallback, derrors.Wrap(err, derrors.CodeInvalid, op, "not a duration or off").
+			With("env", key).With("value", raw)
+	}
+	if d <= 0 {
+		return fallback, derrors.New(derrors.CodeInvalid, op, "duration must be positive").
 			With("env", key).With("value", raw)
 	}
 	return d, nil

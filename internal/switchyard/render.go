@@ -124,6 +124,10 @@ func hasFallbackRouter(cfg config.RouterConfig) bool {
 	return false
 }
 
+// routeTypeRandom is Switchyard's weighted random route, which a Polypus fallback
+// router renders to. config has no RouteType for it: operators never write it.
+const routeTypeRandom = "random"
+
 // addFallback adds a random route weighted 1 on the first target and 0 on the rest:
 // Switchyard always picks the first and keeps the others for request-local fallback.
 func addFallback(file *routesFile, name string, router config.NamedRouter) {
@@ -140,7 +144,7 @@ func addFallback(file *routesFile, name string, router config.NamedRouter) {
 		}
 		weights = append(weights, weight)
 	}
-	file.Routes[name] = route{ID: config.RouterPublicID(name), Type: "random", Targets: names, Weights: weights}
+	file.Routes[name] = route{ID: config.RouterPublicID(name), Type: routeTypeRandom, Targets: names, Weights: weights}
 }
 
 func addStageRouter(file *routesFile, name string, router config.NamedRouter) {
@@ -216,7 +220,6 @@ func writeConfig(cfg config.RouterConfig, polypusBaseURL string) (string, error)
 	}
 	path := strings.TrimSpace(cfg.Switchyard.ConfigPath)
 	if path == "" {
-		var err error
 		path, err = cfg.ResolveSwitchyardConfigPath()
 		if err != nil {
 			return "", err

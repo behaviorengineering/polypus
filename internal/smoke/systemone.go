@@ -69,17 +69,9 @@ func systemOnePing(ctx context.Context, opts Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := httpDefaultDo(req)
+	body, err := call(req, "systemone", probeBodyMax)
 	if err != nil {
 		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := ioReadAllLimit(resp.Body, 1<<20)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", &statusError{what: "systemone", status: resp.StatusCode, body: truncate(string(body), 200)}
 	}
 	var parsed struct {
 		Answers map[string]json.RawMessage `json:"answers"`

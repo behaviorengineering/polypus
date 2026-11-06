@@ -1,66 +1,85 @@
+// Package health waits for a deployed gateway to answer its health endpoints, and
+// dumps the gateway's logs and state when a deploy fails.
 package health
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
-// Poll waits until both health endpoints return 200.
-func Poll(ctx context.Context, baseURL string, timeout time.Duration) error {
+// pollInterval is the pause between rounds of health checks.
+const pollInterval = 2 * time.Second
+
+// endpoints must all answer 200 for the gateway to count as up.
+var endpoints = []string{"/health", "/health/backends"}
+
+// Poll waits until both health endpoints at baseURL answer 200. ctx must carry a
+// deadline: it is the health budget. On timeout the error wraps the last failure
+// (transport error or status), so a TLS, DNS or 401 problem is not reported as a
+// gateway that is merely down. Each GET is sent once; the loop is the retry.
+func Poll(ctx context.Context, client *http.Client, baseURL string) error {
+	const op = "health.Poll"
 	if ctx == nil {
-		return fmt.Errorf("health: context required")
+		return derrors.New(derrors.CodeInvalid, op, "context required")
 	}
-	if timeout <= 0 {
-		timeout = 120 * time.Second
+	if _, ok := ctx.Deadline(); !ok {
+		return derrors.New(derrors.CodeFailedPrecondition, op, "context needs a deadline")
 	}
-	deadline := time.Now().Add(timeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
+	if client == nil {
+		return derrors.New(derrors.CodeInvalid, op, "http client required")
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	paths := []string{"/health", "/health/backends"}
+	var lastErr error
 	for {
-		ok := true
-		for _, p := range paths {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+p, nil)
-			if err != nil {
-				return err
-			}
-			resp, err := outbound.Do(ctx, outbound.DepHealth, client, req)
-			if err != nil {
-				ok = false
-				break
-			}
-			if resp.StatusCode != http.StatusOK {
-				discardAndClose(resp.Body)
-				ok = false
-				break
-			}
-			discardAndClose(resp.Body)
-		}
-		if ok {
+		lastErr = checkOnce(ctx, client, baseURL)
+		if lastErr == nil {
 			return nil
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("health: timeout waiting for %s", baseURL)
-		}
-		if err := sleepCtx(ctx, 2*time.Second); err != nil {
-			return err
+		if err := sleepCtx(ctx, pollInterval); err != nil {
+			code := derrors.CodeTimeout
+			if errors.Is(err, context.Canceled) {
+				code = derrors.CodeCanceled
+			}
+			return derrors.Wrap(lastErr, code, op, "timeout waiting for "+baseURL)
 		}
 	}
+}
+
+// checkOnce GETs each endpoint once and returns the first failure.
+func checkOnce(ctx context.Context, client *http.Client, baseURL string) error {
+	for _, p := range endpoints {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+p, nil)
+		if err != nil {
+			return fmt.Errorf("GET %s: %w", p, err)
+		}
+		resp, err := outbound.DoOnce(ctx, outbound.DepHealth, client, req)
+		if err != nil {
+			return fmt.Errorf("GET %s: %w", p, err)
+		}
+		status := resp.StatusCode
+		discardAndClose(resp.Body)
+		if status != http.StatusOK {
+			return fmt.Errorf("GET %s: status %d", p, status)
+		}
+	}
+	return nil
 }
 
 func discardAndClose(rc io.ReadCloser) {
 	if rc == nil {
 		return
 	}
-	_, _ = io.Copy(io.Discard, rc)
-	_ = rc.Close()
+	// Cleanup only: a drain error costs connection reuse, nothing else.
+	defer func() {
+		_, _ = io.Copy(io.Discard, rc)
+		_ = rc.Close()
+	}()
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

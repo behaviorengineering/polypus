@@ -33,7 +33,7 @@ func TestParseImageTag(t *testing.T) {
 }
 
 func TestAppGitTag(t *testing.T) {
-	if AppGitTag("0.2.40") != "v0.2.40" {
+	if appGitTag("0.2.40") != "v0.2.40" {
 		t.Fatal("app git tag")
 	}
 }

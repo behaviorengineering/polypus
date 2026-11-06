@@ -57,7 +57,8 @@ func TestRecordChatStreamChunk_eventsOnActiveSpan(t *testing.T) {
 }
 
 func TestRecordChatStreamChunk_debugRedactsSecrets(t *testing.T) {
-	t.Setenv("POLYPUS_STREAM_CHUNK_DEBUG", "true")
+	streamChunkDebug.Store(true)
+	t.Cleanup(func() { streamChunkDebug.Store(false) })
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 	prev := otel.GetTracerProvider()
@@ -72,14 +73,27 @@ func TestRecordChatStreamChunk_debugRedactsSecrets(t *testing.T) {
 	RecordChatStreamChunk(ctx, StreamChunk{Index: 1, OpenAIJSON: leaky, SSEAction: "drop"})
 	span.End()
 
+	preview := false
 	for _, sp := range exporter.GetSpans() {
 		for _, ev := range sp.Events {
 			for _, a := range ev.Attributes {
 				if strings.Contains(a.Value.AsString(), "super-secret") {
 					t.Fatalf("leaked secret in attribute %s", a.Key)
 				}
+				preview = preview || a.Key == "polypus.stream.openai_preview"
 			}
 		}
+	}
+	if !preview {
+		t.Fatal("debug on: want a redacted preview")
+	}
+}
+
+func TestLoadConfigReadsStreamChunkDebug(t *testing.T) {
+	t.Setenv("POLYPUS_STREAM_CHUNK_DEBUG", "true")
+	cfg, err := LoadConfig()
+	if err != nil || !cfg.StreamChunkDebug {
+		t.Fatalf("cfg.StreamChunkDebug = %v, err %v", cfg.StreamChunkDebug, err)
 	}
 }
 

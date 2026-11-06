@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
@@ -56,15 +57,13 @@ func (c Client) ListModels(ctx context.Context, target, auth string) ([]Model, e
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, derrors.New(derrors.CodeUnavailable, op, "models list status").
+		// A rejected key or unknown path is the caller's to fix, not a 502 to retry.
+		return nil, derrors.New(catalog.StatusCode(resp.StatusCode), op, "models list status").
 			With("status", strconv.Itoa(resp.StatusCode))
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody+1))
+	raw, err := catalog.ReadCapped(resp.Body, modelsMaxBody, op)
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, op, "read body")
-	}
-	if len(raw) > modelsMaxBody {
-		return nil, derrors.New(derrors.CodeUnavailable, op, "models list too large")
+		return nil, err
 	}
 	return ParseModels(raw), nil
 }

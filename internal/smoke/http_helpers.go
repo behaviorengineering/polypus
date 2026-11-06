@@ -49,12 +49,36 @@ func withAPIKey(ctx context.Context, key string) context.Context {
 }
 
 func apiKeyFrom(ctx context.Context) string {
-	key, _ := ctx.Value(apiKeyCtx{}).(string)
-	return key
+	if key, ok := ctx.Value(apiKeyCtx{}).(string); ok {
+		return key
+	}
+	return ""
 }
 
-func ioReadAllLimit(r io.Reader, n int64) ([]byte, error) {
-	return io.ReadAll(io.LimitReader(r, n))
+// probeBodyMax caps a probe's JSON answer; speech audio gets audioBodyMax.
+const (
+	probeBodyMax int64 = 1 << 20
+	audioBodyMax int64 = 8 << 20
+	// errorBodyMax caps the answer quoted in a statusError.
+	errorBodyMax = 200
+)
+
+// call sends req once and returns the body of a 2xx answer (at most limit bytes), or
+// a *statusError carrying the status and the start of the body. what names the call.
+func call(req *http.Request, what string, limit int64) ([]byte, error) {
+	resp, err := httpDefaultDo(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return nil, fmt.Errorf("%s: read body: %w", what, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &statusError{what: what, status: resp.StatusCode, body: truncate(string(raw), errorBodyMax)}
+	}
+	return raw, nil
 }
 
 // statusError is a gateway answer outside 2xx, kept typed so callers read the status.

@@ -55,7 +55,7 @@ func ChatSmokeTargets(path string) ([]ChatSmokeTarget, error) {
 		if id == "gemini_free" {
 			continue
 		}
-		secrets := backendSmokeSecrets(id, b)
+		secrets := backendSmokeSecrets(b)
 		targets := chatTargetsForBackend(id, b)
 		for _, t := range targets {
 			t.SecretEnv = secrets
@@ -75,15 +75,10 @@ func backendHasCapability(b backendYAML, name string) bool {
 	return false
 }
 
-func backendSmokeSecrets(backendID string, b backendYAML) []string {
-	var out []string
-	if env := strings.TrimSpace(b.Auth.BearerEnv); env != "" {
-		out = append(out, env)
-	}
-	if strings.TrimSpace(backendID) == cloudflareLocalBackend {
-		out = append(out, "CF_ACCOUNT_ID")
-	}
-	return dedupeStrings(out)
+// backendSmokeSecrets are the secrets a backend's smoke probe needs: the same
+// names deploy exports for it.
+func backendSmokeSecrets(b backendYAML) []string {
+	return dedupeStrings(backendSecretNames(b))
 }
 
 func chatTargetsForBackend(backendID string, b backendYAML) []ChatSmokeTarget {

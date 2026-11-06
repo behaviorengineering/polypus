@@ -47,7 +47,6 @@ func LoadProcessFlags() (ProcessFlags, error) {
 	return out, nil
 }
 
-// loadProcessFlags is LoadProcessFlags before its error is typed at the package boundary.
 // LoadProcessFlagsFrom reads process toggles from the config at path, or from the
 // resolved config when path is empty.
 func LoadProcessFlagsFrom(path string) (ProcessFlags, error) {
@@ -61,6 +60,7 @@ func LoadProcessFlagsFrom(path string) (ProcessFlags, error) {
 	return out, nil
 }
 
+// loadProcessFlags is LoadProcessFlags before its error is typed at the package boundary.
 func loadProcessFlags() (ProcessFlags, error) {
 	path, err := ResolveConfigPathWithError()
 	if err != nil {

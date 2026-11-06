@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"html/template"
 	"net"
 	"net/http"
@@ -192,7 +193,7 @@ func landingPageDataForRequest(r *http.Request, cfg config.RouterConfig) landing
 func landingModelLinks(cfg config.RouterConfig) []landingLink {
 	links := []landingLink{
 		{
-			Href:        "/v1/apis",
+			Href:        pathAPIs,
 			Title:       "API catalog",
 			Description: "Discovery index with model list URLs for each API surface.",
 		},
@@ -215,12 +216,12 @@ func landingModelLinks(cfg config.RouterConfig) []landingLink {
 func landingOpsLinks(r *http.Request) []landingLink {
 	links := []landingLink{
 		{
-			Href:        "/health/backends",
+			Href:        pathHealthBackends,
 			Title:       "Backend health",
 			Description: "Probes each configured backend (and Switchyard when enabled).",
 		},
 		{
-			Href:        "/health/upstreams",
+			Href:        pathHealthUpstreams,
 			Title:       "Upstream breakers",
 			Description: "Circuit-breaker state without dialing leaf backends.",
 		},
@@ -335,28 +336,34 @@ func safeHostname(host string) bool {
 
 func (g *gatewayHandler) serveLanding(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeMethodNotAllowed(w, allowRead...)
 		return
 	}
 	cfg := config.RouterConfig{}
-	if g.router != nil {
-		cfg = g.router.Registry().Config()
+	if g.registry != nil {
+		cfg = g.registry.Config()
 	}
-	data := landingPageDataForRequest(r, cfg)
+	// Render before the status goes out, so a template error is a 500, not a cut-off 200.
+	var page bytes.Buffer
+	if err := landingPageTemplate.Execute(&page, landingPageDataForRequest(r, cfg)); err != nil {
+		g.log.Warn("polypus: landing page render failed", "err", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(page.Len()))
+	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {
-		w.WriteHeader(http.StatusOK)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	if err := landingPageTemplate.Execute(w, data); err != nil {
-		return
+	if _, err := page.WriteTo(w); err != nil {
+		g.log.Debug("polypus: landing page write failed", "err", err)
 	}
 }
 
 func (g *gatewayHandler) serveBannerWebP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeMethodNotAllowed(w, allowRead...)
 		return
 	}
 	w.Header().Set("Content-Type", "image/webp")
@@ -366,5 +373,7 @@ func (g *gatewayHandler) serveBannerWebP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(media.BannerWebP)
+	if _, err := w.Write(media.BannerWebP); err != nil {
+		g.log.Debug("polypus: banner write failed", "err", err)
+	}
 }

@@ -245,3 +245,23 @@ func TestDeploySmokeFollowsDeployChecks(t *testing.T) {
 		}
 	}
 }
+
+// TestDeploySmokeReadsSwitchyardEnvLikeServe checks POLYPUS_SWITCHYARD goes through
+// the same boolean parser serve uses, so true, yes and on count as on.
+func TestDeploySmokeReadsSwitchyardEnvLikeServe(t *testing.T) {
+	for raw, want := range map[string]string{
+		"":     "false",
+		"1":    "true",
+		"true": "true",
+		"yes":  "true",
+		"on":   "true",
+		"0":    "false",
+		"off":  "false",
+	} {
+		t.Setenv("POLYPUS_SWITCHYARD", raw)
+		got := newDeploySmokeCmd().Flags().Lookup("with-router").DefValue
+		if got != want {
+			t.Errorf("POLYPUS_SWITCHYARD=%q: --with-router default %s, want %s", raw, got, want)
+		}
+	}
+}

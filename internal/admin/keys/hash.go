@@ -1,3 +1,5 @@
+// Package keys stores the gateway's named access keys (ppk.<id>.<secret>) as
+// argon2id hashes in a locked JSON file and verifies presented tokens.
 package keys
 
 import (

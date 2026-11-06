@@ -6,10 +6,13 @@ package polypus
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway"
 	"github.com/behaviorengineering/polypus/internal/smoke"
 )
@@ -18,22 +21,83 @@ import (
 type ServeOptions = config.ServeOptions
 
 // HandlerOption configures Serve and NewHandler. Build one with the With* functions
-// below.
-type HandlerOption = gateway.HandlerOption
+// below. An option built from invalid input does not panic: Serve and NewHandler
+// return its error (CodeInvalid) before they start anything.
+type HandlerOption struct {
+	apply gateway.HandlerOption
+	err   error
+}
 
 // WithLogger sets the logger the gateway writes warnings and request failures to
-// (slog.Default otherwise). Panics if l is nil.
-func WithLogger(l *slog.Logger) HandlerOption { return gateway.WithLogger(l) }
+// (slog.Default otherwise). A nil l makes Serve and NewHandler return an error.
+func WithLogger(l *slog.Logger) HandlerOption {
+	if l == nil {
+		return HandlerOption{err: derrors.New(derrors.CodeInvalid, "polypus.WithLogger", "logger is nil")}
+	}
+	return HandlerOption{apply: gateway.WithLogger(l)}
+}
 
 // WithObservability sets where failure dumps land (empty turns them off) and the
 // HTTP paths that get no SERVER span (nil keeps the default /health probes).
 func WithObservability(dumpDir string, traceSkipPaths []string) HandlerOption {
-	return gateway.WithObservability(dumpDir, traceSkipPaths)
+	return HandlerOption{apply: gateway.WithObservability(dumpDir, traceSkipPaths)}
 }
 
 // WithAdminStateDir keeps the models allow overlay and the admin key store under dir
-// instead of the XDG state directory. Panics if dir is empty.
-func WithAdminStateDir(dir string) HandlerOption { return gateway.WithAdminStateDir(dir) }
+// instead of the XDG state directory. An empty dir makes Serve and NewHandler
+// return an error.
+func WithAdminStateDir(dir string) HandlerOption {
+	if strings.TrimSpace(dir) == "" {
+		return HandlerOption{err: derrors.New(derrors.CodeInvalid, "polypus.WithAdminStateDir", "state dir is empty")}
+	}
+	return HandlerOption{apply: gateway.WithAdminStateDir(dir)}
+}
+
+// gatewayOptions unwraps the options, joining every invalid one into one error.
+func gatewayOptions(op string, options []HandlerOption) ([]gateway.HandlerOption, error) {
+	out := make([]gateway.HandlerOption, 0, len(options))
+	var errs []error
+	for _, o := range options {
+		if o.err != nil {
+			errs = append(errs, o.err)
+			continue
+		}
+		if o.apply != nil {
+			out = append(out, o.apply)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, op, "handler options")
+	}
+	return out, nil
+}
+
+// Error is the typed error Serve, NewHandler, LoadServeOptions and Smoke return
+// along their wrap chain. Read it with errors.As, or its class with CodeOf.
+type Error = derrors.Error
+
+// Code is a stable machine-readable error class.
+type Code = derrors.Code
+
+// Error classes a host can branch on.
+const (
+	CodeInvalid            = derrors.CodeInvalid
+	CodeNotFound           = derrors.CodeNotFound
+	CodeUnauthorized       = derrors.CodeUnauthorized
+	CodeTimeout            = derrors.CodeTimeout
+	CodeCanceled           = derrors.CodeCanceled
+	CodeFailedPrecondition = derrors.CodeFailedPrecondition
+	CodeUnavailable        = derrors.CodeUnavailable
+	CodeRateLimited        = derrors.CodeRateLimited
+	CodeNotReady           = derrors.CodeNotReady
+	CodeInternal           = derrors.CodeInternal
+	CodeConflict           = derrors.CodeConflict
+	CodeUnimplemented      = derrors.CodeUnimplemented
+)
+
+// CodeOf returns the outermost Code in err's chain, or CodeInternal when err holds
+// no *Error.
+func CodeOf(err error) Code { return derrors.CodeOf(err) }
 
 // SmokeOptions configures multi-channel L1 smoke against a running gateway.
 type SmokeOptions = smoke.Options
@@ -60,12 +124,20 @@ func LoadServeOptions() (ServeOptions, error) {
 // gracefully) or the server fails. The host owns signals: pass a ctx from
 // signal.NotifyContext to stop on SIGINT or SIGTERM.
 func Serve(ctx context.Context, opts ServeOptions, options ...HandlerOption) error {
-	return gateway.ListenAndServe(ctx, opts, options...)
+	gopts, err := gatewayOptions("polypus.Serve", options)
+	if err != nil {
+		return err
+	}
+	return gateway.ListenAndServe(ctx, opts, gopts...)
 }
 
 // NewHandler builds the public HTTP handler without listening.
 func NewHandler(opts ServeOptions, options ...HandlerOption) (http.Handler, error) {
-	return gateway.NewHandler(opts, options...)
+	gopts, err := gatewayOptions("polypus.NewHandler", options)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.NewHandler(opts, gopts...)
 }
 
 // Smoke runs chat, TTS, STT, systemone, and/or batch probes against a gateway.

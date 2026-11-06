@@ -13,6 +13,7 @@ const attrIntervention = "polypus.intervention"
 // Intervention labels a Polypus-owned rewrite or refuse on the wire.
 type Intervention string
 
+// Intervention codes Polypus records on a span when it rewrites or refuses a response.
 const (
 	InterventionReasoningAlias            Intervention = "reasoning_alias"
 	InterventionMergeReasoningIntoContent Intervention = "merge_reasoning_into_content"

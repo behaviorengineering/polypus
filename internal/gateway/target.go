@@ -18,14 +18,14 @@ type backendTarget struct {
 // lookupBackend returns a resolved backend's definition and URL. op names the
 // handler in the error.
 func (s *shared) lookupBackend(op, backendID string) (config.BackendDef, string, error) {
-	reg := s.router.Registry()
+	reg := s.registry
 	url, ok := reg.BackendURL(backendID)
 	if !ok {
-		return config.BackendDef{}, "", derrors.New(derrors.CodeUnavailable, op, errBackendNotFound).With("backend", backendID)
+		return config.BackendDef{}, "", derrors.New(derrors.CodeUnavailable, op, msgBackendNotFound).With("backend", backendID)
 	}
 	b, ok := reg.Backend(backendID)
 	if !ok {
-		return config.BackendDef{}, "", derrors.New(derrors.CodeUnavailable, op, errBackendNotFound).With("backend", backendID)
+		return config.BackendDef{}, "", derrors.New(derrors.CodeUnavailable, op, msgBackendNotFound).With("backend", backendID)
 	}
 	return b, url, nil
 }
@@ -36,7 +36,7 @@ func (s *shared) resolveTarget(op, backendID, downstream string) (backendTarget,
 	if err != nil {
 		return backendTarget{}, err
 	}
-	auth, err := backendAuth(b)
+	auth, err := bearerAuthHeader(b)
 	if err != nil {
 		return backendTarget{}, err
 	}

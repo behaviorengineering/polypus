@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"slices"
@@ -321,7 +323,7 @@ func loadRouterFileAt(opts ServeOptions, path string) (RouterConfig, bool, error
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&file); err != nil {
-		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
+		return RouterConfig{}, false, routerDecodeError(path, err)
 	}
 	if err := resolvePolypusSecrets(file.Secrets, opts.Keyring); err != nil {
 		return RouterConfig{}, false, fmt.Errorf("router config %s: %w", path, err)
@@ -362,40 +364,58 @@ func loadRouterFileAt(opts ServeOptions, path string) (RouterConfig, bool, error
 		if id == "" {
 			continue
 		}
-		caps := make([]Capability, 0, len(entry.Capabilities))
-		for _, raw := range entry.Capabilities {
-			c := Capability(strings.TrimSpace(raw))
-			if !c.Valid() {
-				return RouterConfig{}, false, fmt.Errorf("router config %s: backends.%s.capabilities: unknown capability %q", path, id, raw)
-			}
-			caps = append(caps, c)
-		}
-		baseURL, err := expandEnv(strings.TrimSpace(entry.BaseURL))
+		def, err := parseBackendEntry(path, id, entry)
 		if err != nil {
-			return RouterConfig{}, false, fmt.Errorf("router config %s: backends.%s.base_url: %w", path, id, err)
+			return RouterConfig{}, false, err
 		}
-		if baseURL != "" {
-			if u, perr := url.Parse(baseURL); perr != nil || u.Scheme == "" || u.Host == "" {
-				return RouterConfig{}, false, fmt.Errorf("router config %s: backends.%s.base_url %q needs a scheme and host", path, id, baseURL)
-			}
-		}
-		headers, err := expandHeaders(entry.ExtraHeaders)
-		if err != nil {
-			return RouterConfig{}, false, fmt.Errorf("router config %s: backends.%s.extra_headers: %w", path, id, err)
-		}
-		cfg.Backends[id] = BackendDef{
-			ID:           id,
-			Remote:       entry.Remote,
-			Extension:    strings.TrimSpace(entry.Extension),
-			BaseURL:      strings.TrimRight(baseURL, "/"),
-			Auth:         entry.Auth,
-			Capabilities: caps,
-			Models:       entry.Models,
-			PromptCache:  entry.PromptCache,
-			ExtraHeaders: headers,
-		}
+		cfg.Backends[id] = def
 	}
 	return cfg, true, nil
+}
+
+// routerDecodeError names the file in a YAML decode failure and turns the bare EOF
+// of an empty file into a message that says how to recover.
+// parseBackendEntry checks one backends.<id> entry and expands its placeholders.
+func parseBackendEntry(path, id string, entry backendFileEntry) (BackendDef, error) {
+	caps := make([]Capability, 0, len(entry.Capabilities))
+	for _, raw := range entry.Capabilities {
+		c := Capability(strings.TrimSpace(raw))
+		if !c.Valid() {
+			return BackendDef{}, fmt.Errorf("router config %s: backends.%s.capabilities: unknown capability %q", path, id, raw)
+		}
+		caps = append(caps, c)
+	}
+	baseURL, err := expandEnv(strings.TrimSpace(entry.BaseURL))
+	if err != nil {
+		return BackendDef{}, fmt.Errorf("router config %s: backends.%s.base_url: %w", path, id, err)
+	}
+	if baseURL != "" {
+		if u, perr := url.Parse(baseURL); perr != nil || u.Scheme == "" || u.Host == "" {
+			return BackendDef{}, fmt.Errorf("router config %s: backends.%s.base_url %q needs a scheme and host", path, id, baseURL)
+		}
+	}
+	headers, err := expandHeaders(entry.ExtraHeaders)
+	if err != nil {
+		return BackendDef{}, fmt.Errorf("router config %s: backends.%s.extra_headers: %w", path, id, err)
+	}
+	return BackendDef{
+		ID:           id,
+		Remote:       entry.Remote,
+		Extension:    strings.TrimSpace(entry.Extension),
+		BaseURL:      strings.TrimRight(baseURL, "/"),
+		Auth:         entry.Auth,
+		Capabilities: caps,
+		Models:       entry.Models,
+		PromptCache:  entry.PromptCache,
+		ExtraHeaders: headers,
+	}, nil
+}
+
+func routerDecodeError(path string, err error) error {
+	if errors.Is(err, io.EOF) {
+		return fmt.Errorf("router config %s: file is empty or holds only comments (run polypus init --force)", path)
+	}
+	return fmt.Errorf("router config %s: %w", path, err)
 }
 
 func defaultRouterFromEnv(opts ServeOptions) RouterConfig {
@@ -605,8 +625,7 @@ func normalizeRouterConfig(cfg *RouterConfig) error {
 	if err := validateRouters(cfg); err != nil {
 		return err
 	}
-	fillSwitchyardDefaults(cfg)
-	return nil
+	return fillSwitchyardDefaults(cfg)
 }
 
 // normalizeBackends fills each backend's id and checks its base URL, credential,
@@ -635,13 +654,13 @@ func normalizeBackends(cfg *RouterConfig) error {
 	return nil
 }
 
-func requireBackend(cfg *RouterConfig, id string, cap Capability, field string) error {
+func requireBackend(cfg *RouterConfig, id string, want Capability, field string) error {
 	b, ok := cfg.Backends[id]
 	if !ok {
 		return fmt.Errorf("router: %s %q not found in backends", field, id)
 	}
-	if !b.HasCapability(cap) {
-		return fmt.Errorf("router: %s %q lacks capability %s", field, id, cap)
+	if !b.HasCapability(want) {
+		return fmt.Errorf("router: %s %q lacks capability %s", field, id, want)
 	}
 	return nil
 }
@@ -694,4 +713,23 @@ func (c RouterConfig) BackendIDs() []string {
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+// LogStartup logs each capability slot's default backend, then the backends and
+// the router count, so the startup log describes the config being served.
+func (c RouterConfig) LogStartup(logger *slog.Logger) {
+	if logger == nil {
+		return
+	}
+	for _, sl := range capabilitySlots {
+		slot := sl.get(&c)
+		logger.Info("capability", "capability", sl.field, "enabled", slot.Enabled, "default", slot.Default)
+	}
+	for _, id := range c.BackendIDs() {
+		b := c.Backends[id]
+		logger.Info("backend", "id", id, "base_url", b.BaseURL, "capabilities", b.Capabilities)
+	}
+	if len(c.Routers) > 0 {
+		logger.Info("routers", "count", len(c.Routers))
+	}
 }

@@ -2,41 +2,50 @@ package cloudflare
 
 import (
 	"log/slog"
-
-	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
+const opGet = "cloudflare.Clients.Get"
+
 // Clients caches one Workers AI client per backend id, resolved bearer token and API
 // base, so a rotated token gets a fresh client. A gateway owns one, shared with its
-// router's speech plugin; its clients share the gateway's outbound policies.
+// router's speech plugin; its clients share the gateway's outbound policies and clock.
 type Clients struct {
 	Policies *outbound.Policies
 	// Logger receives the clients' warnings; nil discards them.
 	Logger *slog.Logger
+	// Now ages the catalog caches. Required: Get fails without it.
+	Now func() time.Time
+	// Speech holds the speech defaults; an empty field takes the built-in default.
+	Speech SpeechDefaults
 	reg    catalog.Registry[Client]
 }
 
 // Get returns the cached client for b, building it on first use.
 func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
+	if cs == nil || cs.Now == nil {
+		return nil, derrors.New(derrors.CodeInternal, opGet, "clients need a clock").With("backend", b.ID)
+	}
 	if !b.IsCloudflareExtension() {
-		return nil, derrors.Wrap(errNotCloudflareExtension, derrors.CodeInvalid, "cloudflare", "backend").With("backend", b.ID)
+		return nil, derrors.Wrap(errNotCloudflareExtension, derrors.CodeInvalid, opGet, "backend").With("backend", b.ID)
 	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "resolve token").With("backend", b.ID)
 	}
 	apiBase, err := AIBaseURL(b.BaseURL)
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, opGet, "base url").With("backend", b.ID)
 	}
 	return cs.reg.Get(b.ID+"\x00"+token+"\x00"+apiBase, func() (*Client, error) {
-		c, err := newClient(apiBase, token)
+		c, err := newClient(apiBase, token, cs.Now, cs.Speech)
 		if err != nil {
-			return nil, err
+			return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "build client").With("backend", b.ID)
 		}
 		c.backendID = b.ID
 		c.policies = cs.Policies

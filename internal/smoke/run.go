@@ -95,31 +95,31 @@ func (o *Options) Normalize() {
 	}
 	o.BaseURL = strings.TrimRight(strings.TrimSpace(o.BaseURL), "/")
 	if o.BaseURL == "" {
-		o.BaseURL = envOr("POLYPUS_BASE_URL", config.DefaultGatewayURL)
+		o.BaseURL = config.EnvOr("POLYPUS_BASE_URL", config.DefaultGatewayURL)
 	}
 	if len(o.Channels) == 0 {
 		o.Channels = AllChannels()
 	}
 	if strings.TrimSpace(o.ChatModel) == "" {
-		o.ChatModel = envOr("POLYPUS_CHAT_SMOKE_MODEL", DefaultChatModel)
+		o.ChatModel = config.EnvOr("POLYPUS_CHAT_SMOKE_MODEL", DefaultChatModel)
 	}
 	if strings.TrimSpace(o.TTSModel) == "" {
-		o.TTSModel = envOr("POLYPUS_DEFAULT_MODEL", DefaultTTSModel)
+		o.TTSModel = config.EnvOr("POLYPUS_DEFAULT_MODEL", DefaultTTSModel)
 	}
 	if strings.TrimSpace(o.STTModel) == "" {
-		o.STTModel = envOr("POLYPUS_DEFAULT_STT_MODEL", DefaultSTTModel)
+		o.STTModel = config.EnvOr("POLYPUS_DEFAULT_STT_MODEL", DefaultSTTModel)
 	}
 	if strings.TrimSpace(o.SystemOneModel) == "" {
-		o.SystemOneModel = envOr("POLYPUS_SYSTEMONE_MODEL", DefaultSystemOneModel)
+		o.SystemOneModel = config.EnvOr("POLYPUS_SYSTEMONE_MODEL", DefaultSystemOneModel)
 	}
 	if strings.TrimSpace(o.BatchModel) == "" {
-		o.BatchModel = envOr("POLYPUS_BATCH_SMOKE_MODEL", DefaultBatchModel)
+		o.BatchModel = config.EnvOr("POLYPUS_BATCH_SMOKE_MODEL", DefaultBatchModel)
 	}
 	if strings.TrimSpace(o.TTSVoice) == "" {
-		o.TTSVoice = envOr("POLYPUS_DEFAULT_VOICE", DefaultTTSVoice)
+		o.TTSVoice = config.EnvOr("POLYPUS_DEFAULT_VOICE", DefaultTTSVoice)
 	}
 	if strings.TrimSpace(o.TTSText) == "" {
-		o.TTSText = envOr("POLYPUS_SMOKE_TEXT", "Here is what the file shows for this episode.")
+		o.TTSText = config.EnvOr("POLYPUS_SMOKE_TEXT", "Here is what the file shows for this episode.")
 	}
 	if strings.TrimSpace(o.AudioOutPath) == "" {
 		o.AudioOutPath = strings.TrimSpace(os.Getenv("POLYPUS_SMOKE_OUT"))
@@ -153,11 +153,15 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 		out = append(out, results...)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("channel %s: %w", ch, err))
-			continue
 		}
 		for _, r := range results {
 			if r.Status == StatusFail {
-				errs = append(errs, fmt.Errorf("channel %s: probe %s: %s", ch, r.Probe, r.Detail))
+				// Keep the probe's error in the chain, so callers can classify it.
+				cause := r.cause
+				if cause == nil {
+					cause = errors.New(r.Detail)
+				}
+				errs = append(errs, fmt.Errorf("channel %s: probe %s: %w", ch, r.Probe, cause))
 			}
 		}
 	}
@@ -196,17 +200,19 @@ func runChannel(ctx context.Context, ch string, opts Options) ([]Result, error) 
 	return results, err
 }
 
-func envOr(key, def string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return def
+func timed(channel, probe, model string, fn func() (string, error)) Result {
+	return timedSelected(channel, probe, model, func() (string, string, error) {
+		detail, err := fn()
+		return detail, "", err
+	})
 }
 
-func timed(channel, probe, model string, fn func() (string, error)) Result {
+// timedSelected runs one probe and records its time, outcome and the model the
+// gateway selected (empty when the probe has none).
+func timedSelected(channel, probe, model string, fn func() (detail, selected string, err error)) Result {
 	start := time.Now()
 	row := Result{Channel: channel, Probe: probe, Model: model, Status: StatusPass}
-	detail, err := fn()
+	detail, selected, err := fn()
 	row.Ms = time.Since(start).Milliseconds()
 	if err != nil {
 		row.Status = StatusFail
@@ -214,6 +220,7 @@ func timed(channel, probe, model string, fn func() (string, error)) Result {
 		row.cause = err
 		return row
 	}
+	row.SelectedModel = selected
 	row.Detail = detail
 	return row
 }

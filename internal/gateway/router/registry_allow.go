@@ -47,11 +47,11 @@ func withAllowedModel(snap config.RouterConfig, backendID, model string) (config
 	b, ok := snap.Backends[backendID]
 	if !ok {
 		return snap, false, derrors.New(derrors.CodeNotFound, "router.AllowModel", "backend not found").
-			With("backend", backendID)
+			With(fieldBackend, backendID)
 	}
 	if b.Models == nil || !b.Models.HasAllowGate() {
 		return snap, false, derrors.New(derrors.CodeFailedPrecondition, "router.AllowModel", "backend has no models.allow gate").
-			With("backend", backendID)
+			With(fieldBackend, backendID)
 	}
 	down := config.NormalizeDownstream(backendID, model)
 	if down == "" {

@@ -1,3 +1,5 @@
+// Package statefile writes small state files atomically and serialises writers
+// with an advisory lock beside each file.
 package statefile
 
 import (

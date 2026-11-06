@@ -14,10 +14,10 @@ var traceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func (h healthHandler) serveFailureDump(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		h.writeMethodNotAllowed(w, http.MethodGet)
 		return
 	}
-	const prefix = "/debug/failures/"
+	const prefix = pathDebugFailures
 	if !strings.HasPrefix(r.URL.Path, prefix) {
 		http.NotFound(w, r)
 		return
@@ -45,12 +45,14 @@ func (h healthHandler) serveFailureDump(w http.ResponseWriter, r *http.Request) 
 			http.NotFound(w, r)
 			return
 		}
-		h.log.Warn("polypus: read failure dump", "err", err)
+		h.log.Warn("polypus: read failure dump", "trace_id", traceID, "path", cleanPath, "err", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body) //nolint:gosec // G705: a JSON dump served as application/json with nosniff
+	if _, err := w.Write(body); err != nil { //nolint:gosec // G705: a JSON dump served as application/json with nosniff
+		h.log.Debug("polypus: failure dump write failed", "trace_id", traceID, "err", err)
+	}
 }

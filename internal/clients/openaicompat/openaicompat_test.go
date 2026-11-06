@@ -55,8 +55,16 @@ func TestListModelsFailsOnANon2xx(t *testing.T) {
 		http.Error(w, "nope", http.StatusUnauthorized)
 	}))
 	t.Cleanup(srv.Close)
-	if _, err := testClient(srv).ListModels(bounded(t), srv.URL, ""); derrors.CodeOf(err) != derrors.CodeUnavailable {
-		t.Fatalf("a 401 list must fail as unavailable: %v", err)
+	if _, err := testClient(srv).ListModels(bounded(t), srv.URL, ""); derrors.CodeOf(err) != derrors.CodeUnauthorized {
+		t.Fatalf("a 401 list must fail as unauthorized, not a 502: %v", err)
+	}
+}
+
+func TestListModelsMapsA404ToNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+	if _, err := testClient(srv).ListModels(bounded(t), srv.URL, ""); derrors.CodeOf(err) != derrors.CodeNotFound {
+		t.Fatalf("a 404 list must fail as not found: %v", err)
 	}
 }
 

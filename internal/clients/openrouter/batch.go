@@ -21,6 +21,13 @@ import (
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
+// Op names for this package's errors.
+const (
+	opGet       = "openrouter.Clients.Get"
+	opNewClient = "openrouter.newClient"
+	opDo        = "openrouter.do"
+)
+
 const (
 	defaultAPIBase = "https://openrouter.ai/api/v1"
 	batchMaxBody   = 64 << 20
@@ -107,7 +114,7 @@ type Client struct {
 
 func newClient(base, token string) (*Client, error) {
 	if strings.TrimSpace(token) == "" {
-		return nil, derrors.New(derrors.CodeInvalid, "openrouter.newClient", "api key required")
+		return nil, derrors.New(derrors.CodeInvalid, opNewClient, "api key required")
 	}
 	return &Client{
 		apiBase: base,
@@ -136,17 +143,21 @@ type Clients struct {
 	reg      catalog.Registry[Client]
 }
 
-// Get returns the cached client for b, building it on first use.
+// Get returns the cached client for b, building it on first use. b must be an
+// OpenRouter backend: its bearer token goes to the OpenRouter Batch API.
 func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
+	if !b.IsOpenRouter() {
+		return nil, derrors.New(derrors.CodeInvalid, opGet, "backend is not openrouter").With("backend", b.ID)
+	}
 	token, err := b.Auth.ResolveBearerToken()
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "resolve token").With("backend", b.ID)
 	}
 	base := apiBase(b.BaseURL)
 	return cs.reg.Get(b.ID+"\x00"+token+"\x00"+base, func() (*Client, error) {
 		c, err := newClient(base, token)
 		if err != nil {
-			return nil, err
+			return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "build client").With("backend", b.ID)
 		}
 		c.backendID = b.ID
 		c.policies = cs.Policies
@@ -207,7 +218,7 @@ func (c *Client) GetBatch(ctx context.Context, id string) (Batch, error) {
 func batchItemBody(raw json.RawMessage) (json.RawMessage, error) {
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "openrouter.batchItemBody", "parse body")
 	}
 	delete(body, "model")
 	delete(body, "stream")
@@ -216,7 +227,7 @@ func batchItemBody(raw json.RawMessage) (json.RawMessage, error) {
 
 func (c *Client) do(ctx context.Context, method, target string, payload []byte) ([]byte, error) {
 	if ctx == nil {
-		return nil, derrors.New(derrors.CodeInvalid, "openrouter.do", "context required")
+		return nil, derrors.New(derrors.CodeInvalid, opDo, "context required")
 	}
 	var reader io.Reader
 	if payload != nil {
@@ -224,7 +235,7 @@ func (c *Client) do(ctx context.Context, method, target string, payload []byte) 
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "openrouter.do", "request")
+		return nil, derrors.Wrap(err, derrors.CodeInternal, opDo, "request")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
@@ -238,16 +249,16 @@ func (c *Client) do(ctx context.Context, method, target string, payload []byte) 
 	}
 	resp, err := send(ctx, outbound.Scoped(outbound.DepOpenRouter, c.backendID), c.httpClient, req)
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "openrouter.do", strings.ToLower(method)).
+		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opDo, strings.ToLower(method)).
 			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, batchMaxBody))
+	raw, err := catalog.ReadCapped(resp.Body, batchMaxBody, opDo)
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "openrouter.do", "read body")
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, derrors.New(catalog.StatusCode(resp.StatusCode), "openrouter.do", errorMessage(raw, resp.StatusCode)).
+		return nil, derrors.New(catalog.StatusCode(resp.StatusCode), opDo, errorMessage(raw, resp.StatusCode)).
 			With("status", strconv.Itoa(resp.StatusCode))
 	}
 	return raw, nil

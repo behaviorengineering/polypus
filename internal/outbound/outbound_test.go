@@ -3,13 +3,20 @@ package outbound
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func TestRunMissingDeadline(t *testing.T) {
@@ -44,7 +51,7 @@ func TestDoRetries503(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := Do(ctx, DepCloudflare, srv.Client(), req)
+	resp, err := NewPolicies().Do(ctx, DepCloudflare, srv.Client(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +83,7 @@ func TestDoRetryResendsTheFullBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := Do(ctx, DepCloudflare, srv.Client(), req)
+	resp, err := NewPolicies().Do(ctx, DepCloudflare, srv.Client(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +110,7 @@ func TestDoSendsAnUnreplayableBodyOnce(t *testing.T) {
 	if req.GetBody != nil {
 		t.Fatal("test needs a body without GetBody")
 	}
-	resp, err := Do(ctx, DepCloudflare, srv.Client(), req)
+	resp, err := NewPolicies().Do(ctx, DepCloudflare, srv.Client(), req)
 	if err == nil {
 		_ = resp.Body.Close()
 	}
@@ -126,7 +133,7 @@ func TestDoAbort404(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := Do(ctx, DepCloudflare, srv.Client(), req)
+	resp, err := NewPolicies().Do(ctx, DepCloudflare, srv.Client(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +154,7 @@ func TestDoNeverDialsWithoutDeadline(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
-	_, err := Do(context.Background(), DepCloudflare, srv.Client(), req)
+	_, err := NewPolicies().Do(context.Background(), DepCloudflare, srv.Client(), req)
 	if err == nil || err.Error() != "outbound: missing deadline" {
 		t.Fatalf("got %v dialed=%v", err, dialed.Load())
 	}
@@ -186,9 +193,194 @@ func TestRetryableErrReadsTypesNotText(t *testing.T) {
 		{Retry(errors.New("daemon not ready")), true},
 		{Abort(Retry(errors.New("both"))), false},
 		{errors.New("http status 503, says some text"), false},
+		{errors.New("upstream said: request timeout exceeded"), false},
+		{errors.New("unexpected eof in config"), false},
+		{errors.New("connection reset by peer"), false},
+		{&url.Error{Op: "Post", URL: "http://x", Err: io.EOF}, true},
+		{fmt.Errorf("read body: %w", io.ErrUnexpectedEOF), true},
+		{&net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}, true},
+		{&net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("read", syscall.ECONNRESET)}, true},
+		{&net.OpError{Op: "write", Net: "tcp", Err: os.NewSyscallError("write", syscall.EPIPE)}, true},
+		{&net.DNSError{Err: "server misbehaving", Name: "x", IsTemporary: true}, true},
+		{&net.DNSError{Err: "no such host", Name: "x", IsNotFound: true}, false},
+		{context.DeadlineExceeded, false},
 	} {
 		if got := retryableErr(tc.err); got != tc.want {
 			t.Fatalf("%v: got %v, want %v", tc.err, got, tc.want)
 		}
+	}
+}
+
+func TestZeroValuePoliciesWork(t *testing.T) {
+	var p Policies
+	if p.breakerFor(DepCloudflare) == nil {
+		t.Fatal("a zero Policies must build breakers, not panic on a nil map")
+	}
+}
+
+func TestDoRetriesOnlyStatusForScopedHealth(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := NewPolicies().Do(ctx, Scoped(DepHealth, "gateway"), srv.Client(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusServiceUnavailable || calls.Load() != 1 {
+		t.Fatalf("a scoped health probe must not retry a status: status=%d calls=%d", resp.StatusCode, calls.Load())
+	}
+}
+
+// statusServer answers every request with status and counts the requests.
+func statusServer(t *testing.T, status int) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, "body")
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &calls
+}
+
+// sendOnce is DoOnce or DoStreamOnce.
+type sendOnce func(p *Policies, ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error)
+
+var onceSenders = map[string]sendOnce{
+	"DoOnce":       (*Policies).DoOnce,
+	"DoStreamOnce": (*Policies).DoStreamOnce,
+}
+
+func TestOnceCounts5xxAgainstTheBreaker(t *testing.T) {
+	for name, send := range onceSenders {
+		t.Run(name, func(t *testing.T) {
+			srv, calls := statusServer(t, http.StatusServiceUnavailable)
+			p := NewPolicies()
+			dep := Scoped(DepCloudflare, "cf_test")
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			for i := range 5 {
+				req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader("{}"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp, err := send(p, ctx, dep, srv.Client(), req)
+				if err != nil {
+					t.Fatalf("attempt %d: a 5xx must reach the caller as a response: %v", i, err)
+				}
+				raw, _ := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if resp.StatusCode != http.StatusServiceUnavailable || string(raw) != "body" {
+					t.Fatalf("attempt %d: status=%d body=%q", i, resp.StatusCode, raw)
+				}
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader("{}"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := send(p, ctx, dep, srv.Client(), req)
+			if err == nil {
+				_ = resp.Body.Close()
+				t.Fatal("five 5xx answers must open the breaker")
+			}
+			if derrors.CodeOf(err) != derrors.CodeUnavailable {
+				t.Fatalf("an open breaker is CodeUnavailable, got %v", err)
+			}
+			if calls.Load() != 5 {
+				t.Fatalf("each call is one attempt and the open breaker sends nothing, calls=%d", calls.Load())
+			}
+		})
+	}
+}
+
+func TestOnceDoesNotCount429AgainstTheBreaker(t *testing.T) {
+	for name, send := range onceSenders {
+		t.Run(name, func(t *testing.T) {
+			srv, calls := statusServer(t, http.StatusTooManyRequests)
+			p := NewPolicies()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			for i := range 7 {
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp, err := send(p, ctx, DepCloudflare, srv.Client(), req)
+				if err != nil {
+					t.Fatalf("attempt %d: a 429 must reach the caller: %v", i, err)
+				}
+				_ = resp.Body.Close()
+			}
+			if calls.Load() != 7 {
+				t.Fatalf("calls=%d", calls.Load())
+			}
+		})
+	}
+}
+
+func TestDoStreamOnceNeedsNoDeadline(t *testing.T) {
+	srv, calls := statusServer(t, http.StatusOK)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := NewPolicies().DoStreamOnce(context.Background(), DepAnthropic, srv.Client(), req)
+	if err != nil {
+		t.Fatalf("a stream is bounded by its caller, not a deadline: %v", err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(raw) != "body" || calls.Load() != 1 {
+		t.Fatalf("status=%d body=%q calls=%d", resp.StatusCode, raw, calls.Load())
+	}
+}
+
+func TestDoStreamOnceFailsClosed(t *testing.T) {
+	srv, calls := statusServer(t, http.StatusOK)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nilCtx context.Context // Nil on purpose.
+	if _, err := NewPolicies().DoStreamOnce(nilCtx, DepAnthropic, srv.Client(), req); derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("nil ctx: got %v", err)
+	}
+	if _, err := NewPolicies().DoStreamOnce(context.Background(), DepAnthropic, nil, req); derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("nil client: got %v", err)
+	}
+	if _, err := NewPolicies().DoStreamOnce(context.Background(), DepAnthropic, srv.Client(), nil); derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("nil request: got %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("nothing may be sent, calls=%d", calls.Load())
+	}
+}
+
+func TestDoStreamOnceDialFailureIsUnavailable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close() // A closed port refuses the dial.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+addr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = DoStreamOnce(context.Background(), DepGateway, http.DefaultClient, req)
+	if derrors.CodeOf(err) != derrors.CodeUnavailable {
+		t.Fatalf("a refused dial is CodeUnavailable, got %v", err)
 	}
 }

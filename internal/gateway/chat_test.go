@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 func chatJSONField(t *testing.T, body []byte, path ...string) any {
@@ -104,10 +105,13 @@ func TestChatBodyWantsThinkingOpenAIOnly(t *testing.T) {
 	}
 }
 
-func TestStreamSafeClientClearsTimeout(t *testing.T) {
-	s := streamSafeClient(newChatProxyClient(30 * time.Second))
-	if s.Timeout != 0 {
-		t.Fatal("timeout cleared")
+func TestProxyTransportStreamClientHasNoTimeout(t *testing.T) {
+	tr := newProxyTransport(30*time.Second, outbound.NewPolicies())
+	if tr.streamClient.Timeout != 0 {
+		t.Fatal("a stream client must not have a Client.Timeout")
+	}
+	if tr.client.Timeout != 30*time.Second {
+		t.Fatalf("non-stream client timeout = %s", tr.client.Timeout)
 	}
 }
 
@@ -119,7 +123,7 @@ func TestProxyChatCompletionsStream(t *testing.T) {
 	rec := httptest.NewRecorder()
 	body := []byte(`{"model":"test","messages":[],"stream":true}`)
 	if err := proxyChat(rec, httptest.NewRequest(http.MethodPost, "/", nil), body,
-		chatDial{backendURL: up.URL, client: up.Client(), stream: true, log: testShared.log}); err != nil {
+		chatDial{backendURL: up.URL, transport: testShared.transport, stream: true, log: testShared.log}); err != nil {
 		t.Fatal(err)
 	}
 }

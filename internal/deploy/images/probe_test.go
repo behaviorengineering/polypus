@@ -74,3 +74,30 @@ func TestProbeManifest503Retries(t *testing.T) {
 		t.Fatalf("expected retry, hits=%d", hits)
 	}
 }
+
+func TestProbeManifestKeepsGitHubTokenFromOtherRegistries(t *testing.T) {
+	const pat = "ghp_operator_token"
+	t.Setenv("GHCR_TOKEN", pat)
+	var leaked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if auth := r.Header.Get("Authorization"); auth != "" && auth != "Bearer anon-jwt" {
+			leaked = append(leaked, auth)
+		}
+		switch {
+		case r.URL.Path == "/token":
+			_, _ = w.Write([]byte(`{"token":"anon-jwt"}`))
+		case r.Header.Get("Authorization") == "Bearer anon-jwt":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ref := srv.URL[len("http://"):] + "/acme/widget:1.0.0"
+	if err := ProbeManifest(testContext(t), ref, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(leaked) > 0 {
+		t.Fatalf("a non-ghcr.io registry received credentials: %q", leaked)
+	}
+}

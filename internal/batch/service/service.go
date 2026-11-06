@@ -6,13 +6,34 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
+	"github.com/behaviorengineering/polypus/internal/observability"
 )
+
+// Op names for the service's errors.
+const (
+	opCreate   = "batch.service.Create"
+	opRefresh  = "batch.service.Refresh"
+	opFinalize = "batch.service.finalize"
+	opCancel   = "batch.service.Cancel"
+)
+
+// startSpan starts the span for one lifecycle step on a stored batch.
+func startSpan(ctx context.Context, name string, meta batch.Meta) (context.Context, trace.Span) {
+	return observability.Tracer().Start(ctx, name, trace.WithAttributes(
+		attribute.String("polypus.batch_id", meta.ID),
+		attribute.String("polypus.backend_id", meta.BackendID),
+	))
+}
 
 // Config builds a Service. Every field is required.
 type Config struct {
@@ -52,22 +73,23 @@ type CreateRequest struct {
 // Create stores the batch, submits it once and records the provider's reference. A
 // failed submit leaves the batch stored as failed and returns the (typed) cause.
 func (s *Service) Create(ctx context.Context, req CreateRequest) (batch.Meta, error) {
-	const op = "batch.service.Create"
 	if !req.Backend.HasCapability(config.CapBatch) {
-		return batch.Meta{}, derrors.New(derrors.CodeFailedPrecondition, op, "backend lacks batch capability").
+		return batch.Meta{}, derrors.New(derrors.CodeFailedPrecondition, opCreate, "backend lacks batch capability").
 			With("backend", req.Backend.ID)
 	}
 	sub, err := s.cfg.Submitter(req.Backend)
 	if err != nil {
-		return batch.Meta{}, err
+		return batch.Meta{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeFailedPrecondition), opCreate, "submitter").
+			With("backend", req.Backend.ID)
 	}
 	if err := sub.Validate(req.Job); err != nil {
-		return batch.Meta{}, err
+		return batch.Meta{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opCreate, "validate").
+			With("backend", req.Backend.ID)
 	}
 	now := s.cfg.Now().Unix()
 	expiresAt, err := batch.ExpiresAtUnix(now, req.CompletionWindow)
 	if err != nil {
-		return batch.Meta{}, err
+		return batch.Meta{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opCreate, "completion window")
 	}
 	meta := batch.Meta{
 		Endpoint:         req.Job.Endpoint,
@@ -81,7 +103,8 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (batch.Meta, er
 		ExpiresAt:        expiresAt,
 	}
 	if err := s.cfg.Store.SaveBatch(&meta); err != nil {
-		return batch.Meta{}, err
+		return batch.Meta{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), opCreate, "save").
+			With("backend", req.Backend.ID)
 	}
 	submitErr := s.cfg.Breakers.Execute(req.Backend.ID, func() error {
 		return sub.Submit(ctx, req.Job, &meta)
@@ -90,15 +113,18 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (batch.Meta, er
 		meta.Status = batch.StatusFailed
 		meta.FailedAt = s.cfg.Now().Unix()
 		if err := s.cfg.Store.UpdateBatch(meta); err != nil {
-			return meta, err
+			// Keep the provider's rejection: it is why the batch failed.
+			return meta, derrors.Wrap(errors.Join(submitErr, err), derrors.CodeOr(submitErr, derrors.CodeUnavailable), opCreate, "submit, then save failed status").
+				With("backend", req.Backend.ID).With("batch_id", meta.ID)
 		}
-		return meta, derrors.Wrap(submitErr, derrors.CodeOr(submitErr, derrors.CodeUnavailable), op, "submit").
-			With("backend", req.Backend.ID)
+		return meta, derrors.Wrap(submitErr, derrors.CodeOr(submitErr, derrors.CodeUnavailable), opCreate, "submit").
+			With("backend", req.Backend.ID).With("batch_id", meta.ID)
 	}
 	meta.Status = batch.StatusInProgress
 	meta.InProgressAt = s.cfg.Now().Unix()
 	if err := s.cfg.Store.UpdateBatch(meta); err != nil {
-		return meta, err
+		return meta, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), opCreate, "save in progress").
+			With("batch_id", meta.ID)
 	}
 	return meta, nil
 }
@@ -106,29 +132,35 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (batch.Meta, er
 // Refresh brings a stored batch up to date: it expires one past its window, polls the
 // provider, and finalises the output once the provider is done. A terminal batch is
 // returned as it is.
-func (s *Service) Refresh(ctx context.Context, backend config.BackendDef, meta batch.Meta) (batch.Meta, error) {
-	if terminal(meta.Status) {
+func (s *Service) Refresh(ctx context.Context, backend config.BackendDef, meta batch.Meta) (_ batch.Meta, err error) {
+	if meta.Status.Terminal() {
 		return meta, nil
 	}
+	ctx, span := startSpan(ctx, "polypus.batch.refresh", meta)
+	defer func() { observability.EndSpan(span, err) }()
 	if meta.ExpiresAt > 0 && s.cfg.Now().Unix() > meta.ExpiresAt && meta.Status != batch.StatusCancelling {
 		meta.Status = batch.StatusExpired
-		return meta, s.cfg.Store.UpdateBatch(meta)
+		return meta, s.save(opRefresh, meta)
 	}
 	sub, err := s.cfg.Submitter(backend)
 	if err != nil {
-		return meta, err
+		return meta, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeFailedPrecondition), opRefresh, "submitter").
+			With("batch_id", meta.ID)
 	}
 	var poll Poll
-	if err := s.cfg.Breakers.Execute(meta.BackendID, func() error {
+	if err = s.cfg.Breakers.Execute(meta.BackendID, func() error {
 		var perr error
 		poll, perr = sub.Poll(ctx, meta)
 		return perr
 	}); err != nil {
-		return meta, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "batch.service.Refresh", "poll").
+		return meta, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opRefresh, "poll").
 			With("batch_id", meta.ID)
 	}
 	now := s.cfg.Now().Unix()
 	switch poll.State {
+	case pollUnknown:
+		return meta, derrors.New(derrors.CodeInternal, opRefresh, "submitter returned no poll state").
+			With("batch_id", meta.ID)
 	case PollDone:
 		return s.finalize(meta, poll.Lines)
 	case PollFailed:
@@ -145,7 +177,15 @@ func (s *Service) Refresh(ctx context.Context, backend config.BackendDef, meta b
 		}
 		meta.Status = batch.StatusInProgress
 	}
-	return meta, s.cfg.Store.UpdateBatch(meta)
+	return meta, s.save(opRefresh, meta)
+}
+
+// save stores meta, naming op and the batch on failure.
+func (s *Service) save(op string, meta batch.Meta) error {
+	if err := s.cfg.Store.UpdateBatch(meta); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), op, "save").With("batch_id", meta.ID)
+	}
+	return nil
 }
 
 // finalize writes the output files and the terminal status. A batch that was
@@ -175,11 +215,15 @@ func (s *Service) finalize(meta batch.Meta, lines []batch.LineResult) (batch.Met
 	}
 	updated, applied, err := s.cfg.Store.TryFinalizeBatch(meta.ID, patch)
 	if err != nil {
-		return meta, err
+		return meta, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), opFinalize, "finalize").With("batch_id", meta.ID)
 	}
 	if !applied {
 		// Another request finalised it first; return what it wrote.
-		return s.cfg.Store.GetBatch(meta.ID)
+		stored, err := s.cfg.Store.GetBatch(meta.ID)
+		if err != nil {
+			return meta, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), opFinalize, "reload").With("batch_id", meta.ID)
+		}
+		return stored, nil
 	}
 	return updated, nil
 }
@@ -187,31 +231,23 @@ func (s *Service) finalize(meta batch.Meta, lines []batch.LineResult) (batch.Met
 // Cancel asks the provider to cancel a running batch and marks it cancelling; a later
 // Refresh finalises it with the lines that finished. A batch that is not running is
 // returned as it is.
-func (s *Service) Cancel(ctx context.Context, backend config.BackendDef, meta batch.Meta) (batch.Meta, error) {
+func (s *Service) Cancel(ctx context.Context, backend config.BackendDef, meta batch.Meta) (_ batch.Meta, err error) {
 	if meta.Status != batch.StatusValidating && meta.Status != batch.StatusInProgress {
 		return meta, nil
 	}
+	ctx, span := startSpan(ctx, "polypus.batch.cancel", meta)
+	defer func() { observability.EndSpan(span, err) }()
 	sub, err := s.cfg.Submitter(backend)
 	if err != nil {
-		return meta, err
+		return meta, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeFailedPrecondition), opCancel, "submitter").
+			With("batch_id", meta.ID)
 	}
-	if err := s.cfg.Breakers.Execute(meta.BackendID, func() error {
+	if err = s.cfg.Breakers.Execute(meta.BackendID, func() error {
 		return sub.Cancel(ctx, meta)
 	}); err != nil {
-		return meta, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "batch.service.Cancel", "cancel").
+		return meta, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opCancel, "cancel").
 			With("batch_id", meta.ID)
 	}
 	meta.Status = batch.StatusCancelling
-	return meta, s.cfg.Store.UpdateBatch(meta)
-}
-
-func terminal(status batch.Status) bool {
-	switch status {
-	case batch.StatusCompleted, batch.StatusFailed, batch.StatusCancelled, batch.StatusExpired:
-		return true
-	case batch.StatusValidating, batch.StatusInProgress, batch.StatusCancelling:
-		return false
-	default:
-		return false
-	}
+	return meta, s.save(opCancel, meta)
 }

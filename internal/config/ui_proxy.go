@@ -43,52 +43,62 @@ func parseUIProxies(entries []uiProxyFile) ([]UIProxy, error) {
 			return nil, fmt.Errorf("router: duplicate ui_proxies path %q", path)
 		}
 		seen[path] = struct{}{}
-		for _, reserved := range reservedUIProxyPrefixes {
-			if path == reserved || strings.HasPrefix(path, reserved+"/") {
-				return nil, fmt.Errorf("router: ui_proxies path %q conflicts with reserved prefix %q", path, reserved)
-			}
-		}
-		rawURL, err := expandEnv(strings.TrimSpace(e.URL))
+		p, err := parseUIProxy(i, path, e)
 		if err != nil {
-			return nil, fmt.Errorf("router: ui_proxies[%d].url: %w", i, err)
+			return nil, err
 		}
-		if rawURL == "" {
-			return nil, fmt.Errorf("router: ui_proxies[%d].url required", i)
-		}
-		u, err := url.Parse(rawURL)
-		if err != nil {
-			return nil, fmt.Errorf("router: ui_proxies[%d].url: %w", i, err)
-		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			return nil, fmt.Errorf("router: ui_proxies[%d].url must be http or https", i)
-		}
-		if u.Host == "" {
-			return nil, fmt.Errorf("router: ui_proxies[%d].url missing host", i)
-		}
-		title := strings.TrimSpace(e.Title)
-		if title == "" {
-			title = defaultUIProxyTitle(path)
-		}
-		desc := strings.TrimSpace(e.Description)
-		if desc == "" {
-			desc = defaultUIProxyDescription(path)
-		}
-		stripPrefix := true
-		if e.StripPrefix != nil {
-			stripPrefix = *e.StripPrefix
-		}
-		out = append(out, UIProxy{
-			Path:        path,
-			URL:         strings.TrimRight(u.String(), "/"),
-			Title:       title,
-			Description: desc,
-			StripPrefix: stripPrefix,
-		})
+		out = append(out, p)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return len(out[i].Path) > len(out[j].Path)
 	})
 	return out, nil
+}
+
+// parseUIProxy checks ui_proxies[i] at its normalised path and fills the title,
+// description and strip_prefix defaults.
+func parseUIProxy(i int, path string, e uiProxyFile) (UIProxy, error) {
+	for _, reserved := range reservedUIProxyPrefixes {
+		if path == reserved || strings.HasPrefix(path, reserved+"/") {
+			return UIProxy{}, fmt.Errorf("router: ui_proxies path %q conflicts with reserved prefix %q", path, reserved)
+		}
+	}
+	rawURL, err := expandEnv(strings.TrimSpace(e.URL))
+	if err != nil {
+		return UIProxy{}, fmt.Errorf("router: ui_proxies[%d].url: %w", i, err)
+	}
+	if rawURL == "" {
+		return UIProxy{}, fmt.Errorf("router: ui_proxies[%d].url required", i)
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return UIProxy{}, fmt.Errorf("router: ui_proxies[%d].url: %w", i, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return UIProxy{}, fmt.Errorf("router: ui_proxies[%d].url must be http or https", i)
+	}
+	if u.Host == "" {
+		return UIProxy{}, fmt.Errorf("router: ui_proxies[%d].url missing host", i)
+	}
+	title := strings.TrimSpace(e.Title)
+	if title == "" {
+		title = defaultUIProxyTitle(path)
+	}
+	desc := strings.TrimSpace(e.Description)
+	if desc == "" {
+		desc = defaultUIProxyDescription(path)
+	}
+	stripPrefix := true
+	if e.StripPrefix != nil {
+		stripPrefix = *e.StripPrefix
+	}
+	return UIProxy{
+		Path:        path,
+		URL:         strings.TrimRight(u.String(), "/"),
+		Title:       title,
+		Description: desc,
+		StripPrefix: stripPrefix,
+	}, nil
 }
 
 func normalizeUIProxyPath(path string) string {

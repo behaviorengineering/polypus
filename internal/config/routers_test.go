@@ -1016,3 +1016,26 @@ routers:
 		t.Fatalf("expected empty object error, got: %v", err)
 	}
 }
+
+func TestListenAddrAndGatewayBaseURLBracketIPv6(t *testing.T) {
+	t.Setenv("POLYPUS_BASE_URL", "")
+	cases := []struct {
+		host       string
+		wantListen string
+		wantBase   string
+	}{
+		{host: "127.0.0.1", wantListen: "127.0.0.1:1320", wantBase: "http://127.0.0.1:1320"},
+		{host: "::1", wantListen: "[::1]:1320", wantBase: "http://[::1]:1320"},
+		{host: "[::1]", wantListen: "[::1]:1320", wantBase: "http://[::1]:1320"},
+		{host: "::", wantListen: "[::]:1320", wantBase: "http://127.0.0.1:1320"},
+	}
+	for _, tc := range cases {
+		opts := ServeOptions{Host: tc.host, Port: 1320}
+		if got := opts.ListenAddr(); got != tc.wantListen {
+			t.Errorf("ListenAddr(%q) = %q, want %q", tc.host, got, tc.wantListen)
+		}
+		if got := opts.GatewayBaseURL(); got != tc.wantBase {
+			t.Errorf("GatewayBaseURL(%q) = %q, want %q", tc.host, got, tc.wantBase)
+		}
+	}
+}

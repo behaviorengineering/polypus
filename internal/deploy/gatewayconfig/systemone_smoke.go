@@ -35,7 +35,7 @@ func SystemOneSmokeTargets(path string) ([]ChatSmokeTarget, error) {
 }
 
 func systemOneTargetsForBackend(backendID string, b backendYAML) []ChatSmokeTarget {
-	secrets := backendSmokeSecrets(backendID, b)
+	secrets := backendSmokeSecrets(b)
 	ext := strings.ToLower(strings.TrimSpace(b.Extension))
 	switch {
 	case backendID == "openrouter":
@@ -105,9 +105,4 @@ func firstNonEmpty(vals []string) string {
 		}
 	}
 	return ""
-}
-
-// ValidateSystemOneSmokeTargets ensures models are non-empty when targets exist.
-func ValidateSystemOneSmokeTargets(targets []ChatSmokeTarget) error {
-	return ValidateChatSmokeTargets(targets)
 }

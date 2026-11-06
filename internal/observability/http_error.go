@@ -101,21 +101,32 @@ func withErrorDetail(base http.RoundTripper) http.RoundTripper {
 	return &errorDetailTransport{base: base}
 }
 
+// ProxyIO is one proxied backend exchange as RecordProxyIO records it.
+type ProxyIO struct {
+	// Target is the backend URL; it is redacted before it reaches the span.
+	Target    string
+	Streaming bool
+	// StatusCode is the backend's HTTP status; 0 means no response yet.
+	StatusCode int
+	// BodyBytes is the response body size; negative means unknown.
+	BodyBytes int
+}
+
 // RecordProxyIO annotates the current span with backend URL, streaming, status, and body size.
-func RecordProxyIO(ctx context.Context, target string, streaming bool, statusCode, bodyBytes int) {
+func RecordProxyIO(ctx context.Context, io ProxyIO) {
 	span := trace.SpanFromContext(ctx)
 	if !span.IsRecording() {
 		return
 	}
 	attrs := []attribute.KeyValue{
-		attribute.String("url.full", redactURLString(target)),
-		attribute.Bool("llm.streaming", streaming),
+		attribute.String("url.full", redactURLString(io.Target)),
+		attribute.Bool("llm.streaming", io.Streaming),
 	}
-	if statusCode > 0 {
-		attrs = append(attrs, attribute.Int("http.response.status_code", statusCode))
+	if io.StatusCode > 0 {
+		attrs = append(attrs, attribute.Int("http.response.status_code", io.StatusCode))
 	}
-	if bodyBytes >= 0 {
-		attrs = append(attrs, attribute.Int("http.response.body.size", bodyBytes))
+	if io.BodyBytes >= 0 {
+		attrs = append(attrs, attribute.Int("http.response.body.size", io.BodyBytes))
 	}
 	span.SetAttributes(attrs...)
 }

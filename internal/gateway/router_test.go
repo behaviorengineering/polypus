@@ -130,7 +130,7 @@ func newFakeRouter(t *testing.T, opts config.ServeOptions) *fakeRouter {
 }
 
 // newTestGateway builds a handler with an injected Router (skips bifrost.Init).
-func newTestGateway(t *testing.T, opts config.ServeOptions, r gatewayRouter, extra ...HandlerOption) http.Handler {
+func newTestGateway(t *testing.T, opts config.ServeOptions, r registryProvider, extra ...HandlerOption) http.Handler {
 	t.Helper()
 	options := append([]HandlerOption{withRouter(r)}, extra...)
 	handler, err := NewHandler(opts, options...)
@@ -203,7 +203,7 @@ backends:
 	if !ok {
 		t.Fatal("expected gateway handler")
 	}
-	if gw.ownedRouter {
+	if gw.closeRouter != nil {
 		t.Fatal("injected router must not be owned")
 	}
 }

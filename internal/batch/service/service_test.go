@@ -3,10 +3,16 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"github.com/behaviorengineering/polypus/internal/batch"
+	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -144,5 +150,96 @@ func TestOpenRouterRejectsInlineMedia(t *testing.T) {
 	job.Lines[0].Body = []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
 	if err := sub.Validate(job); err != nil {
 		t.Fatalf("plain text passes: %v", err)
+	}
+}
+
+// brokenSaveSubmitter fails the submit and breaks the batch id, so saving the failed
+// status fails too.
+type brokenSaveSubmitter struct{ fakeSubmitter }
+
+func (b *brokenSaveSubmitter) Submit(_ context.Context, _ Job, meta *batch.Meta) error {
+	meta.ID = "../outside"
+	return derrors.New(derrors.CodeRateLimited, "p", "provider said no")
+}
+
+func TestCreateKeepsTheSubmitErrorWhenTheSaveFails(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	clock := func() time.Time { return now }
+	store, err := batch.NewDiskStore(t.TempDir(), clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := &brokenSaveSubmitter{}
+	svc, err := Config{
+		Store: store, Breakers: upstream.NewBoard(), Now: clock,
+		Submitter: func(config.BackendDef) (Submitter, error) { return sub, nil },
+	}.CreateService()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Create(context.Background(), createRequest())
+	if derrors.CodeOf(err) != derrors.CodeRateLimited || !strings.Contains(err.Error(), "provider said no") {
+		t.Fatalf("the provider's rejection must survive a failed save: %v", err)
+	}
+	if !strings.Contains(err.Error(), "invalid id") {
+		t.Fatalf("the save failure must be kept too: %v", err)
+	}
+}
+
+func TestRefreshRejectsAPollWithNoState(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	sub := &fakeSubmitter{poll: Poll{State: PollRunning}}
+	svc, _ := newTestService(t, sub, &now)
+	meta, err := svc.Create(context.Background(), createRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub.poll = Poll{}
+	if _, err := svc.Refresh(context.Background(), batchBackend, meta); derrors.CodeOf(err) != derrors.CodeInternal {
+		t.Fatalf("a zero Poll must fail, not read as running: %v", err)
+	}
+}
+
+func TestRefreshAndCancelStartSpans(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+	now := time.Unix(1_000, 0)
+	sub := &fakeSubmitter{poll: Poll{State: PollRunning}}
+	svc, _ := newTestService(t, sub, &now)
+	meta, err := svc.Create(context.Background(), createRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta, err = svc.Refresh(context.Background(), batchBackend, meta); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Cancel(context.Background(), batchBackend, meta); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, sp := range exporter.GetSpans() {
+		names[sp.Name] = true
+	}
+	if !names["polypus.batch.refresh"] || !names["polypus.batch.cancel"] {
+		t.Fatalf("spans = %v", names)
+	}
+}
+
+func TestCloudflareUnknownChatResultFailsTheLine(t *testing.T) {
+	lines := cloudflareLines(batch.EndpointChatCompletions, "b/m", 1, []cloudflare.BatchResponseItem{
+		{ExternalReference: "a", Success: true, Result: []byte(`{"unexpected":true}`)},
+		{ExternalReference: "b", Success: true, Result: []byte(`{"response":"hi"}`)},
+	})
+	if lines[0].ErrCode != "synthesis_failed" || len(lines[0].Body) != 0 {
+		t.Fatalf("an unknown result must fail its line: %+v", lines[0])
+	}
+	if lines[1].ErrCode != "" || !strings.Contains(string(lines[1].Body), `"content":"hi"`) {
+		t.Fatalf("a response result becomes a completion: %+v", lines[1])
 	}
 }

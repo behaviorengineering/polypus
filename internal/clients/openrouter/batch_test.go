@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
+	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
@@ -130,5 +131,30 @@ func TestBatchErrorCodes(t *testing.T) {
 func TestAPIBase(t *testing.T) {
 	if apiBase("") != defaultAPIBase || apiBase("https://openrouter.ai/api/v1/") != "https://openrouter.ai/api/v1" {
 		t.Fatal("apiBase")
+	}
+}
+
+func TestClientsGetRejectsOtherBackends(t *testing.T) {
+	t.Setenv("OR_TEST_KEY", "secret")
+	_, err := (&Clients{}).Get(config.BackendDef{
+		ID: "cf_local", BaseURL: "https://api.cloudflare.com/client/v4/accounts/a/ai/v1",
+		Auth: config.BackendAuth{BearerEnv: "OR_TEST_KEY"},
+	})
+	if derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("a non-OpenRouter backend must be refused, got %v", err)
+	}
+	if _, err := (&Clients{}).Get(config.BackendDef{ID: "openrouter", Auth: config.BackendAuth{BearerEnv: "OR_TEST_KEY"}}); err != nil {
+		t.Fatalf("openrouter backend: %v", err)
+	}
+}
+
+func TestDoKeepsTheOutboundCode(t *testing.T) {
+	c, err := newClient("http://127.0.0.1:1", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.GetBatch(context.Background(), "x")
+	if derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+		t.Fatalf("a call without a deadline keeps the outbound code, got %v", err)
 	}
 }

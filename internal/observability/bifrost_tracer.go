@@ -30,6 +30,8 @@ type BifrostOTelTracer struct {
 	handles sync.Map // span handle -> *otelSpanBridge.
 }
 
+var _ schemas.Tracer = (*BifrostOTelTracer)(nil)
+
 // NewBifrostOTelTracer returns a tracer suitable for schemas.BifrostConfig.Tracer.
 func NewBifrostOTelTracer() *BifrostOTelTracer {
 	return &BifrostOTelTracer{}
@@ -63,14 +65,13 @@ func (t *BifrostOTelTracer) StartSpan(ctx context.Context, name string, kind sch
 }
 
 // StartSpanID mirrors Bifrost LLM spans into OTel children of the inbound context.
+// A nil ctx yields no span ("", nil) rather than an orphan root span.
 func (t *BifrostOTelTracer) StartSpanID(ctx context.Context, name string, kind schemas.SpanKind) (string, schemas.SpanHandle) {
-	parent := ctx
-	if parent == nil {
-		// A new root span: never another request's context.
-		parent = context.Background()
+	if ctx == nil {
+		return "", nil
 	}
 	oiKind := openInferenceKind(kind)
-	newCtx, otelSpan := Tracer().Start(parent, name, trace.WithSpanKind(otelSpanKind(kind)))
+	newCtx, otelSpan := Tracer().Start(ctx, name, trace.WithSpanKind(otelSpanKind(kind)))
 	otelSpan.SetAttributes(attribute.String("openinference.span.kind", oiKind))
 	if kind == schemas.SpanKindLLMCall {
 		otelSpan.SetAttributes(attribute.String("polypus.bifrost.span", "llm_call"))
@@ -94,7 +95,8 @@ func (t *BifrostOTelTracer) StartSpanID(ctx context.Context, name string, kind s
 	return schemaSpan.SpanID, bridge
 }
 
-func (t *BifrostOTelTracer) endSpan(handle schemas.SpanHandle, status schemas.SpanStatus, statusMsg string) {
+// EndSpan implements schemas.Tracer: it ends the OTel span and drops the handle.
+func (t *BifrostOTelTracer) EndSpan(handle schemas.SpanHandle, status schemas.SpanStatus, statusMsg string) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil {
 		return

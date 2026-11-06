@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 
@@ -23,7 +22,7 @@ func newInitCmd() *cobra.Command {
 		GroupID: groupSetup,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return exitStatus(runInit(o))
+			return exitStatus(runInit(ioFor(cmd), o))
 		},
 	}
 	cmd.Flags().BoolVar(&o.force, "force", false, "overwrite an existing ~/.config/polypus/config.yaml")
@@ -31,13 +30,13 @@ func newInitCmd() *cobra.Command {
 	return cmd
 }
 
-func runInit(o initOpts) int {
+func runInit(cio cmdIO, o initOpts) int {
+	path, err := config.UserConfigFilePath()
+	if err != nil {
+		cio.errorf("polypus init: %v\n", err)
+		return 1
+	}
 	if o.dryRun {
-		path, err := config.UserConfigFilePath()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "polypus init: %v\n", err)
-			return 1
-		}
 		action := "would write"
 		if _, statErr := os.Stat(path); statErr == nil {
 			action = "would keep existing"
@@ -45,22 +44,22 @@ func runInit(o initOpts) int {
 				action = "would replace"
 			}
 		} else if !errors.Is(statErr, fs.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "polypus init: %v\n", statErr)
+			cio.errorf("polypus init: %v\n", statErr)
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "polypus init: dry-run: %s %s (and refresh config.yaml.example beside it)\n", action, path)
+		cio.errorf("polypus init: dry-run: %s %s (and refresh config.yaml.example beside it)\n", action, path)
 		return 0
 	}
 	written, err := config.InitPolypusUserConfig(config.ConfigYAMLExample, o.force)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "polypus init: %v\n", err)
+		cio.errorf("polypus init: %v\n", err)
 		return 1
 	}
 	if written {
-		fmt.Fprintln(os.Stderr, "polypus init: wrote ~/.config/polypus/config.yaml")
+		cio.errorf("polypus init: wrote %s\n", path)
 	} else {
-		fmt.Fprintln(os.Stderr, "polypus init: config already exists (use --force to replace)")
+		cio.errorf("%s\n", "polypus init: config already exists (use --force to replace)")
 	}
-	fmt.Fprintln(os.Stderr, "polypus init: refreshed config.yaml.example")
+	cio.errorf("%s\n", "polypus init: refreshed config.yaml.example")
 	return 0
 }

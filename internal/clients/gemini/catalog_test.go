@@ -24,7 +24,7 @@ func TestGeminiListModelsOpenAIShape(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	client, err := newClient(srv.URL, "secret")
+	client, err := newClient(srv.URL, "secret", time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestGeminiListModelsStripsModelsPrefix(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	client, err := newClient(srv.URL, "secret")
+	client, err := newClient(srv.URL, "secret", time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestGeminiListModelsDefaultURLWhenBaseEmpty(t *testing.T) {
 	if !strings.Contains(defaultOpenAIModelsURL, "/v1beta/openai/models") {
 		t.Fatal("unexpected default constant")
 	}
-	client, err := newClient(srv.URL, "secret")
+	client, err := newClient(srv.URL, "secret", time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestGeminiListModelsUnauthorized(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	client, err := newClient(srv.URL, "secret")
+	client, err := newClient(srv.URL, "secret", time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestGeminiListModelsUnauthorized(t *testing.T) {
 }
 
 func TestGeminiClientsCacheOneInstance(t *testing.T) {
-	cs := &Clients{}
+	cs := &Clients{Now: time.Now}
 	t.Setenv("GEMINI_TEST_KEY", "secret")
 	b := config.BackendDef{
 		ID:        "gemini_studio",

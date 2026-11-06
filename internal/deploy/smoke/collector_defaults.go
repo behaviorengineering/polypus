@@ -7,16 +7,26 @@ import (
 	"strings"
 )
 
+// clickHouseFallbackEnv is the operator's switch for the collector smoke's HyperDX
+// ClickHouse fallback; when it is set, otelcol reads it and this package leaves the
+// choice alone.
+const clickHouseFallbackEnv = "POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK"
+
 // ResolveCollectorOptions fills empty OTLP and observability URLs from operator env.
 // gatewayURL is the deployed gateway (empty reads POLYPUS_BASE_URL). When it is a
 // remote host, such as the environment's tailnet address, observability UIs use plain
 // http on tailnet TCP-forwarded ports (6006, 8080) and OTLP HTTP on :4318.
+//
+// For a remote gateway it also turns the ClickHouse fallback off (DisableHyperDXCH),
+// unless the operator set POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK: the fallback runs
+// docker exec on this machine, where a remote gateway's HyperDX does not run. The
+// process environment is never changed.
 func ResolveCollectorOptions(in CollectorOptions, gatewayURL string) CollectorOptions {
 	out := in
 	if strings.TrimSpace(gatewayURL) == "" {
 		gatewayURL = os.Getenv("POLYPUS_BASE_URL")
 	}
-	remoteHost, isRemote := polypusHomelabHost(gatewayURL)
+	remoteHost, isRemote := remoteGatewayHost(gatewayURL)
 
 	if strings.TrimSpace(out.OTLPEndpoint) == "" {
 		out.OTLPEndpoint = firstNonEmpty(
@@ -49,14 +59,15 @@ func ResolveCollectorOptions(in CollectorOptions, gatewayURL string) CollectorOp
 	if isRemote && !out.SkipHyperDXVerify {
 		out.SkipHyperDXVerify = true
 	}
-	if isRemote && os.Getenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK") == "" {
-		_ = os.Setenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", "0")
+	if isRemote && os.Getenv(clickHouseFallbackEnv) == "" {
+		out.DisableHyperDXCH = true
 	}
-
 	return out
 }
 
-func polypusHomelabHost(baseURL string) (host string, remote bool) {
+// remoteGatewayHost returns the gateway's host and whether it is another machine
+// (such as the environment's polypus-<identifier> tailnet address).
+func remoteGatewayHost(baseURL string) (host string, remote bool) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
 		return "", false
@@ -90,19 +101,19 @@ func observabilityHTTPBase(host, port string) string {
 	return "http://" + host + ":" + port // NOSONAR go:S5332 tailnet TCP forward, encrypted by WireGuard.
 }
 
-func coerceObservabilityHTTP(homelabHost, baseURL, port string) string {
+func coerceObservabilityHTTP(gatewayHost, baseURL, port string) string {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
-		return observabilityHTTPBase(homelabHost, port)
+		return observabilityHTTPBase(gatewayHost, port)
 	}
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return baseURL
 	}
-	if u.Hostname() != homelabHost {
+	if u.Hostname() != gatewayHost {
 		return baseURL
 	}
-	return observabilityHTTPBase(homelabHost, port)
+	return observabilityHTTPBase(gatewayHost, port)
 }
 
 func firstNonEmpty(values ...string) string {

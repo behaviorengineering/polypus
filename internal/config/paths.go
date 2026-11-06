@@ -117,10 +117,13 @@ func xdgDir(envName, homeSubdir string) (string, error) {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return "", derrors.Wrap(err, derrors.CodeNotReady, "config.xdgDir", "home directory").With("env", envName)
 	}
 	return filepath.Join(home, homeSubdir, "polypus"), nil
 }
+
+// AdminKeysFile is the admin key store's file name under the state directory.
+const AdminKeysFile = "admin-api-keys.json"
 
 // ResolveAdminKeysPath picks the admin API key store path.
 // Order: POLYPUS_ADMIN_KEYS, then $XDG_STATE_HOME/polypus/admin-api-keys.json.
@@ -141,5 +144,5 @@ func resolveAdminKeysPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("admin keys path: %w", err)
 	}
-	return filepath.Join(dir, "admin-api-keys.json"), nil
+	return filepath.Join(dir, AdminKeysFile), nil
 }

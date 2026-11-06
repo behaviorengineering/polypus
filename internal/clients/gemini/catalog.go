@@ -2,12 +2,8 @@ package gemini
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +11,13 @@ import (
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/outbound"
+)
+
+// Op names for this package's errors.
+const (
+	opNewClient = "gemini.newClient"
+	opList      = "gemini.ListModelsStrict"
+	opFetch     = "gemini.fetch"
 )
 
 const (
@@ -40,27 +43,31 @@ type Client struct {
 	log        *slog.Logger       // nil: no warnings.
 }
 
-// NewClientWithListURL builds a catalog client for a fixed list URL (tests and injected getters).
+// NewClientWithListURL builds a catalog client for a fixed list URL (tests and
+// injected getters). Its cache runs on the wall clock; production clients come from
+// Clients.Get, which takes the gateway's clock.
 func NewClientWithListURL(listURL, token string) (*Client, error) {
-	return newClient(listURL, token)
+	return newClient(listURL, token, time.Now)
 }
 
-func newClient(listURL, token string) (*Client, error) {
+func newClient(listURL, token string, now func() time.Time) (*Client, error) {
 	listURL = strings.TrimSpace(listURL)
 	if listURL == "" {
-		return nil, errListModelsURLRequired
+		return nil, derrors.Wrap(errListModelsURLRequired, derrors.CodeInvalid, opNewClient, "list url")
 	}
 	if strings.TrimSpace(token) == "" {
-		return nil, errAPIKeyRequired
+		return nil, derrors.Wrap(errAPIKeyRequired, derrors.CodeInvalid, opNewClient, "api key")
 	}
-	transport := observability.WrapTransport(http.DefaultTransport)
+	if now == nil {
+		return nil, derrors.New(derrors.CodeInternal, opNewClient, "clock required")
+	}
 	return &Client{
 		listURL: listURL,
 		apiKey:  token,
 		httpClient: &http.Client{
-			Transport: transport,
+			Transport: observability.WrapTransport(http.DefaultTransport),
 		},
-		cache: catalog.NewCache(modelsCacheTTL),
+		cache: catalog.NewCacheClock(modelsCacheTTL, now),
 	}, nil
 }
 
@@ -84,49 +91,28 @@ func openAIModelsListURL(base string) string {
 // ListModelsStrict fetches the catalog or returns an error when fetch fails and no cache exists.
 func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
-		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, "gemini", "not configured")
+		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, opList, "not configured")
 	}
 	if ctx == nil {
-		return ModelList{}, derrors.New(derrors.CodeInvalid, "gemini.ListModelsStrict", "context required")
+		return ModelList{}, derrors.New(derrors.CodeInvalid, opList, "context required")
 	}
 	return catalog.ListStrict(ctx, catalog.Source{Provider: "gemini", Backend: c.backendID, Cache: c.cache, Fetch: c.fetch, Log: c.log})
 }
 
 func (c *Client) fetch(ctx context.Context) ([]Model, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.listURL, nil)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "gemini models", "request")
+	hdr := http.Header{}
+	hdr.Set("Authorization", "Bearer "+c.apiKey)
+	hdr.Set("Accept", "application/json")
+	h := catalog.HTTP{Client: c.httpClient, Policies: c.policies, Dep: outbound.Scoped(outbound.DepGemini, c.backendID)}
+	var list ModelList
+	if err := catalog.GetJSON(ctx, h, opFetch, c.listURL, hdr, modelsMaxBody, &list); err != nil {
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.policies.Do(ctx, outbound.Scoped(outbound.DepGemini, c.backendID), c.httpClient, req)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "gemini models", "fetch")
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "gemini models", "read")
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return nil, derrors.Wrap(nil, derrors.CodeUnauthorized, "gemini.fetch", "API key rejected").
-				With("status", strconv.Itoa(resp.StatusCode))
-		}
-		if outbound.HTTPStatusPermanent(resp.StatusCode) {
-			return nil, outbound.Abort(derrors.New(catalog.StatusCode(resp.StatusCode), "gemini models", fmt.Sprintf("status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200))))
-		}
-		return nil, derrors.New(catalog.StatusCode(resp.StatusCode), "gemini models", fmt.Sprintf("status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200)))
-	}
-	return parseOpenAIModelList(raw)
+	return toModels(list), nil
 }
 
-func parseOpenAIModelList(raw []byte) ([]Model, error) {
-	var list ModelList
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, "gemini models", "decode")
-	}
+// toModels keeps the entries with an id, without the "models/" prefix.
+func toModels(list ModelList) []Model {
 	out := make([]Model, 0, len(list.Data))
 	for _, m := range list.Data {
 		id := normalizeModelID(m.ID)
@@ -137,23 +123,14 @@ func parseOpenAIModelList(raw []byte) ([]Model, error) {
 			ID:      id,
 			Object:  catalog.ObjectModel,
 			Created: m.Created,
-			OwnedBy: firstNonEmpty(m.OwnedBy, "google"),
+			OwnedBy: catalog.FirstNonEmpty(m.OwnedBy, "google"),
 		})
 	}
-	return out, nil
+	return out
 }
 
 func normalizeModelID(id string) string {
 	id = strings.TrimSpace(id)
 	id = strings.TrimPrefix(id, "models/")
 	return strings.TrimSpace(id)
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if s := strings.TrimSpace(v); s != "" {
-			return s
-		}
-	}
-	return ""
 }

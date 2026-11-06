@@ -2,9 +2,7 @@ package anthropic
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -13,10 +11,17 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
-	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/outbound"
+)
+
+// Op names for this package's errors.
+const (
+	opNewClient = "anthropic.newClient"
+	opList      = "anthropic.ListModelsStrict"
+	opFetchAll  = "anthropic.fetchAll"
+	opFetchPage = "anthropic.fetchPage"
 )
 
 const (
@@ -55,39 +60,31 @@ type Client struct {
 	log        *slog.Logger       // nil: no warnings.
 }
 
-// newClientFromBackend builds an Anthropic catalog client from a backend definition.
-func newClientFromBackend(b config.BackendDef) (*Client, error) {
-	if !b.IsAnthropicExtension() {
-		return nil, derrors.Wrap(errNotAnthropicExtension, derrors.CodeInvalid, "anthropic", "backend").With("backend", b.ID)
-	}
-	token, err := b.Auth.ResolveBearerToken()
-	if err != nil {
-		return nil, err
-	}
-	return newClient(modelsListURL(b.BaseURL), token)
-}
-
-// NewClientWithListURL builds a catalog client for a fixed list URL (tests and injected getters).
+// NewClientWithListURL builds a catalog client for a fixed list URL (tests and
+// injected getters). Its cache runs on the wall clock; production clients come from
+// Clients.Get, which takes the gateway's clock.
 func NewClientWithListURL(listURL, token string) (*Client, error) {
-	return newClient(listURL, token)
+	return newClient(listURL, token, time.Now)
 }
 
-func newClient(listURL, token string) (*Client, error) {
+func newClient(listURL, token string, now func() time.Time) (*Client, error) {
 	listURL = strings.TrimSpace(listURL)
 	if listURL == "" {
-		return nil, errListModelsURLRequired
+		return nil, derrors.Wrap(errListModelsURLRequired, derrors.CodeInvalid, opNewClient, "list url")
 	}
 	if strings.TrimSpace(token) == "" {
-		return nil, errAPIKeyRequired
+		return nil, derrors.Wrap(errAPIKeyRequired, derrors.CodeInvalid, opNewClient, "api key")
 	}
-	transport := observability.WrapTransport(http.DefaultTransport)
+	if now == nil {
+		return nil, derrors.New(derrors.CodeInternal, opNewClient, "clock required")
+	}
 	return &Client{
 		listURL: listURL,
 		apiKey:  token,
 		httpClient: &http.Client{
-			Transport: transport,
+			Transport: observability.WrapTransport(http.DefaultTransport),
 		},
-		cache: catalog.NewCache(modelsCacheTTL),
+		cache: catalog.NewCacheClock(modelsCacheTTL, now),
 	}, nil
 }
 
@@ -106,10 +103,10 @@ func modelsListURL(base string) string {
 // ListModelsStrict fetches the catalog or returns an error when fetch fails and no cache exists.
 func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
-		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, "anthropic", "not configured")
+		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, opList, "not configured")
 	}
 	if ctx == nil {
-		return ModelList{}, derrors.New(derrors.CodeInvalid, "anthropic.ListModelsStrict", "context required")
+		return ModelList{}, derrors.New(derrors.CodeInvalid, opList, "context required")
 	}
 	return catalog.ListStrict(ctx, catalog.Source{Provider: "anthropic", Backend: c.backendID, Cache: c.cache, Fetch: c.fetchAll, Log: c.log})
 }
@@ -140,13 +137,13 @@ func (c *Client) fetchAll(ctx context.Context) ([]Model, error) {
 		}
 		afterID = p.LastID
 	}
-	return nil, derrors.New(derrors.CodeUnavailable, "anthropic models", fmt.Sprintf("more than %d pages", modelsMaxPages))
+	return nil, derrors.New(derrors.CodeUnavailable, opFetchAll, fmt.Sprintf("more than %d pages", modelsMaxPages))
 }
 
 func (c *Client) fetchPage(ctx context.Context, afterID string) (anthropicModelPage, error) {
 	u, err := url.Parse(c.listURL)
 	if err != nil {
-		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeInternal, "anthropic models", "list url")
+		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeInternal, opFetchPage, "list url")
 	}
 	q := u.Query()
 	q.Set("limit", strconv.Itoa(modelsPageLimit))
@@ -154,36 +151,14 @@ func (c *Client) fetchPage(ctx context.Context, afterID string) (anthropicModelP
 		q.Set("after_id", afterID)
 	}
 	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeInternal, "anthropic models", "request")
-	}
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", apiVersion)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.policies.Do(ctx, outbound.Scoped(outbound.DepAnthropic, c.backendID), c.httpClient, req)
-	if err != nil {
-		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "anthropic models", "fetch")
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
-	if err != nil {
-		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeUnavailable, "anthropic models", "read")
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return anthropicModelPage{}, derrors.Wrap(nil, derrors.CodeUnauthorized, "anthropic.fetchPage", "API key rejected").
-				With("status", strconv.Itoa(resp.StatusCode))
-		}
-		if outbound.HTTPStatusPermanent(resp.StatusCode) {
-			return anthropicModelPage{}, outbound.Abort(derrors.New(catalog.StatusCode(resp.StatusCode), "anthropic models", fmt.Sprintf("status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200))))
-		}
-		return anthropicModelPage{}, derrors.New(catalog.StatusCode(resp.StatusCode), "anthropic models", fmt.Sprintf("status %d: %s", resp.StatusCode, catalog.Truncate(string(raw), 200)))
-	}
+	hdr := http.Header{}
+	hdr.Set("x-api-key", c.apiKey)
+	hdr.Set("anthropic-version", apiVersion)
+	hdr.Set("Accept", "application/json")
+	h := catalog.HTTP{Client: c.httpClient, Policies: c.policies, Dep: outbound.Scoped(outbound.DepAnthropic, c.backendID)}
 	var page anthropicModelPage
-	if err := json.Unmarshal(raw, &page); err != nil {
-		return anthropicModelPage{}, derrors.Wrap(err, derrors.CodeUnavailable, "anthropic models", "decode")
+	if err := catalog.GetJSON(ctx, h, opFetchPage, u.String(), hdr, modelsMaxBody, &page); err != nil {
+		return anthropicModelPage{}, err
 	}
 	return page, nil
 }

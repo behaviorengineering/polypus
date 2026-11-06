@@ -13,10 +13,17 @@ import (
 // ClaudeBatches is the Anthropic Message Batches surface the Claude submitter needs;
 // router.ClaudeBatches implements it.
 type ClaudeBatches interface {
-	Create(ctx context.Context, backendID, model string, lines []batch.InputLine, timeout time.Duration) (string, error)
-	Status(ctx context.Context, backendID, batchID string, timeout time.Duration) (router.BatchPoll, error)
-	Results(ctx context.Context, backendID, batchID, publicModel string, timeout time.Duration) ([]batch.LineResult, error)
-	Cancel(ctx context.Context, backendID, batchID string, timeout time.Duration) error
+	Create(ctx context.Context, t router.BatchTarget, model string, lines []batch.InputLine) (string, error)
+	Status(ctx context.Context, t router.BatchTarget, batchID string) (router.BatchPoll, error)
+	Results(ctx context.Context, t router.BatchTarget, batchID, publicModel string) ([]batch.LineResult, error)
+	Cancel(ctx context.Context, t router.BatchTarget, batchID string) error
+}
+
+const opClaude = "batch.claude"
+
+// target is this submitter's backend with whatever time ctx has left.
+func (s claudeSubmitter) target(ctx context.Context) router.BatchTarget {
+	return router.BatchTarget{BackendID: s.backend.ID, Timeout: remaining(ctx)}
 }
 
 type claudeSubmitter struct {
@@ -35,38 +42,41 @@ func NewClaudeSubmitter(batches ClaudeBatches, backend config.BackendDef) Submit
 
 func (s claudeSubmitter) Validate(job Job) error {
 	if job.Endpoint != batch.EndpointChatCompletions {
-		return derrors.New(derrors.CodeInvalid, "batch.claude", "claude batches support /v1/chat/completions only").
+		return derrors.New(derrors.CodeInvalid, opClaude, "claude batches support /v1/chat/completions only").
 			With("endpoint", job.Endpoint)
 	}
 	return nil
 }
 
 func (s claudeSubmitter) Submit(ctx context.Context, job Job, meta *batch.Meta) error {
-	id, err := s.batches.Create(ctx, s.backend.ID, job.Downstream, job.Lines, remaining(ctx))
+	id, err := s.batches.Create(ctx, s.target(ctx), job.Downstream, job.Lines)
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opClaude, "submit").With("batch_id", meta.ID)
 	}
 	meta.UpstreamBatchID = id
 	return nil
 }
 
 func (s claudeSubmitter) Poll(ctx context.Context, meta batch.Meta) (Poll, error) {
-	st, err := s.batches.Status(ctx, s.backend.ID, meta.UpstreamBatchID, remaining(ctx))
+	st, err := s.batches.Status(ctx, s.target(ctx), meta.UpstreamBatchID)
 	if err != nil {
-		return Poll{}, err
+		return Poll{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opClaude, "status").With("batch_id", meta.ID)
 	}
 	if !st.Ended {
 		return Poll{State: PollRunning}, nil
 	}
-	lines, err := s.batches.Results(ctx, s.backend.ID, meta.UpstreamBatchID, meta.PublicModel, remaining(ctx))
+	lines, err := s.batches.Results(ctx, s.target(ctx), meta.UpstreamBatchID, meta.PublicModel)
 	if err != nil {
-		return Poll{}, err
+		return Poll{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opClaude, "results").With("batch_id", meta.ID)
 	}
 	return Poll{State: PollDone, Lines: lines}, nil
 }
 
 func (s claudeSubmitter) Cancel(ctx context.Context, meta batch.Meta) error {
-	return s.batches.Cancel(ctx, s.backend.ID, meta.UpstreamBatchID, remaining(ctx))
+	if err := s.batches.Cancel(ctx, s.target(ctx), meta.UpstreamBatchID); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opClaude, "cancel").With("batch_id", meta.ID)
+	}
+	return nil
 }
 
 // remaining is the time left before ctx's deadline (the router passes it to Bifrost),

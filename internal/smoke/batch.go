@@ -118,17 +118,9 @@ func uploadBatchJSONL(ctx context.Context, baseURL, content string) (string, err
 		return "", err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	resp, err := httpDefaultDo(req)
+	raw, err := call(req, "files upload", probeBodyMax)
 	if err != nil {
 		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := ioReadAllLimit(resp.Body, 1<<20)
-	if err != nil {
-		return "", fmt.Errorf("files upload: read body: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", &statusError{what: "files upload", status: resp.StatusCode, body: string(raw)}
 	}
 	var parsed struct {
 		ID string `json:"id"`
@@ -155,17 +147,9 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	resp, err := httpDefaultDo(req)
+	raw, err := call(req, "batches create", probeBodyMax)
 	if err != nil {
 		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := ioReadAllLimit(resp.Body, 1<<20)
-	if err != nil {
-		return "", fmt.Errorf("batches create: read body: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", &statusError{what: "batches create", status: resp.StatusCode, body: string(raw)}
 	}
 	var parsed struct {
 		ID     string       `json:"id"`
@@ -228,17 +212,9 @@ func getBatch(ctx context.Context, baseURL, batchID string) (batchMetaSmoke, err
 	if err != nil {
 		return zero, err
 	}
-	resp, err := httpDefaultDo(req)
+	raw, err := call(req, "batches get", probeBodyMax)
 	if err != nil {
 		return zero, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := ioReadAllLimit(resp.Body, 1<<20)
-	if err != nil {
-		return zero, fmt.Errorf("batches get: read body: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return zero, &statusError{what: "batches get", status: resp.StatusCode, body: string(raw)}
 	}
 	var meta batchMetaSmoke
 	if err := json.Unmarshal(raw, &meta); err != nil {
@@ -252,17 +228,5 @@ func downloadFileContent(ctx context.Context, baseURL, fileID string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	resp, err := httpDefaultDo(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := ioReadAllLimit(resp.Body, 1<<20)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &statusError{what: "files content", status: resp.StatusCode, body: string(raw)}
-	}
-	return raw, nil
+	return call(req, "files content", probeBodyMax)
 }

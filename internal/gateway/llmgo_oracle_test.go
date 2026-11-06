@@ -403,7 +403,7 @@ func TestLLMGoOraclePerIndexSanitizerForwardsLLMGoLeaveLoud(t *testing.T) {
 	}, "")
 	san := newOpenAIStreamSanitizer()
 	sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":0,"finish_reason":"stop","delta":{}}]}`), san, false)
-	out, _, emit := sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":1,"delta":{"content":"ok"}}]}`), san, false)
+	out, _, emit := splitSanitized(sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":1,"delta":{"content":"ok"}}]}`), san, false))
 	if !emit || !strings.Contains(string(out), `"content":"ok"`) {
 		t.Fatalf("sanitizer should forward index 1 after index 0 stop")
 	}
@@ -462,7 +462,7 @@ func TestProxyStreamDropWritesFailureDump(t *testing.T) {
 
 	upstream := gemmaStreamWithTrailingChoice("late")
 	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(withStreamChunkCounter(context.Background(), testShared.log, dir), &buf, strings.NewReader(upstream), false)
+	_, err := copyOpenAIChatStream(withStreamChunkCounter(context.Background(), chunkDumpSink{dir: dir, log: testShared.log, now: time.Now}), &buf, strings.NewReader(upstream), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +501,7 @@ func TestLLMGoOracleDualReasoningAliasFromBifrostMarshal(t *testing.T) {
 	close(errCh)
 	rec := httptest.NewRecorder()
 	ctx := observability.WithInterventionState(context.Background())
-	if err := writeBifrostChatSSE(ctx, rec, chunks, errCh); err != nil {
+	if err := writeBifrostChatSSE(ctx, rec, bifrostStream{chunks: chunks, errs: errCh}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if got := rec.Header().Get(config.InterventionHeader); got != "reasoning_alias" {
@@ -525,7 +525,7 @@ func TestLLMGoOracleDualReasoningAliasFromBifrostMarshal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal completion: %v", err)
 	}
-	fixed, changed := mergeReasoningIntoContent(completionJSON)
+	fixed, changed := mergeReasoningIntoContentJSON(completionJSON)
 	if changed {
 		t.Fatalf("content was already set; merge must not rewrite: %s", fixed)
 	}
@@ -595,7 +595,7 @@ func TestLLMGoOracleGemmaThinkingMergeFillsContent(t *testing.T) {
 		if choiceHasBothReasoningSpellings(raw) {
 			t.Fatalf("Gemma fixture must not emit both spellings: %s", raw)
 		}
-		fixed, changed := mergeReasoningIntoContent(raw)
+		fixed, changed := mergeReasoningIntoContentJSON(raw)
 		if !changed {
 			t.Fatalf("empty content must merge from reasoning_content: %s", raw)
 		}
@@ -618,7 +618,7 @@ func TestLLMGoOracleGemmaThinkingMergeFillsContent(t *testing.T) {
 		if !choiceHasBothReasoningSpellings(raw) {
 			t.Fatalf("Bifrost marshal must emit both spellings: %s", raw)
 		}
-		fixed, changed := mergeReasoningIntoContent(raw)
+		fixed, changed := mergeReasoningIntoContentJSON(raw)
 		if !changed {
 			t.Fatalf("empty content must still merge: %s", raw)
 		}

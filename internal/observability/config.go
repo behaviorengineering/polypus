@@ -31,6 +31,9 @@ type Config struct {
 	DumpMaxAgeH  int
 	// SkipPaths are HTTP paths that must not create SERVER spans (probes).
 	SkipPaths []string
+	// StreamChunkDebug adds redacted chunk previews to stream chunk events
+	// (POLYPUS_STREAM_CHUNK_DEBUG). Init applies it once for the process.
+	StreamChunkDebug bool
 	// Logger receives the dump writer's diagnostics. Init requires it; the process
 	// entrypoint sets it.
 	Logger *slog.Logger
@@ -40,7 +43,8 @@ type Config struct {
 // POLYPUS_OTEL_ENABLED (on/off), POLYPUS_SERVICE_NAME, POLYPUS_OTLP_ENDPOINT (then
 // OTEL_EXPORTER_OTLP_ENDPOINT, then the local Phoenix unless POLYPUS_PHOENIX is off),
 // POLYPUS_FAILURE_DUMP_DIR, POLYPUS_FAILURE_DUMP_MAX_FILES,
-// POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS and POLYPUS_OTEL_SKIP_PATHS. Tracing is on by
+// POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS, POLYPUS_OTEL_SKIP_PATHS and
+// POLYPUS_STREAM_CHUNK_DEBUG. Tracing is on by
 // default so gateway spans join client traces in Phoenix. A value that does not
 // parse is an error naming the variable, not a silent default.
 func LoadConfig() (Config, error) {
@@ -57,12 +61,14 @@ func LoadConfig() (Config, error) {
 	}
 	cfg := Config{
 		Enabled:      boolEnv("POLYPUS_OTEL", true),
-		ServiceName:  envOr("POLYPUS_SERVICE_NAME", defaultServiceName),
+		ServiceName:  config.EnvOr("POLYPUS_SERVICE_NAME", defaultServiceName),
 		OTLPEndpoint: strings.TrimSpace(os.Getenv("POLYPUS_OTLP_ENDPOINT")),
-		DumpDir:      envOr("POLYPUS_FAILURE_DUMP_DIR", defaultDumpDir),
+		DumpDir:      config.EnvOr("POLYPUS_FAILURE_DUMP_DIR", defaultDumpDir),
 		DumpMaxFiles: intEnv("POLYPUS_FAILURE_DUMP_MAX_FILES", 20),
 		DumpMaxAgeH:  intEnv("POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS", 48),
 		SkipPaths:    parseSkipPaths(os.Getenv("POLYPUS_OTEL_SKIP_PATHS")),
+
+		StreamChunkDebug: boolEnv("POLYPUS_STREAM_CHUNK_DEBUG", false),
 	}
 	// POLYPUS_OTLP_ENDPOINT, then the standard OTEL_EXPORTER_OTLP_ENDPOINT, then the
 	// local Phoenix default.
@@ -95,13 +101,6 @@ func (c Config) ActiveDumpDir() string {
 		return ""
 	}
 	return c.DumpDir
-}
-
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
 }
 
 func parseSkipPaths(raw string) []string {

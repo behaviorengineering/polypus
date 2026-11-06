@@ -1,3 +1,5 @@
+// Package gatewayconfig reads what a deploy needs from an environment's gateway
+// YAML: the secrets its backends name, its routers, and the smoke probes to run.
 package gatewayconfig
 
 import (
@@ -67,20 +69,28 @@ func SecretEnvNames(path string, defaultNames []string) ([]string, error) {
 	}
 	// Backends in id order, so the names (and the plan that prints them) are stable.
 	for _, id := range slices.Sorted(maps.Keys(cfg.Backends)) {
-		b := cfg.Backends[id]
-		if env := strings.TrimSpace(b.Auth.BearerEnv); env != "" {
+		for _, env := range backendSecretNames(cfg.Backends[id]) {
 			appendSecret(&out, seen, env)
-		}
-		// A ${VAR} in base_url (Cloudflare's ${CF_ACCOUNT_ID}) is needed as well.
-		for _, m := range placeholderPattern.FindAllStringSubmatch(b.BaseURL, -1) {
-			appendSecret(&out, seen, m[1])
-		}
-		ext := strings.TrimSpace(b.Extension)
-		if strings.EqualFold(ext, "gemini") {
-			appendSecret(&out, seen, "GEMINI_API_KEY")
 		}
 	}
 	return out, nil
+}
+
+// backendSecretNames are the env names backend b needs: its bearer_env, each ${VAR}
+// in its base_url (Cloudflare's ${CF_ACCOUNT_ID}), and GEMINI_API_KEY for the Gemini
+// extension. Deploy export and smoke gating both use it, so they never disagree.
+func backendSecretNames(b backendYAML) []string {
+	var out []string
+	if env := strings.TrimSpace(b.Auth.BearerEnv); env != "" {
+		out = append(out, env)
+	}
+	for _, m := range placeholderPattern.FindAllStringSubmatch(b.BaseURL, -1) {
+		out = append(out, m[1])
+	}
+	if strings.EqualFold(strings.TrimSpace(b.Extension), "gemini") {
+		out = append(out, "GEMINI_API_KEY")
+	}
+	return out
 }
 
 func appendSecret(out *[]string, seen map[string]struct{}, env string) {

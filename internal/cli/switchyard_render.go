@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-	"os"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -26,7 +24,7 @@ func newSwitchyardRenderCmd() *cobra.Command {
 		GroupID: groupMutate,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return exitStatus(runSwitchyardRender(o))
+			return exitStatus(runSwitchyardRender(ioFor(cmd), o))
 		},
 	}
 	f := cmd.Flags()
@@ -38,16 +36,16 @@ func newSwitchyardRenderCmd() *cobra.Command {
 	return cmd
 }
 
-func runSwitchyardRender(o switchyardRenderOpts) int {
+func runSwitchyardRender(cio cmdIO, o switchyardRenderOpts) int {
 	opts, err := config.LoadServeOptions()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "polypus switchyard-render: %v\n", err)
+		cio.errorf("polypus switchyard-render: %v\n", err)
 		return 2
 	}
 	opts.ConfigPath = o.configPath
 	rcfg, err := config.LoadRouterConfig(opts)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "polypus switchyard-render: %v\n", err)
+		cio.errorf("polypus switchyard-render: %v\n", err)
 		return 1
 	}
 	if v := strings.TrimSpace(o.outPath); v != "" {
@@ -60,24 +58,27 @@ func runSwitchyardRender(o switchyardRenderOpts) int {
 	if o.dryRun {
 		raw, err := switchyard.Render(rcfg, renderURL)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "polypus switchyard-render: %v\n", err)
+			cio.errorf("polypus switchyard-render: %v\n", err)
 			return 1
 		}
-		if _, err := os.Stdout.Write(raw); err != nil {
-			fmt.Fprintf(os.Stderr, "polypus switchyard-render: write stdout: %v\n", err)
+		if _, err := cio.out.Write(raw); err != nil {
+			cio.errorf("polypus switchyard-render: write stdout: %v\n", err)
 			return 1
 		}
 		return 0
 	}
 	path, err := switchyard.WriteConfig(rcfg, renderURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "polypus switchyard-render: %v\n", err)
+		cio.errorf("polypus switchyard-render: %v\n", err)
 		return 1
 	}
 	if o.printPath {
-		fmt.Println(path)
+		if err := cio.printf("%s\n", path); err != nil {
+			cio.errorf("polypus switchyard-render: write stdout: %v\n", err)
+			return 1
+		}
 	} else {
-		fmt.Fprintf(os.Stderr, "polypus switchyard-render: wrote %s\n", path)
+		cio.errorf("polypus switchyard-render: wrote %s\n", path)
 	}
 	return 0
 }

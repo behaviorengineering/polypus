@@ -18,19 +18,7 @@ func Verify(path string, svc Services) error {
 // VerifyPins checks pins (images.env content; path names it in errors) for the
 // pins svc needs, and rejects :latest on any pin.
 func VerifyPins(pins, path string, svc Services) error {
-	lines := strings.Split(pins, "\n")
-	found := make(map[string]string)
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, val, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		found[strings.TrimSpace(key)] = strings.TrimSpace(val)
-	}
+	found := parseEnv(pins)
 	for _, key := range svc.pinKeys() {
 		if _, ok := found[key]; !ok {
 			return fmt.Errorf("images: missing %s in %s", key, path)

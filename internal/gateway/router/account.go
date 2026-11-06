@@ -2,10 +2,10 @@ package router
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
@@ -13,17 +13,17 @@ import (
 // Must stay equal to upstream.NameSwitchyard (see gateway TestSwitchyardNameAligned).
 const ProviderSwitchyard = "switchyard"
 
-// Account implements schemas.Account for Polypus OpenAI-compatible backends,
+// account implements schemas.Account for Polypus OpenAI-compatible backends,
 // including Cloudflare chat/embed (Workers AI OpenAI-compat URL) and a synthetic
 // Switchyard provider. CF TTS/STT are AllowedRequests on Bifrost; a PreLLMHook
 // plugin short-circuits them onto extension /ai/run (no /ai/v1/audio/*).
-type Account struct {
+type account struct {
 	backends map[schemas.ModelProvider]config.BackendDef
 	timeouts config.Timeouts
 }
 
 // newAccount returns a Bifrost account for leaf backends plus optional Switchyard.
-func newAccount(cfg config.RouterConfig) *Account {
+func newAccount(cfg config.RouterConfig) *account {
 	backends := make(map[schemas.ModelProvider]config.BackendDef, len(cfg.Backends)+1)
 	for id, b := range cfg.Backends {
 		backends[schemas.ModelProvider(id)] = b
@@ -35,7 +35,7 @@ func newAccount(cfg config.RouterConfig) *Account {
 			Capabilities: []config.Capability{config.CapChat},
 		}
 	}
-	return &Account{backends: backends, timeouts: cfg.Timeouts}
+	return &account{backends: backends, timeouts: cfg.Timeouts}
 }
 
 func shouldRegisterSwitchyard(cfg config.RouterConfig) bool {
@@ -46,7 +46,7 @@ func shouldRegisterSwitchyard(cfg config.RouterConfig) bool {
 }
 
 // GetConfiguredProviders implements schemas.Account: one provider per registered backend.
-func (a *Account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
+func (a *account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
 	out := make([]schemas.ModelProvider, 0, len(a.backends))
 	for id := range a.backends {
 		out = append(out, id)
@@ -55,16 +55,19 @@ func (a *Account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
 }
 
 // GetKeysForProvider implements schemas.Account: the backend's resolved credential.
-func (a *Account) GetKeysForProvider(_ context.Context, provider schemas.ModelProvider) ([]schemas.Key, error) {
+func (a *account) GetKeysForProvider(_ context.Context, provider schemas.ModelProvider) ([]schemas.Key, error) {
 	b, ok := a.backends[provider]
 	if !ok {
-		return nil, fmt.Errorf("provider %s not supported", provider)
+		return nil, unsupportedProvider("router.account.GetKeysForProvider", provider)
 	}
 	secret := "local"
 	if b.Remote {
 		token, err := b.Auth.ResolveBearerToken()
 		if err != nil {
-			return nil, err
+			// A missing credential describes the config, not the backend's health,
+			// so it must not read as a provider failure that trips the breaker.
+			return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnauthorized), "router.account.GetKeysForProvider", "resolve credential").
+				With(fieldBackend, string(provider))
 		}
 		secret = token
 	}
@@ -76,10 +79,10 @@ func (a *Account) GetKeysForProvider(_ context.Context, provider schemas.ModelPr
 }
 
 // GetConfigForProvider implements schemas.Account: the backend's base URL, headers and limits.
-func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas.ProviderConfig, error) {
+func (a *account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas.ProviderConfig, error) {
 	b, ok := a.backends[provider]
 	if !ok {
-		return nil, fmt.Errorf("provider %s not supported", provider)
+		return nil, unsupportedProvider("router.account.GetConfigForProvider", provider)
 	}
 	if provider == schemas.OpenRouter {
 		return openRouterProviderConfig(b, a.timeouts), nil
@@ -88,11 +91,8 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 	baseType := schemas.OpenAI
 	if b.IsGeminiExtension() {
 		baseType = schemas.Gemini
-		if strings.TrimSpace(b.BaseURL) == "" {
-			baseURL = ""
-		} else {
-			baseURL = strings.TrimRight(strings.TrimSpace(b.BaseURL), "/")
-		}
+		// Empty keeps Bifrost's default Gemini host.
+		baseURL = strings.TrimRight(strings.TrimSpace(b.BaseURL), "/")
 	}
 	if b.IsAnthropicExtension() {
 		baseType = schemas.Anthropic
@@ -107,6 +107,12 @@ func (a *Account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 			AllowedRequests:  allowedRequestsForBackend(b),
 		},
 	}, nil
+}
+
+// unsupportedProvider is the error for a provider no backend registers.
+func unsupportedProvider(op string, provider schemas.ModelProvider) error {
+	return derrors.New(derrors.CodeNotFound, op, "provider not supported").
+		With(fieldProvider, string(provider))
 }
 
 // anthropicBaseURL returns the origin Bifrost's Anthropic provider expects (it appends
@@ -150,41 +156,23 @@ func secretExtraHeaders(h map[string]string) map[string]schemas.SecretVar {
 }
 
 func allowedRequestsForBackend(b config.BackendDef) *schemas.AllowedRequests {
-	allowed := &schemas.AllowedRequests{}
+	chat := b.HasCapability(config.CapChat) || b.HasCapability(config.CapVision)
+	tts, stt := b.HasCapability(config.CapTTS), b.HasCapability(config.CapSTT)
+	allowed := &schemas.AllowedRequests{
+		ChatCompletion:       chat,
+		ChatCompletionStream: chat,
+		Embedding:            b.HasCapability(config.CapEmbed),
+		Speech:               tts,
+		Transcription:        stt,
+	}
 	if b.IsCloudflareExtension() {
 		// Chat/embed use Workers AI OpenAI-compat. Speech/transcription are enabled so
 		// Bifrost accepts the dial; cfRunSpeechPlugin short-circuits onto /ai/run.
 		// Stream speech is left off (unsupported on the CF path).
-		if b.HasCapability(config.CapChat) || b.HasCapability(config.CapVision) {
-			allowed.ChatCompletion = true
-			allowed.ChatCompletionStream = true
-		}
-		if b.HasCapability(config.CapEmbed) {
-			allowed.Embedding = true
-		}
-		if b.HasCapability(config.CapTTS) {
-			allowed.Speech = true
-		}
-		if b.HasCapability(config.CapSTT) {
-			allowed.Transcription = true
-		}
 		return allowed
 	}
-	if b.HasCapability(config.CapTTS) {
-		allowed.Speech = true
-		allowed.SpeechStream = true
-	}
-	if b.HasCapability(config.CapSTT) {
-		allowed.Transcription = true
-		allowed.TranscriptionStream = true
-	}
-	if b.HasCapability(config.CapChat) || b.HasCapability(config.CapVision) {
-		allowed.ChatCompletion = true
-		allowed.ChatCompletionStream = true
-	}
-	if b.HasCapability(config.CapEmbed) {
-		allowed.Embedding = true
-	}
+	allowed.SpeechStream = tts
+	allowed.TranscriptionStream = stt
 	if b.IsAnthropicExtension() && b.HasCapability(config.CapBatch) {
 		allowed.BatchCreate = true
 		allowed.BatchRetrieve = true

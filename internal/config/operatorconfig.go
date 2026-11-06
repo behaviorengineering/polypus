@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 	"gopkg.in/yaml.v3"
@@ -45,42 +48,53 @@ func resolvePolypusSecrets(secrets []operatorconfig.Secret, kr operatorconfig.Ke
 
 // InitPolypusUserConfig writes ~/.config/polypus/config.yaml from the shipped example.
 func InitPolypusUserConfig(example []byte, force bool) (bool, error) {
-	return operatorconfig.InitUserConfig(operatorConfigOptions(), example, force)
+	written, err := operatorconfig.InitUserConfig(operatorConfigOptions(), example, force)
+	if err != nil {
+		return false, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "config.InitPolypusUserConfig", "write user config")
+	}
+	return written, nil
 }
 
 // SetPolypusSecret stores a named env secret in the polypus keyring service.
 // The name MUST appear under secrets: in the live router config (same discovery as serve).
 // When kr is nil, DefaultKeyring() (OS store) is used.
 func SetPolypusSecret(envName, value string, kr operatorconfig.Keyring) error {
+	const op = "config.SetPolypusSecret"
 	envName = strings.TrimSpace(envName)
 	if envName == "" {
-		return fmt.Errorf("secret env name required")
+		return derrors.New(derrors.CodeInvalid, op, "secret env name required")
 	}
 	if err := RequireDeclaredSecret(envName); err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), op, "set secret").With("env", envName)
 	}
 	if kr == nil {
 		kr = operatorconfig.DefaultKeyring()
 	}
-	return kr.Set(appName, envName, operatorconfig.SanitizeSecret(value))
+	if err := kr.Set(appName, envName, operatorconfig.SanitizeSecret(value)); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "keyring set").With("env", envName)
+	}
+	return nil
 }
 
 // RequireDeclaredSecret reports whether envName is listed under secrets: in the live config.
 func RequireDeclaredSecret(envName string) error {
+	const op = "config.RequireDeclaredSecret"
 	names, err := declaredSecretEnvs()
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), op, "read declared secrets")
 	}
 	want := strings.TrimSpace(envName)
-	for _, n := range names {
-		if n == want {
-			return nil
-		}
+	if slices.Contains(names, want) {
+		return nil
 	}
 	if len(names) == 0 {
-		return fmt.Errorf("secret %q is not declared: add it under secrets: in the live config (polypus init, then uncomment secrets:)", want)
+		return derrors.New(derrors.CodeInvalid, op,
+			fmt.Sprintf("secret %q is not declared: add it under secrets: in the live config (polypus init, then uncomment secrets:)", want)).
+			With("env", want)
 	}
-	return fmt.Errorf("secret %q is not declared under secrets: (declared: %s)", want, strings.Join(names, ", "))
+	return derrors.New(derrors.CodeInvalid, op,
+		fmt.Sprintf("secret %q is not declared under secrets: (declared: %s)", want, strings.Join(names, ", "))).
+		With("env", want)
 }
 
 func declaredSecretEnvs() ([]string, error) {
@@ -100,7 +114,7 @@ func declaredSecretEnvs() ([]string, error) {
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	if err := dec.Decode(&file); err != nil {
-		return nil, fmt.Errorf("router config %s: %w", path, err)
+		return nil, routerDecodeError(path, err)
 	}
 	out := make([]string, 0, len(file.Secrets))
 	for _, s := range file.Secrets {

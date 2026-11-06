@@ -56,7 +56,12 @@ type modelsCacheEntry struct {
 	Models []openaiModel `json:"models"`
 }
 
-func newModelsInventoryCache(log *slog.Logger, ttl time.Duration) *modelsInventoryCache {
+// newModelsInventoryCache builds the cache and loads its disk copy. now stamps and
+// expires entries; it is the gateway clock. Panics if log or now is nil.
+func newModelsInventoryCache(log *slog.Logger, ttl time.Duration, now func() time.Time) *modelsInventoryCache {
+	if log == nil || now == nil {
+		panic("gateway: newModelsInventoryCache needs a logger and a clock")
+	}
 	path, err := config.ResolveModelsInventoryCachePath()
 	if err != nil {
 		// The disk cache is optional: run memory-only and say why.
@@ -68,7 +73,7 @@ func newModelsInventoryCache(log *slog.Logger, ttl time.Duration) *modelsInvento
 		byKey: make(map[string]modelsCacheEntry),
 		ttl:   ttl,
 		path:  path,
-		now:   time.Now,
+		now:   now,
 	}
 	c.loadDisk()
 	return c
@@ -133,11 +138,7 @@ func (c *modelsInventoryCache) get(key string) ([]openaiModel, bool) {
 	if !ok || len(e.Models) == 0 {
 		return nil, false
 	}
-	now := time.Now
-	if c.now != nil {
-		now = c.now
-	}
-	if now().Sub(e.At) > c.ttl {
+	if c.now().Sub(e.At) > c.ttl {
 		return nil, false
 	}
 	out := make([]openaiModel, len(e.Models))
@@ -149,12 +150,8 @@ func (c *modelsInventoryCache) put(key string, models []openaiModel) {
 	if c == nil || len(models) == 0 {
 		return
 	}
-	now := time.Now
-	if c.now != nil {
-		now = c.now
-	}
 	c.mu.Lock()
-	c.byKey[key] = modelsCacheEntry{At: now(), Models: append([]openaiModel(nil), models...)}
+	c.byKey[key] = modelsCacheEntry{At: c.now(), Models: append([]openaiModel(nil), models...)}
 	c.dirty = true
 	c.mu.Unlock()
 }
@@ -173,8 +170,8 @@ func (h modelsHandler) serveModelsList(w http.ResponseWriter, r *http.Request) {
 
 func (h modelsHandler) serveModelsListForSurface(surface modelSurface, w http.ResponseWriter, r *http.Request) {
 	cfg := config.RouterConfig{}
-	if h.router != nil {
-		cfg = h.router.Registry().Config()
+	if h.registry != nil {
+		cfg = h.registry.Config()
 	}
 	if surface == surfaceSystemOne && !systemOneAPIEnabled(cfg) {
 		h.writeAPINotConfigured(w)
@@ -200,18 +197,18 @@ func (s *shared) writeAPINotConfigured(w http.ResponseWriter) {
 	s.writeJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
 		Message: "SystemOne API is not configured on this gateway",
 		Type:    errTypeInvalidRequest,
-		Code:    "api_not_configured",
+		Code:    codeAPINotConfigured,
 	}})
 }
 
 func (h modelsHandler) serveModelRetrieve(w http.ResponseWriter, r *http.Request) {
-	h.serveModelRetrieveForSurface(surfaceOpenAI, "/v1/models/", w, r)
+	h.serveModelRetrieveForSurface(surfaceOpenAI, pathModelsPrefix, w, r)
 }
 
 func (h modelsHandler) serveModelRetrieveForSurface(surface modelSurface, pathPrefix string, w http.ResponseWriter, r *http.Request) {
 	cfg := config.RouterConfig{}
-	if h.router != nil {
-		cfg = h.router.Registry().Config()
+	if h.registry != nil {
+		cfg = h.registry.Config()
 	}
 	if surface == surfaceSystemOne && !systemOneAPIEnabled(cfg) {
 		h.writeAPINotConfigured(w)
@@ -220,12 +217,12 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface modelSurface, pathPr
 	rawID := strings.TrimPrefix(r.URL.Path, pathPrefix)
 	rawID = strings.Trim(rawID, "/")
 	if rawID == "" {
-		http.NotFound(w, r)
+		h.writeNotFound(w)
 		return
 	}
 	id, err := url.PathUnescape(rawID)
 	if err != nil {
-		http.Error(w, "invalid model id", http.StatusBadRequest)
+		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveModelRetrieve", "invalid model id"))
 		return
 	}
 	id = strings.TrimSpace(id)
@@ -242,17 +239,17 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface modelSurface, pathPr
 		Message: fmt.Sprintf("The model `%s` does not exist", id),
 		Type:    errTypeInvalidRequest,
 		Param:   keyModel,
-		Code:    "model_not_found",
+		Code:    codeModelNotFound,
 	}})
 }
 
 // collectModelsForRetrieve loads catalog data for a single model id when not in inventory view.
 func (h modelsHandler) collectModelsForRetrieve(ctx context.Context, inboundAuth string, asInventory bool, targetID string) []openaiModel {
-	if asInventory || h.router == nil {
+	if asInventory || h.registry == nil {
 		return h.collectModels(ctx, inboundAuth, asInventory)
 	}
 	targetID = strings.TrimSpace(targetID)
-	reg := h.router.Registry()
+	reg := h.registry
 	cfg := reg.Config()
 	catalog := routerCatalogModels(cfg)
 	for _, m := range catalog {
@@ -291,12 +288,12 @@ func withModelsBudget(ctx context.Context, cfg config.RouterConfig) (context.Con
 // Authorization header, which only local backends without their own credential get.
 func (h modelsHandler) collectModels(ctx context.Context, inboundAuth string, asInventory bool) []openaiModel {
 	// Callers fall back here when there is no router, so this is the one guard.
-	if h.shared == nil || h.router == nil {
+	if h.shared == nil || h.registry == nil {
 		return nil
 	}
-	ctx, cancel := withModelsBudget(ctx, h.router.Registry().Config())
+	ctx, cancel := withModelsBudget(ctx, h.registry.Config())
 	defer cancel()
-	reg := h.router.Registry()
+	reg := h.registry
 	cfg := reg.Config()
 	ids := cfg.BackendIDs()
 
@@ -335,9 +332,6 @@ func (h modelsHandler) inventoryForBackend(ctx context.Context, inboundAuth stri
 		}
 		return h.liveOrCached(b, h.catalogInventory(ctx, b, list), nil)
 	}
-	if b.IsCloudflareExtension() && !syncOff {
-		return h.liveOrCached(b, h.cloudflareInventory(ctx, b), nil)
-	}
 	if syncOff {
 		return mergeEnabledSyntheticMissing(b, nil)
 	}
@@ -346,7 +340,7 @@ func (h modelsHandler) inventoryForBackend(ctx context.Context, inboundAuth stri
 		live = h.mergeOpenRouterDecisionModels(ctx, inboundAuth, b, live)
 	}
 	// No catalog and no cache: the configured seeds.
-	return h.liveOrCached(b, live, seedModelsForBackend(h.router.Registry().Config(), b.ID))
+	return h.liveOrCached(b, live, seedModelsForBackend(h.registry.Config(), b.ID))
 }
 
 // liveOrCached returns the live list (and caches it), else the last cached list,
@@ -381,35 +375,6 @@ func syntheticModels(backendID string, allow []string) []openaiModel {
 	return out
 }
 
-// cloudflareInventory returns CF models for /v1/models. Client and list errors
-// soft-fail to an empty slice (Warn only) so one backend outage does not fail the catalog.
-func (h modelsHandler) cloudflareInventory(ctx context.Context, b config.BackendDef) []openaiModel {
-	var out []openaiModel
-	if execErr := h.upstreams.Execute(b.ID, func() error {
-		client, err := h.cloudflareClient(b)
-		if err != nil {
-			return err
-		}
-		list, listErr := client.ListModelsStrict(ctx)
-		if listErr != nil {
-			return listErr
-		}
-		out = make([]openaiModel, 0, len(list.Data))
-		for _, m := range list.Data {
-			out = append(out, openaiModel{
-				ID:      prefixModelID(b.ID, m.ID),
-				Object:  keyModel,
-				Created: m.Created,
-				OwnedBy: firstNonEmpty(m.OwnedBy, b.ID),
-			})
-		}
-		return nil
-	}); execErr != nil {
-		h.log.Warn("polypus: models catalog fetch failed", "backend", b.ID, "err", execErr)
-	}
-	return out
-}
-
 func (h modelsHandler) fetchBackendModelsProtected(ctx context.Context, inboundAuth string, b config.BackendDef) []openaiModel {
 	var out []openaiModel
 	if execErr := h.upstreams.Execute(b.ID, func() error {
@@ -427,7 +392,11 @@ func (h modelsHandler) fetchBackendModelsProtected(ctx context.Context, inboundA
 
 func (s *shared) mergeOpenRouterDecisionModels(ctx context.Context, inboundAuth string, b config.BackendDef, live []openaiModel) []openaiModel {
 	decisions, err := s.fetchBackendModelsAtURL(ctx, inboundAuth, b, openRouterModelsListURL(b.BaseURL, "decisions"))
-	if err != nil || len(decisions) == 0 {
+	if err != nil {
+		s.log.Warn("polypus: openrouter decision models fetch failed", "backend", b.ID, "err", err)
+		return live
+	}
+	if len(decisions) == 0 {
 		return live
 	}
 	seen := make(map[string]struct{}, len(live)+len(decisions))
@@ -455,7 +424,7 @@ func (s *shared) fetchBackendModelsAtURL(ctx context.Context, inboundAuth string
 	// Authorization header never leaves for a third-party provider.
 	auth, err := bearerAuthHeader(b)
 	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeNotReady, op, "backend auth").With("backend", b.ID)
+		return nil, err
 	}
 	if auth == "" && !b.Remote {
 		auth = inboundAuth
@@ -507,38 +476,24 @@ func openAIModelsURL(base string) string {
 	return base + "/v1/models"
 }
 
-// isOpenRouterHost reports whether base URL targets OpenRouter's API host.
-func isOpenRouterHost(base string) bool {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		return false
-	}
-	u, err := url.Parse(base)
+// baseURLHostIs reports whether base's host is domain or a subdomain of it.
+func baseURLHostIs(base, domain string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
 	if err != nil {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	if host == "" {
-		return false
-	}
-	return host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai")
+	return host != "" && (host == domain || strings.HasSuffix(host, "."+domain))
+}
+
+// isOpenRouterHost reports whether base URL targets OpenRouter's API host.
+func isOpenRouterHost(base string) bool {
+	return baseURLHostIs(base, "openrouter.ai")
 }
 
 // isDeepInfraHost reports whether base URL targets DeepInfra's API host.
 func isDeepInfraHost(base string) bool {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		return false
-	}
-	u, err := url.Parse(base)
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(u.Hostname())
-	if host == "" {
-		return false
-	}
-	return host == "deepinfra.com" || host == "api.deepinfra.com" || strings.HasSuffix(host, ".deepinfra.com")
+	return baseURLHostIs(base, "deepinfra.com")
 }
 
 // deepInfraModelsListURL is GET /v1/openai/models on the DeepInfra origin.
@@ -663,15 +618,15 @@ func (s *shared) writeModelNotAllowed(w http.ResponseWriter, model string) {
 		Message: fmt.Sprintf("The model `%s` is not enabled on this gateway (models.allow)", model),
 		Type:    errTypeInvalidRequest,
 		Param:   keyModel,
-		Code:    "model_not_allowed",
+		Code:    codeModelNotAllowed,
 	}})
 }
 
 func (s *shared) ensureModelAllowed(backendID, model string) bool {
-	if s == nil || s.router == nil {
+	if s == nil || s.registry == nil {
 		return true
 	}
-	reg := s.router.Registry()
+	reg := s.registry
 	b, ok := reg.Config().Backends[backendID]
 	if !ok {
 		return true
@@ -680,10 +635,10 @@ func (s *shared) ensureModelAllowed(backendID, model string) bool {
 }
 
 func (s *shared) ensureSystemOneAllowed(backendID, publicModel, downstream string) bool {
-	if s == nil || s.router == nil {
+	if s == nil || s.registry == nil {
 		return true
 	}
-	b, ok := s.router.Registry().Config().Backends[backendID]
+	b, ok := s.registry.Config().Backends[backendID]
 	if !ok {
 		return true
 	}

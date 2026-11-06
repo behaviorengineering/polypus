@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
-	"time"
 )
 
 func runChat(ctx context.Context, opts Options) ([]Result, error) {
@@ -20,7 +20,7 @@ func runChat(ctx context.Context, opts Options) ([]Result, error) {
 	var chatErr error
 	content := timed(ChannelChat, "content_nonempty", opts.ChatModel, func() (string, error) {
 		var text string
-		text, _, selected, chatErr = chatPing(ctx, opts, opts.ChatModel)
+		text, selected, chatErr = chatPing(ctx, opts, opts.ChatModel)
 		if chatErr != nil {
 			return "", chatErr
 		}
@@ -77,35 +77,13 @@ func selectedModelAllowed(selected string, allowed []string) bool {
 	return false
 }
 
-func timedSelected(channel, probe, model string, fn func() (string, string, error)) Result {
-	start := time.Now()
-	row := Result{Channel: channel, Probe: probe, Model: model, Status: StatusPass}
-	detail, selected, err := fn()
-	row.Ms = time.Since(start).Milliseconds()
-	if err != nil {
-		row.Status = StatusFail
-		row.Detail = err.Error()
-		return row
-	}
-	row.SelectedModel = selected
-	row.Detail = detail
-	return row
-}
-
 func pingHealth(ctx context.Context, baseURL string) error {
 	req, err := httpNewGet(ctx, baseURL+"/health")
 	if err != nil {
 		return err
 	}
-	resp, err := httpDefaultDo(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &statusError{what: "health", status: resp.StatusCode}
-	}
-	return nil
+	_, err = call(req, "health", probeBodyMax)
+	return err
 }
 
 const (
@@ -135,45 +113,42 @@ func newPingRequest(model string, opts Options) pingRequest {
 	}
 }
 
-func chatPing(ctx context.Context, opts Options, model string) (content, reasoning, selectedModel string, err error) {
+func chatPing(ctx context.Context, opts Options, model string) (content, selectedModel string, err error) {
 	body, err := json.Marshal(newPingRequest(model, opts))
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	req, err := httpNewPost(ctx, opts.BaseURL+"/v1/chat/completions", string(body))
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	resp, err := httpDefaultDo(req)
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := ioReadAllLimit(resp.Body, 1<<20)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, probeBodyMax))
 	if err != nil {
-		return "", "", "", fmt.Errorf("chat: read body: %w", err)
+		return "", "", fmt.Errorf("chat: read body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", "", &statusError{what: "chat", status: resp.StatusCode, body: string(raw)}
+		return "", "", &statusError{what: "chat", status: resp.StatusCode, body: truncate(string(raw), errorBodyMax)}
 	}
 	selectedModel = extractSmokeSelectedModel(resp.Header, raw)
 	var parsed struct {
-		Model   string `json:"model"`
 		Choices []struct {
 			Message struct {
-				Content          string `json:"content"`
-				ReasoningContent string `json:"reasoning_content"`
+				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return "", "", "", err
+		return "", "", fmt.Errorf("chat: decode: %w", err)
 	}
 	if len(parsed.Choices) == 0 {
-		return "", "", "", fmt.Errorf("no choices")
+		return "", "", fmt.Errorf("no choices")
 	}
-	msg := parsed.Choices[0].Message
-	return msg.Content, msg.ReasoningContent, selectedModel, nil
+	return parsed.Choices[0].Message.Content, selectedModel, nil
 }
 
 func extractSmokeSelectedModel(hdr map[string][]string, body []byte) string {

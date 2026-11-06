@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -58,7 +57,7 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 	ctx, cancel := context.WithTimeout(r.Context(), backendProbeTimeout)
 	defer cancel()
 
-	reg := h.router.Registry()
+	reg := h.registry
 	cfg := reg.Config()
 	backends := make([]backendProbeResult, 0, len(cfg.Backends))
 	allOK := true
@@ -108,7 +107,8 @@ func probeRemoteCredentials(ctx context.Context, cfg config.RouterConfig, getCF 
 			continue
 		}
 		if err := probeRemoteBackend(ctx, b, getCF); err != nil {
-			return fmt.Errorf("startup probe backend %s: %w (check polypus secret set / env)", id, err)
+			return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), "gateway.probeRemoteCredentials",
+				"startup probe of backend "+id+" failed (check polypus secret set / env)").With("backend", id)
 		}
 	}
 	return nil

@@ -1,3 +1,5 @@
+// Package buildinfo holds the build identity the binaries print and the gateway
+// reports.
 package buildinfo
 
 import (

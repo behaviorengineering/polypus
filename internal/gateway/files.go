@@ -23,13 +23,13 @@ func (h filesHandler) serveFiles(w http.ResponseWriter, r *http.Request) {
 			h.serveFileUpload(w, r)
 			return
 		}
-		http.NotFound(w, r)
+		h.writeMethodNotAllowed(w, http.MethodPost)
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/v1/files/")
+	path := strings.TrimPrefix(r.URL.Path, pathFilesPrefix)
 	path = strings.Trim(path, "/")
 	if path == "" {
-		http.NotFound(w, r)
+		h.writeNotFound(w)
 		return
 	}
 	if strings.HasSuffix(path, "/content") {
@@ -39,7 +39,7 @@ func (h filesHandler) serveFiles(w http.ResponseWriter, r *http.Request) {
 			h.serveFileContent(w, r, id)
 			return
 		}
-		http.NotFound(w, r)
+		h.writeMethodNotAllowed(w, http.MethodGet)
 		return
 	}
 	switch r.Method {
@@ -48,7 +48,7 @@ func (h filesHandler) serveFiles(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		h.serveFileDelete(w, r, path)
 	default:
-		http.NotFound(w, r)
+		h.writeMethodNotAllowed(w, http.MethodGet, http.MethodDelete)
 	}
 }
 
@@ -112,7 +112,9 @@ func (h filesHandler) serveFileContent(w http.ResponseWriter, r *http.Request, i
 	w.Header().Set("Content-Type", "application/jsonl")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(content) //nolint:gosec // G705: stored JSONL served as application/jsonl with nosniff
+	if _, err := w.Write(content); err != nil { //nolint:gosec // G705: stored JSONL served as application/jsonl with nosniff
+		h.log.Debug("polypus: file content write failed", "file_id", id, "err", err)
+	}
 }
 
 func (h filesHandler) serveFileDelete(w http.ResponseWriter, r *http.Request, id string) {

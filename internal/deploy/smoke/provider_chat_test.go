@@ -2,11 +2,14 @@ package smoke
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/deploy/progress"
 )
 
 func TestRunProviderChatEmptyContentIncludesBody(t *testing.T) {
@@ -25,7 +28,7 @@ func TestRunProviderChatEmptyContentIncludesBody(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err := runProviderChat(ctx, endpoint{url: srv.URL, key: "pk_test"}, "gemini_free/gemma-4-26b-a4b-it", "minimal")
+	err := runProviderChat(ctx, endpoint{url: srv.URL, key: "pk_test", out: progress.New(io.Discard)}, "gemini_free/gemma-4-26b-a4b-it", "minimal")
 	if err == nil {
 		t.Fatal("expected empty content error")
 	}

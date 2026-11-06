@@ -80,7 +80,7 @@ func openaiRateLimitBody(status int, header http.Header, body []byte) ([]byte, b
 func openaiRateLimitError(err error) openaiError {
 	code := derrors.Field(err, ratelimit.FieldCFCode)
 	if code == "" {
-		code = "rate_limited"
+		code = string(derrors.CodeRateLimited)
 	}
 	return openaiError{
 		Message: rateLimitClientMessage(err),

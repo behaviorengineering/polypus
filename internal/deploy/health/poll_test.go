@@ -4,9 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func TestPollOKAfterTransient(t *testing.T) {
@@ -22,22 +25,37 @@ func TestPollOKAfterTransient(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := Poll(ctx, srv.URL, 5*time.Second); err != nil {
+	if err := Poll(ctx, srv.Client(), srv.URL); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestPollTimeout(t *testing.T) {
+func TestPollTimeoutKeepsLastError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "nope", http.StatusServiceUnavailable)
+		http.Error(w, "key required", http.StatusUnauthorized)
 	}))
 	t.Cleanup(srv.Close)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	err := Poll(ctx, srv.URL, 200*time.Millisecond)
-	if err == nil {
-		t.Fatal("expected timeout")
+	err := Poll(ctx, srv.Client(), srv.URL)
+	if derrors.CodeOf(err) != derrors.CodeTimeout {
+		t.Fatalf("err = %v, want a timeout", err)
+	}
+	if !strings.Contains(err.Error(), "status 401") {
+		t.Fatalf("err = %v, want the last failure (401) kept", err)
+	}
+}
+
+func TestPollTransportErrorKept(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL
+	srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := Poll(ctx, &http.Client{}, url)
+	if err == nil || !strings.Contains(err.Error(), "GET /health") {
+		t.Fatalf("err = %v, want the dial failure named", err)
 	}
 }
 
@@ -52,8 +70,14 @@ func TestPollCancelDuringWait(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	err := Poll(ctx, srv.URL, 5*time.Second)
-	if err == nil {
-		t.Fatal("expected cancel")
+	err := Poll(ctx, srv.Client(), srv.URL)
+	if derrors.CodeOf(err) != derrors.CodeCanceled {
+		t.Fatalf("err = %v, want canceled", err)
+	}
+}
+
+func TestPollNeedsDeadline(t *testing.T) {
+	if err := Poll(context.Background(), &http.Client{}, "http://127.0.0.1:1"); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+		t.Fatalf("err = %v, want a missing deadline refused", err)
 	}
 }

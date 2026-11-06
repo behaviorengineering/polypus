@@ -2,8 +2,6 @@ package batch
 
 import (
 	"errors"
-	"io/fs"
-	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
@@ -26,22 +24,21 @@ func statusAllowsFinalize(st Status) bool {
 // TryFinalizeBatch atomically writes output files and terminal metadata when the batch is still open.
 // Returns applied=false when another caller already finalized or the batch is terminal/cancelled.
 func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (Meta, bool, error) {
+	const op = "batch.TryFinalizeBatch"
 	if s == nil {
-		return Meta{}, false, derrors.New(derrors.CodeFailedPrecondition, "batch.TryFinalizeBatch", "not configured")
+		return Meta{}, false, derrors.New(derrors.CodeFailedPrecondition, op, "not configured")
 	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return Meta{}, false, derrors.New(derrors.CodeInvalid, "batch.TryFinalizeBatch", "id required")
+	// The id becomes a file name under the store root, so it goes through checkID.
+	id, err := checkID(op, id)
+	if err != nil {
+		return Meta{}, false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	meta, err := s.readBatchMetaUnlocked(id)
+	meta, err := s.getBatchUnlocked(op, id)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return Meta{}, false, derrors.New(derrors.CodeNotFound, "batch.TryFinalizeBatch", "batch not found")
-		}
-		return Meta{}, false, derrors.Wrap(err, derrors.CodeInternal, "batch.TryFinalizeBatch", "read")
+		return Meta{}, false, err
 	}
 	if !statusAllowsFinalize(meta.Status) {
 		return meta, false, nil
@@ -51,8 +48,8 @@ func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (Meta, bool
 	// nothing unreferenced is left under files/.
 	var written []string
 	fail := func(err error) (Meta, bool, error) {
-		for _, id := range written {
-			err = errors.Join(err, s.removeFileUnlocked(id))
+		for _, fileID := range written {
+			err = errors.Join(err, s.removeFileUnlocked(fileID))
 		}
 		return meta, false, err
 	}
@@ -82,7 +79,7 @@ func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (Meta, bool
 	meta.CompletedAt = patch.CompletedAt
 	meta.FailedAt = patch.FailedAt
 	meta.CancelledAt = patch.CancelledAt
-	if err := s.writeBatchMeta(&meta); err != nil {
+	if err := s.writeBatchMeta(op, &meta); err != nil {
 		return fail(err)
 	}
 	return meta, true, nil

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,9 +23,10 @@ type secretSetOpts struct {
 
 func newSecretCmd() *cobra.Command {
 	secret := &cobra.Command{
-		Use:   "secret",
-		Short: "Store secrets in the OS keyring",
-		Args:  cobra.NoArgs,
+		Use:     "secret",
+		Short:   "Store secrets in the OS keyring",
+		GroupID: groupSetup,
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := cmd.Help(); err != nil {
 				return err
@@ -42,7 +44,7 @@ func newSecretCmd() *cobra.Command {
   printf %s "$TOKEN" | polypus secret set --stdin CF_AI_API_KEY
   printf %s "$TOKEN" | polypus secret set CF_AI_API_KEY --stdin`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitStatus(runSecretSet(args, o))
+			return exitStatus(runSecretSet(ioFor(cmd), args, o))
 		},
 	}
 	setCmd.Flags().BoolVar(&o.fromStdin, "stdin", false, "read the secret from stdin")
@@ -52,14 +54,14 @@ func newSecretCmd() *cobra.Command {
 	return secret
 }
 
-func runSecretSet(args []string, o secretSetOpts) int {
+func runSecretSet(cio cmdIO, args []string, o secretSetOpts) int {
 	envName := strings.TrimSpace(args[0])
 	if o.dryRun {
 		if err := config.RequireDeclaredSecret(envName); err != nil {
-			fmt.Fprintf(os.Stderr, "polypus secret set: %v\n", err)
+			cio.errorf("polypus secret set: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "polypus secret set: dry-run: would store %s in keyring (service polypus)\n", envName)
+		cio.errorf("polypus secret set: dry-run: would store %s in keyring (service polypus)\n", envName)
 		return 0
 	}
 
@@ -67,30 +69,30 @@ func runSecretSet(args []string, o secretSetOpts) int {
 	switch {
 	case len(args) >= 2:
 		if o.password != "" || o.fromStdin {
-			fmt.Fprintln(os.Stderr, "polypus secret set: provide only one of: command-line value, --password, or --stdin")
+			cio.errorf("%s\n", "polypus secret set: provide only one of: command-line value, --password, or --stdin")
 			return 2
 		}
 		joined := strings.Join(args[1:], " ")
 		if looksLikeCLIFlag(joined) {
-			fmt.Fprintf(os.Stderr, "polypus secret set: refusing to store %q as a secret (looks like a flag); use --stdin or a hidden prompt\n", joined)
+			cio.errorf("polypus secret set: refusing to store %q as a secret (looks like a flag); use --stdin or a hidden prompt\n", joined)
 			return 2
 		}
-		warnSecretOnCLI()
+		warnSecretOnCLI(cio.errOut)
 		value = joined
 	case o.password != "":
-		warnSecretOnCLI()
+		warnSecretOnCLI(cio.errOut)
 		value = o.password
 	case o.fromStdin:
 		line, err := readLineStdin(os.Stdin)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "polypus secret set: %v\n", err)
+			cio.errorf("polypus secret set: %v\n", err)
 			return 1
 		}
 		value = line
 	default:
-		line, err := readSecretPrompt("polypus secret set", envName, os.Stdin)
+		line, err := readSecretPrompt(cio.errOut, "polypus secret set", envName, os.Stdin)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "polypus secret set: %v\n", err)
+			cio.errorf("polypus secret set: %v\n", err)
 			return 1
 		}
 		value = line
@@ -98,14 +100,14 @@ func runSecretSet(args []string, o secretSetOpts) int {
 
 	value = strings.TrimSpace(value)
 	if value == "" {
-		fmt.Fprintln(os.Stderr, "polypus secret set: empty secret value")
+		cio.errorf("%s\n", "polypus secret set: empty secret value")
 		return 1
 	}
 	if err := config.SetPolypusSecret(envName, value, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "polypus secret set: %v\n", err)
+		cio.errorf("polypus secret set: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(os.Stderr, "polypus secret set: stored %s in keyring (service polypus)\n", envName)
+	cio.errorf("polypus secret set: stored %s in keyring (service polypus)\n", envName)
 	return 0
 }
 
@@ -113,21 +115,22 @@ func looksLikeCLIFlag(s string) bool {
 	return strings.HasPrefix(s, "-")
 }
 
-func warnSecretOnCLI() {
-	fmt.Fprintln(os.Stderr, secretCLIInsecureWarning)
+func warnSecretOnCLI(w io.Writer) {
+	errorf(w, "%s\n", secretCLIInsecureWarning)
 }
 
-// readSecretPrompt reads a secret from a hidden prompt; cmd names the command in it.
-func readSecretPrompt(cmd, envName string, r io.Reader) (string, error) {
+// readSecretPrompt reads a secret from a hidden prompt written to errOut; cmd names
+// the command in it.
+func readSecretPrompt(errOut io.Writer, cmd, envName string, r io.Reader) (string, error) {
 	f, ok := r.(interface {
 		Fd() uintptr
 	})
 	if !ok || !term.IsTerminal(int(f.Fd())) {
 		return "", fmt.Errorf("cannot prompt when stdin is not a TTY; use --stdin")
 	}
-	fmt.Fprintf(os.Stderr, "%s: enter value for %s (input hidden): ", cmd, envName)
+	errorf(errOut, "%s: enter value for %s (input hidden): ", cmd, envName)
 	b, err := term.ReadPassword(int(f.Fd()))
-	fmt.Fprintln(os.Stderr)
+	errorf(errOut, "\n")
 	if err != nil {
 		return "", err
 	}
@@ -137,7 +140,7 @@ func readSecretPrompt(cmd, envName string, r io.Reader) (string, error) {
 func readLineStdin(r io.Reader) (string, error) {
 	br := bufio.NewReader(r)
 	line, err := br.ReadString('\n')
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
 	return strings.TrimSpace(line), nil

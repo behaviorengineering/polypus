@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -29,24 +28,24 @@ type claudeBatchRouter struct {
 	results      []batch.LineResult
 }
 
-func (r *claudeBatchRouter) Create(_ context.Context, _, model string, lines []batch.InputLine, _ time.Duration) (string, error) {
+func (r *claudeBatchRouter) Create(_ context.Context, _ router.BatchTarget, model string, lines []batch.InputLine) (string, error) {
 	r.createdModel = model
 	r.createdLines = lines
 	return "msgbatch_1", nil
 }
 
-func (r *claudeBatchRouter) Status(_ context.Context, _, batchID string, _ time.Duration) (router.BatchPoll, error) {
+func (r *claudeBatchRouter) Status(_ context.Context, _ router.BatchTarget, batchID string) (router.BatchPoll, error) {
 	if batchID != "msgbatch_1" {
 		return router.BatchPoll{}, context.Canceled
 	}
 	return router.BatchPoll{Ended: r.ended, Cancelling: r.cancelled && !r.ended}, nil
 }
 
-func (r *claudeBatchRouter) Results(_ context.Context, _, _, _ string, _ time.Duration) ([]batch.LineResult, error) {
+func (r *claudeBatchRouter) Results(_ context.Context, _ router.BatchTarget, _, _ string) ([]batch.LineResult, error) {
 	return r.results, nil
 }
 
-func (r *claudeBatchRouter) Cancel(context.Context, string, string, time.Duration) error {
+func (r *claudeBatchRouter) Cancel(context.Context, router.BatchTarget, string) error {
 	r.cancelled = true
 	return nil
 }

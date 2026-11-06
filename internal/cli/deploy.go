@@ -4,25 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/buildinfo"
+	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/deploy"
 	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
-	"github.com/behaviorengineering/polypus/internal/deploy/images"
 	"github.com/behaviorengineering/polypus/internal/deploy/paths"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
 	"github.com/behaviorengineering/polypus/internal/deploy/smoke"
-	"github.com/behaviorengineering/polypus/internal/deploy/stack"
 	"github.com/spf13/cobra"
 )
 
 const (
-	deployJobTimeout   = 2 * time.Minute
-	deployEnsureBudget = 25 * time.Minute
-	healthURLHelp      = "gateway base URL (default: the environment's https://polypus-<identifier>.<tailnet>)"
+	deployJobTimeout = 2 * time.Minute
+	healthURLHelp    = "gateway base URL (default: the environment's https://polypus-<identifier>.<tailnet>)"
+	deployConfigHelp = "the environment's config.yaml (default: " + envconfig.ConfigEnv + ", then ~/.config/polypus/deploy/config.yaml)"
 )
 
 // deployTarget is the flags every deploy command shares: which environment it
@@ -33,16 +31,21 @@ type deployTarget struct {
 }
 
 func (t *deployTarget) bind(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&t.config, "config", "", "the environment's config.yaml (default: "+envconfig.ConfigEnv+", then ~/.config/polypus/deploy/config.yaml)")
+	cmd.Flags().StringVar(&t.config, "config", "", deployConfigHelp)
 	cmd.Flags().StringVar(&t.images, "images", "", "a pinned images file (default: the environment's images:, else this build's release images)")
 }
 
 func (t *deployTarget) options() (deploy.Options, error) {
-	stateDir, err := deploy.DefaultStateDir()
+	env, err := envconfig.Discover(t.config)
 	if err != nil {
 		return deploy.Options{}, err
 	}
-	env, err := envconfig.Discover(t.config)
+	return t.optionsFor(env)
+}
+
+// optionsFor builds the deploy options for an environment already discovered.
+func (t *deployTarget) optionsFor(env envconfig.Environment) (deploy.Options, error) {
+	stateDir, err := deploy.DefaultStateDir()
 	if err != nil {
 		return deploy.Options{}, err
 	}
@@ -62,8 +65,9 @@ func (t *deployTarget) options() (deploy.Options, error) {
 
 func newDeployCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "deploy",
-		Short: "Deploy Polypus with Docker Compose for an environment",
+		Use:     "deploy",
+		Short:   "Deploy Polypus with Docker Compose for an environment",
+		GroupID: groupMutate,
 		Long: `Deploy Polypus, Switchyard, the OTLP collector, Phoenix, HyperDX and Tailscale
 with Docker Compose, for one environment: a config.yaml that names the environment
 and points at its gateway YAML. polypus deploy init writes a starting one under
@@ -71,8 +75,8 @@ and points at its gateway YAML. polypus deploy init writes a starting one under
 
 Each environment is its own compose project, Tailscale host and keyring service,
 all named polypus-<identifier>. Nothing publishes host ports: the gateway is reached
-at https://polypus-<identifier>.<tailnet>, so this machine must be on that tailnet. Secrets come from that keyring service, never from
-files in a repo.
+at https://polypus-<identifier>.<tailnet>, so this machine must be on that tailnet.
+Secrets come from that keyring service, never from files in a repo.
 Images default to this build's release; pass --images to pin others.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -163,9 +167,12 @@ func newDeployRunCmd() *cobra.Command {
 			opts.SkipOverlayPrune = o.SkipOverlayPrune
 			opts.SmokeTimeout = o.SmokeTimeout
 			opts.SmokeChatModel = o.SmokeChatModel
-			ctx, cancel := context.WithTimeout(cmd.Context(), opts.HealthTimeout+opts.SmokeTimeout+deployEnsureBudget)
-			defer cancel()
-			return deploy.Run(ctx, opts)
+			opts.Out = cmd.OutOrStdout()
+			return withTracing(cmd, func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(ctx, opts.Budget())
+				defer cancel()
+				return deploy.Run(ctx, opts)
+			})
 		},
 	}
 	t.bind(cmd)
@@ -174,8 +181,8 @@ func newDeployRunCmd() *cobra.Command {
 	f.BoolVar(&o.SkipPull, "skip-pull", false, "skip docker compose pull")
 	f.StringVar(&o.HealthURL, "health-url", "", healthURLHelp)
 	f.DurationVar(&o.HealthTimeout, "health-timeout", 120*time.Second, "health poll timeout")
-	f.BoolVar(&o.SkipSmoke, "skip-smoke", os.Getenv("POLYPUS_DEPLOY_SKIP_SMOKE") == "1", "skip the inference smoke after health (env POLYPUS_DEPLOY_SKIP_SMOKE=1)")
-	f.BoolVar(&o.SkipOverlayPrune, "skip-overlay-prune", os.Getenv("POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE") == "1", "skip the models allow overlay prune before the gateway is recreated (env POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE=1)")
+	f.BoolVar(&o.SkipSmoke, "skip-smoke", config.EnvBool("POLYPUS_DEPLOY_SKIP_SMOKE", false), "skip the inference smoke after health (env POLYPUS_DEPLOY_SKIP_SMOKE=1)")
+	f.BoolVar(&o.SkipOverlayPrune, "skip-overlay-prune", config.EnvBool("POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE", false), "skip the models allow overlay prune before the gateway is recreated (env POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE=1)")
 	bindSmokeModelFlags(cmd, &o.SmokeTimeout, &o.SmokeChatModel)
 	return cmd
 }
@@ -203,69 +210,84 @@ that. Without an environment, smoke sends one chat to --smoke-chat-model.`,
 		GroupID: groupInspect,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			env, found, err := discoverOptional(t.config)
-			if err != nil {
+			if err := resolveDeploySmoke(cmd, &t, &o, envDeploy); err != nil {
 				return err
 			}
-			if found {
-				// Env POLYPUS_API_KEY wins, then the environment's keyring service.
-				if o.APIKey, err = secrets.Lookup(nil, env.Name(), secrets.ClientKeyName); err != nil {
+			return withTracing(cmd, func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(ctx, timeout)
+				defer cancel()
+				if err := smoke.Run(ctx, o); err != nil {
 					return err
 				}
-				if err := applyDeploySmokeChecks(cmd, &t, &o); err != nil {
-					return err
-				}
-			}
-			if o.WithProviders || o.WithSystemOne || o.WithRouter {
-				opts, err := t.options()
-				if err != nil {
-					return err
-				}
-				if o.GatewayConfig, err = paths.ResolveGatewayConfig(opts.GatewayConfig); err != nil {
-					return err
-				}
-				if strings.TrimSpace(envDeploy) == "" {
-					envDeploy = opts.EnvDeployPath()
-				}
-			}
-			o.EnvDeploy = envDeploy
-			if o.BaseURL == "" {
-				opts, err := t.options()
-				if err != nil {
-					return err
-				}
-				o.BaseURL = opts.HealthURL
-			}
-			o.BaseURL = strings.TrimRight(o.BaseURL, "/")
-			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-			defer cancel()
-			if err := smoke.Run(ctx, o); err != nil {
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), "smoke: ok")
 				return err
-			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), "smoke: ok")
-			return err
+			})
 		},
 	}
 	t.bind(cmd)
 	f := cmd.Flags()
 	f.StringVar(&o.BaseURL, "health-url", "", healthURLHelp)
-	f.BoolVar(&o.WithRouter, "with-router", os.Getenv("POLYPUS_SWITCHYARD") == "1", "also smoke each chat router in the gateway YAML, reporting the model that answered (default with an environment: as deploy run)")
-	f.BoolVar(&o.WithSystemOne, "with-systemone", os.Getenv("POLYPUS_SMOKE_SYSTEMONE") == "1", "also smoke /v1/systemone for the gateway YAML's SystemOne backends (default with an environment: as deploy run)")
-	f.BoolVar(&o.WithProviders, "with-providers", os.Getenv("POLYPUS_SMOKE_PROVIDERS") == "1", "smoke chat per backend in the gateway YAML whose secrets are set, in place of --smoke-chat-model (default with an environment: as deploy run)")
+	// POLYPUS_SWITCHYARD is read with the same parser serve uses. Unset means off
+	// here: a router smoke needs an environment's gateway YAML, and with one the
+	// deploy run checks decide instead.
+	f.BoolVar(&o.WithRouter, "with-router", config.EnvBool("POLYPUS_SWITCHYARD", false), "also smoke each chat router in the gateway YAML, reporting the model that answered (default with an environment: as deploy run)")
+	f.BoolVar(&o.WithSystemOne, "with-systemone", config.EnvBool("POLYPUS_SMOKE_SYSTEMONE", false), "also smoke /v1/systemone for the gateway YAML's SystemOne backends (default with an environment: as deploy run)")
+	f.BoolVar(&o.WithProviders, "with-providers", config.EnvBool("POLYPUS_SMOKE_PROVIDERS", false), "smoke chat per backend in the gateway YAML whose secrets are set, in place of --smoke-chat-model (default with an environment: as deploy run)")
 	f.StringVar(&envDeploy, "env-deploy", "", "dotenv with secret names for --with-providers (default: .env.deploy in the environment's state folder)")
 	bindSmokeModelFlags(cmd, &timeout, &o.ChatModel)
 	return cmd
+}
+
+// resolveDeploySmoke fills the smoke options from the environment, resolving it
+// once: the client key, the deploy run checks, the gateway YAML and the base URL.
+// Without an environment the options stay as the flags set them, and only a check
+// that needs one fails.
+func resolveDeploySmoke(cmd *cobra.Command, t *deployTarget, o *smoke.Options, envDeploy string) error {
+	env, found, err := discoverOptional(t.config)
+	if err != nil {
+		return err
+	}
+	var opts deploy.Options
+	if found {
+		// Env POLYPUS_API_KEY wins, then the environment's keyring service.
+		if o.APIKey, err = secrets.Lookup(nil, env.Name(), secrets.ClientKeyName); err != nil {
+			return err
+		}
+		if opts, err = t.optionsFor(env); err != nil {
+			return err
+		}
+		if err := applyDeploySmokeChecks(cmd, opts, o); err != nil {
+			return err
+		}
+	}
+	needsEnv := o.WithProviders || o.WithSystemOne || o.WithRouter || o.BaseURL == ""
+	if needsEnv && !found {
+		// No environment: the error names what is missing.
+		if opts, err = t.options(); err != nil {
+			return err
+		}
+	}
+	if o.WithProviders || o.WithSystemOne || o.WithRouter {
+		if o.GatewayConfig, err = paths.ResolveGatewayConfig(opts.GatewayConfig); err != nil {
+			return err
+		}
+		if strings.TrimSpace(envDeploy) == "" {
+			envDeploy = opts.EnvDeployPath()
+		}
+	}
+	o.EnvDeploy = envDeploy
+	if o.BaseURL == "" {
+		o.BaseURL = opts.HealthURL
+	}
+	o.BaseURL = strings.TrimRight(o.BaseURL, "/")
+	return nil
 }
 
 // applyDeploySmokeChecks gives each smoke check the operator left unset the value
 // deploy run uses for the environment, so a re-test only reaches backends it has
 // keys for. An explicit --smoke-chat-model keeps the direct chat in place of the
 // provider probes.
-func applyDeploySmokeChecks(cmd *cobra.Command, t *deployTarget, o *smoke.Options) error {
-	opts, err := t.options()
-	if err != nil {
-		return err
-	}
+func applyDeploySmokeChecks(cmd *cobra.Command, opts deploy.Options, o *smoke.Options) error {
 	gatewayPath, err := paths.ResolveGatewayConfig(opts.GatewayConfig)
 	if err != nil {
 		return err
@@ -291,14 +313,14 @@ func newDeploySmokeCollectorCmd() *cobra.Command {
 	var o smoke.CollectorOptions
 	var timeout time.Duration
 	var withHyperDX bool
-	var config string
+	var cfgPath string
 	cmd := &cobra.Command{
 		Use:     "smoke-collector",
 		Short:   "OTLP fan-out smoke (otelcol to Phoenix and HyperDX)",
 		GroupID: groupInspect,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			env, found, err := discoverOptional(config)
+			env, found, err := discoverOptional(cfgPath)
 			if err != nil {
 				return err
 			}
@@ -314,13 +336,15 @@ func newDeploySmokeCollectorCmd() *cobra.Command {
 			if withHyperDX {
 				opts.SkipHyperDXVerify = false
 			}
-			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-			defer cancel()
-			if err := smoke.RunCollector(ctx, opts); err != nil {
+			return withTracing(cmd, func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(ctx, timeout)
+				defer cancel()
+				if err := smoke.RunCollector(ctx, opts); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), "smoke-collector: ok")
 				return err
-			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), "smoke-collector: ok")
-			return err
+			})
 		},
 	}
 	f := cmd.Flags()
@@ -330,15 +354,15 @@ func newDeploySmokeCollectorCmd() *cobra.Command {
 	f.StringVar(&o.PhoenixProject, "phoenix-project", "", "Phoenix project name")
 	f.StringVar(&o.HyperDXBaseURL, "hyperdx-url", "", "HyperDX base URL")
 	f.StringVar(&o.HyperDXContainer, "hyperdx-container", "", "docker container for the ClickHouse fallback (default: the environment's, polypus-<identifier>-hyperdx-1)")
-	f.StringVar(&config, "config", "", "the environment's config.yaml, to name its HyperDX container (default: "+envconfig.ConfigEnv+", then ~/.config/polypus/deploy/config.yaml)")
+	f.StringVar(&cfgPath, "config", "", deployConfigHelp+"; names its HyperDX container")
 	f.BoolVar(&withHyperDX, "with-hyperdx", false, "verify HyperDX (skipped by default when POLYPUS_BASE_URL is a remote host)")
 	return cmd
 }
 
 // discoverOptional loads the environment when one is found. With none, found is
 // false and the caller keeps its own defaults.
-func discoverOptional(config string) (envconfig.Environment, bool, error) {
-	env, err := envconfig.Discover(config)
+func discoverOptional(cfgPath string) (envconfig.Environment, bool, error) {
+	env, err := envconfig.Discover(cfgPath)
 	if errors.Is(err, envconfig.ErrNotFound) {
 		return envconfig.Environment{}, false, nil
 	}
@@ -360,59 +384,19 @@ func newDeployVerifyImagesCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			svc, err := deploy.Services(opts)
-			if err != nil {
+			return withTracing(cmd, func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(ctx, deployJobTimeout)
+				defer cancel()
+				if err := deploy.VerifyImages(ctx, opts); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), "verify-images: ok")
 				return err
-			}
-			path, err := verifyImagesFile(opts, svc)
-			if err != nil {
-				return err
-			}
-			if path != opts.PinsFile {
-				defer func() { _ = os.Remove(path) }()
-			}
-			ctx, cancel := context.WithTimeout(cmd.Context(), deployJobTimeout)
-			defer cancel()
-			if err := images.EnsurePresent(ctx, path, images.EnsureOptions{Wait: false, Services: svc}); err != nil {
-				return err
-			}
-			ver, err := images.PolypusVersionFromEnv(path)
-			if err != nil {
-				return err
-			}
-			if err := images.VerifyPublishComplete(ctx, ver, images.DefaultWaitOptions()); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), "verify-images: ok")
-			return err
+			})
 		},
 	}
 	t.bind(cmd)
 	return cmd
-}
-
-// verifyImagesFile returns the pins file to verify: the environment's own, or this
-// build's release pins written to a temporary file.
-func verifyImagesFile(opts deploy.Options, svc images.Services) (string, error) {
-	if strings.TrimSpace(opts.PinsFile) != "" {
-		return opts.PinsFile, images.Verify(opts.PinsFile, svc)
-	}
-	pins, err := images.VersionPins(stack.ImagePins(), opts.Version)
-	if err != nil {
-		return "", err
-	}
-	if err := images.VerifyPins(pins, "the embedded images.env", svc); err != nil {
-		return "", err
-	}
-	f, err := os.CreateTemp("", "polypus-images-*.env")
-	if err != nil {
-		return "", fmt.Errorf("verify-images: temp pins: %w", err)
-	}
-	name := f.Name()
-	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("verify-images: temp pins: %w", err)
-	}
-	return name, images.WritePins(name, pins)
 }
 
 func newDeployExportEnvCmd() *cobra.Command {

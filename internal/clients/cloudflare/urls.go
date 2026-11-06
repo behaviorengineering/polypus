@@ -39,20 +39,3 @@ func runURL(apiBase, model string) string {
 	model = strings.TrimPrefix(strings.TrimSpace(model), "/")
 	return strings.TrimRight(apiBase, "/") + "/run/" + model
 }
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if s := strings.TrimSpace(v); s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
-func truncate(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}

@@ -1,3 +1,5 @@
+// Package paths resolves the host paths a deploy bind-mounts into its containers,
+// in the form Docker accepts on each operating system.
 package paths
 
 import (

@@ -25,14 +25,11 @@ func validateBackend(b config.BackendDef, policy config.RouterPolicy) error {
 	if b.IsAnthropicExtension() {
 		return validateAnthropicBackendURL(b.BaseURL)
 	}
-	raw := strings.TrimSpace(b.BaseURL)
-	if raw == "" {
-		return fmt.Errorf("backend url required")
-	}
+	// parseBackendURL rejects an empty URL for both kinds.
 	if b.Remote {
-		return validateRemoteBackendURL(raw)
+		return validateRemoteBackendURL(b.BaseURL)
 	}
-	return validateLocalBackendURL(raw, policy.RejectNonLoopbackBackends)
+	return validateLocalBackendURL(b.BaseURL, policy.RejectNonLoopbackBackends)
 }
 
 func validateGeminiBackendURL(raw string) error {
@@ -122,15 +119,18 @@ func parseBackendURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
+// blockedCloudHosts are the hosted model APIs a generic backend may not point at;
+// each matches its subdomains too.
+var blockedCloudHosts = []string{
+	"api.openai.com",
+	"openai.com",
+	"api.anthropic.com",
+	"anthropic.com",
+	"generativelanguage.googleapis.com",
+}
+
 func isBlockedCloudHost(host string) bool {
-	blocked := []string{
-		"api.openai.com",
-		"openai.com",
-		"api.anthropic.com",
-		"anthropic.com",
-		"generativelanguage.googleapis.com",
-	}
-	for _, b := range blocked {
+	for _, b := range blockedCloudHosts {
 		if host == b || strings.HasSuffix(host, "."+b) {
 			return true
 		}

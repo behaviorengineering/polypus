@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -48,7 +49,7 @@ func newKeyedTestGateway(t *testing.T) (http.Handler, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gen, err := store.Generate("ops")
+	gen, err := store.Generate(context.Background(), "ops")
 	if err != nil {
 		t.Fatal(err)
 	}

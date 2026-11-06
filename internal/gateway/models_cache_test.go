@@ -55,7 +55,7 @@ func TestModelsCacheConcurrentPutAndFlush(t *testing.T) {
 
 func TestStreamChunkDumpsAreCappedPerStream(t *testing.T) {
 	dir := t.TempDir()
-	ctx := withStreamChunkCounter(context.Background(), testShared.log, dir)
+	ctx := withStreamChunkCounter(context.Background(), chunkDumpSink{dir: dir, log: testShared.log, now: time.Now})
 	for i := range maxChunkDumpsPerStream + 5 {
 		dumpIllegalStreamChunk(ctx, i, []byte(`{"x":1}`), nil)
 	}
