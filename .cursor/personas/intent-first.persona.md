@@ -1,1 +1,0 @@
-../packs/shared/personas/intent-first.persona.md

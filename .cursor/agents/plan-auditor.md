@@ -1,1 +1,0 @@
-../packs/shared/agents/plan-auditor.md

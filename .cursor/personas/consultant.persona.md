@@ -1,1 +1,0 @@
-../packs/shared/personas/consultant.persona.md
