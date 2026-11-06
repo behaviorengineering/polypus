@@ -255,12 +255,11 @@ func statusServer(t *testing.T, status int) (*httptest.Server, *atomic.Int32) {
 	return srv, &calls
 }
 
-// sendOnce is DoOnce or DoStreamOnce.
+// sendOnce is DoOnce.
 type sendOnce func(p *Policies, ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error)
 
 var onceSenders = map[string]sendOnce{
-	"DoOnce":       (*Policies).DoOnce,
-	"DoStreamOnce": (*Policies).DoStreamOnce,
+	"DoOnce": (*Policies).DoOnce,
 }
 
 func TestOnceCounts5xxAgainstTheBreaker(t *testing.T) {
@@ -330,57 +329,96 @@ func TestOnceDoesNotCount429AgainstTheBreaker(t *testing.T) {
 	}
 }
 
-func TestDoStreamOnceNeedsNoDeadline(t *testing.T) {
-	srv, calls := statusServer(t, http.StatusOK)
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := NewPolicies().DoStreamOnce(context.Background(), DepAnthropic, srv.Client(), req)
-	if err != nil {
-		t.Fatalf("a stream is bounded by its caller, not a deadline: %v", err)
-	}
-	raw, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || string(raw) != "body" || calls.Load() != 1 {
-		t.Fatalf("status=%d body=%q calls=%d", resp.StatusCode, raw, calls.Load())
-	}
-}
-
-func TestDoStreamOnceFailsClosed(t *testing.T) {
-	srv, calls := statusServer(t, http.StatusOK)
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var nilCtx context.Context // Nil on purpose.
-	if _, err := NewPolicies().DoStreamOnce(nilCtx, DepAnthropic, srv.Client(), req); derrors.CodeOf(err) != derrors.CodeInvalid {
-		t.Fatalf("nil ctx: got %v", err)
-	}
-	if _, err := NewPolicies().DoStreamOnce(context.Background(), DepAnthropic, nil, req); derrors.CodeOf(err) != derrors.CodeInvalid {
-		t.Fatalf("nil client: got %v", err)
-	}
-	if _, err := NewPolicies().DoStreamOnce(context.Background(), DepAnthropic, srv.Client(), nil); derrors.CodeOf(err) != derrors.CodeInvalid {
-		t.Fatalf("nil request: got %v", err)
-	}
-	if calls.Load() != 0 {
-		t.Fatalf("nothing may be sent, calls=%d", calls.Load())
-	}
-}
-
-func TestDoStreamOnceDialFailureIsUnavailable(t *testing.T) {
+func TestDoOnceDialFailureIsUnavailable(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
 	_ = ln.Close() // A closed port refuses the dial.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+addr, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = DoStreamOnce(context.Background(), DepGateway, http.DefaultClient, req)
+	_, err = DoOnce(ctx, DepGateway, http.DefaultClient, req)
 	if derrors.CodeOf(err) != derrors.CodeUnavailable {
 		t.Fatalf("a refused dial is CodeUnavailable, got %v", err)
+	}
+}
+
+// TestDoDeadlineDuringBackoffReturnsTimeoutAndResponse checks a deadline that ends
+// while Do waits to retry reads as a timeout, not an upstream 5xx, and that the last
+// upstream answer still reaches the caller.
+func TestDoDeadlineDuringBackoffReturnsTimeoutAndResponse(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	// The first backoff is at least 0.8s (1s less 20% jitter), well past this deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := NewPolicies().Do(ctx, DepCloudflare, srv.Client(), req)
+	defer CloseResponse(resp)
+	if derrors.CodeOf(err) != derrors.CodeTimeout {
+		t.Fatalf("code %s, want %s: %v", derrors.CodeOf(err), derrors.CodeTimeout, err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the cause should be the deadline: %v", err)
+	}
+	if derrors.Field(err, "last_status") != "503" {
+		t.Fatalf("last_status %q", derrors.Field(err, "last_status"))
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want the last 503 response, got %v", resp)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || !strings.Contains(string(body), "busy") {
+		t.Fatalf("body %q, %v", body, err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("calls %d, want 1 before the deadline", calls.Load())
+	}
+}
+
+// TestDoRetriesExhaustedReturnsResponseNilError checks retries that run out with
+// time to spare still hand back the last answer with a nil error for the caller to
+// map. It waits through the real backoff (about 7s), so it runs in parallel.
+func TestDoRetriesExhaustedReturnsResponseNilError(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// DepGateway retries status codes and has no breaker to cut the retries short.
+	resp, err := NewPolicies().Do(ctx, DepGateway, srv.Client(), req)
+	defer CloseResponse(resp)
+	if err != nil {
+		t.Fatalf("exhausted retries should return a nil error, got %v", err)
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") != "5" {
+		t.Fatalf("want the last 503 with Retry-After, got %v", resp)
+	}
+	if calls.Load() != 4 {
+		t.Fatalf("calls %d, want 4 (one try and three retries)", calls.Load())
 	}
 }

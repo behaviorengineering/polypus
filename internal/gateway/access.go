@@ -52,7 +52,7 @@ func (a *accessProtector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// One read of the key file decides both whether the gateway is locked and
 		// whether this request's key opens it. A store that cannot be read fails
 		// closed, even for the liveness probe.
-		open, err := a.keys.Authorize(extractAccessCredential(r))
+		open, err := a.keys.Authorize(r.Context(), extractAccessCredential(r))
 		unauthorized := derrors.CodeOf(err) == derrors.CodeUnauthorized
 		switch {
 		case err != nil && !unauthorized:

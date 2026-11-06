@@ -284,9 +284,19 @@ func withModelsBudget(ctx context.Context, cfg config.RouterConfig) (context.Con
 	return context.WithTimeout(ctx, modelsWarmupTimeout(cfg))
 }
 
-// collectModels lists every backend's models in parallel. inboundAuth is the caller's
-// Authorization header, which only local backends without their own credential get.
+// backendFetch returns one backend's model list: inventoryForBackend (cache first)
+// on the request path, refreshBackend (live) for warm-up and the periodic refresh.
+type backendFetch func(ctx context.Context, inboundAuth string, b config.BackendDef) []openaiModel
+
+// collectModels lists every backend's models for a request, from the inventory
+// cache where it can. inboundAuth is the caller's Authorization header, which only
+// local backends without their own credential get.
 func (h modelsHandler) collectModels(ctx context.Context, inboundAuth string, asInventory bool) []openaiModel {
+	return h.collectModelsWith(ctx, inboundAuth, asInventory, h.inventoryForBackend)
+}
+
+// collectModelsWith lists every backend's models in parallel through fetch.
+func (h modelsHandler) collectModelsWith(ctx context.Context, inboundAuth string, asInventory bool, fetch backendFetch) []openaiModel {
 	// Callers fall back here when there is no router, so this is the one guard.
 	if h.shared == nil || h.registry == nil {
 		return nil
@@ -312,7 +322,7 @@ func (h modelsHandler) collectModels(ctx context.Context, inboundAuth string, as
 		wg.Add(1)
 		go func(i int, backendID string, b config.BackendDef) {
 			defer wg.Done()
-			results[i] = backendInventory{backend: backendID, models: h.inventoryForBackend(ctx, inboundAuth, b)}
+			results[i] = backendInventory{backend: backendID, models: fetch(ctx, inboundAuth, b)}
 		}(i, backendID, b)
 	}
 	wg.Wait()
@@ -324,7 +334,22 @@ func (h modelsHandler) collectModels(ctx context.Context, inboundAuth string, as
 	return finalizeModelList(catalog, byID)
 }
 
+// inventoryForBackend is b's model list for a request. The list is the approved
+// catalogue: warm-up, the periodic refresh and an admin allow keep the cache
+// current, so a request serves the cache and dials only a backend with no entry yet.
 func (h modelsHandler) inventoryForBackend(ctx context.Context, inboundAuth string, b config.BackendDef) []openaiModel {
+	if b.Models != nil && !b.Models.ShouldSync() {
+		return mergeEnabledSyntheticMissing(b, nil)
+	}
+	if cached, ok := h.invCache.get(b.ID); ok {
+		return cached
+	}
+	return h.refreshBackend(ctx, inboundAuth, b)
+}
+
+// refreshBackend fetches b's model list live and writes it to the cache. When the
+// fetch fails it falls back to the cached list, then to the configured seeds.
+func (h modelsHandler) refreshBackend(ctx context.Context, inboundAuth string, b config.BackendDef) []openaiModel {
 	syncOff := b.Models != nil && !b.Models.ShouldSync()
 	if list := h.liveCatalogLister(b); list != nil {
 		if syncOff {
@@ -622,25 +647,30 @@ func (s *shared) writeModelNotAllowed(w http.ResponseWriter, model string) {
 	}})
 }
 
+// ensureModelAllowed is the models.allow gate. It fails closed: with no registry,
+// or a backend id the config does not hold, nothing is allowed, and the caller
+// answers with the not-allowed error.
 func (s *shared) ensureModelAllowed(backendID, model string) bool {
 	if s == nil || s.registry == nil {
-		return true
+		return false
 	}
-	reg := s.registry
-	b, ok := reg.Config().Backends[backendID]
+	b, ok := s.registry.Config().Backends[backendID]
 	if !ok {
-		return true
+		return false
 	}
 	return b.IsModelAllowed(model)
 }
 
+// ensureSystemOneAllowed is the SystemOne gate (models.systemone_allow for a
+// systemone backend, models.allow otherwise). It fails closed like
+// ensureModelAllowed.
 func (s *shared) ensureSystemOneAllowed(backendID, publicModel, downstream string) bool {
 	if s == nil || s.registry == nil {
-		return true
+		return false
 	}
 	b, ok := s.registry.Config().Backends[backendID]
 	if !ok {
-		return true
+		return false
 	}
 	if !b.HasCapability(config.CapSystemOne) {
 		return s.ensureModelAllowed(backendID, publicModel)

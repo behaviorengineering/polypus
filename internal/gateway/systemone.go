@@ -9,11 +9,9 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
-	"github.com/behaviorengineering/polypus/internal/outbound"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/maximhq/bifrost/core/schemas"
 )
@@ -55,7 +53,7 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		h.writeModelNotAllowed(w, publicModel)
 		return
 	}
-	// The credential is resolved later, only on the path that sends one.
+	// The router and the Cloudflare client resolve the credential themselves.
 	backend, backendURL, err := h.lookupBackend("gateway.serveSystemOne", backendID)
 	if err != nil {
 		h.writeHandlerError(w, err)
@@ -66,7 +64,7 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 		Model: publicModel, BackendID: backendID, BackendURL: backendURL, Downstream: downstream,
 	})
 	dialUpstream := backendID
-	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
+	defer func() { endDialSpan(span, err, dialUpstream) }()
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), backendID, config.ChatPlain)
 	hop = hopBudget(hop, config.DefaultTimeouts().Chat)
 	ctx, cancel := context.WithTimeout(ctx, hop)
@@ -74,14 +72,19 @@ func (h systemOneHandler) serveSystemOne(w http.ResponseWriter, r *http.Request)
 	r = r.WithContext(ctx)
 
 	call := systemOneCall{backend: backend, url: backendURL, downstream: downstream, publicModel: publicModel, body: body, hop: hop}
+	// Config load rejects a systemone backend with no decision route; this guards
+	// an injected config the same way, before the breaker sees the call.
+	if !backend.IsCloudflareExtension() && !usesBifrostSystemOne(backend) {
+		err = derrors.New(derrors.CodeFailedPrecondition, "gateway.serveSystemOne", "backend has no systemone route").
+			With("backend", backendID)
+		h.writeHandlerError(w, err)
+		return
+	}
 	err = h.upstreams.Execute(backendID, func() error {
 		if backend.IsCloudflareExtension() {
 			return h.proxyCloudflareSystemOne(w, r, call)
 		}
-		if usesBifrostSystemOne(backend) {
-			return h.proxyBifrostSystemOne(w, r, call)
-		}
-		return h.proxySystemOnePassthrough(w, r, call)
+		return h.proxyBifrostSystemOne(w, r, call)
 	})
 	if err != nil {
 		h.writeUpstreamDialError(w, dialFailure{err: err, upstream: backendID})
@@ -98,8 +101,11 @@ type systemOneCall struct {
 	hop         time.Duration
 }
 
+// usesBifrostSystemOne reports whether the backend's Bifrost provider implements the
+// decision operation: native OpenRouter, or Typesafe through a typesafe extension.
 func usesBifrostSystemOne(b config.BackendDef) bool {
-	return b.ID == string(schemas.OpenRouter) && b.HasCapability(config.CapSystemOne)
+	return b.HasCapability(config.CapSystemOne) &&
+		(b.ID == string(schemas.OpenRouter) || b.IsTypesafeExtension())
 }
 
 func (h systemOneHandler) proxyBifrostSystemOne(w http.ResponseWriter, r *http.Request, c systemOneCall) error {
@@ -138,54 +144,6 @@ func (h systemOneHandler) proxyCloudflareSystemOne(w http.ResponseWriter, r *htt
 	_, writeErr := w.Write(out)
 	if writeErr != nil {
 		return afterHeaders(r.Context(), writeErr, true, "gateway.proxyCloudflareSystemOne", "write response")
-	}
-	return nil
-}
-
-func (h systemOneHandler) proxySystemOnePassthrough(w http.ResponseWriter, r *http.Request, c systemOneCall) error {
-	rewritten, err := withBodyModel("gateway.proxySystemOnePassthrough", c.body, c.downstream)
-	if err != nil {
-		return gatewayErr(err, "gateway.proxySystemOnePassthrough", "rewrite model")
-	}
-	auth, authErr := bearerAuthHeader(c.backend)
-	if authErr != nil {
-		return gatewayErr(authErr, "gateway.proxySystemOnePassthrough", "backend auth").With("backend", c.backend.ID)
-	}
-	target := systemOneURL(c.url)
-	req, err := newBackendPOST(r.Context(), r, target, auth, "application/json", rewritten)
-	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "gateway.proxySystemOnePassthrough", "request")
-	}
-	resp, err := h.transport.policies.DoOnce(r.Context(), outbound.DepGateway, h.transport.client, req)
-	if err != nil {
-		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxySystemOnePassthrough", "dial").
-			With("target", target)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxySystemOnePassthrough")
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		w.Header().Set("Content-Type", firstNonEmpty(resp.Header.Get("Content-Type"), "application/json"))
-		w.WriteHeader(resp.StatusCode)
-		if _, err := w.Write(raw); err != nil {
-			return afterHeaders(r.Context(), err, true, "gateway.proxySystemOnePassthrough", "write upstream error")
-		}
-		// A 5xx counts against the breaker like the chat and embeddings proxies.
-		return upstream.StatusFailure(resp.StatusCode)
-	}
-	publicID := prefixModelID(c.backend.ID, c.downstream)
-	raw, err = rewriteSystemOneResponseModel(raw, publicID)
-	if err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, writeErr := w.Write(raw)
-	if writeErr != nil {
-		return afterHeaders(r.Context(), writeErr, true, "gateway.proxySystemOnePassthrough", "write response")
 	}
 	return nil
 }
@@ -234,12 +192,4 @@ func rewriteSystemOneResponseModel(body []byte, publicModel string) ([]byte, err
 		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.rewriteSystemOneResponseModel", "marshal")
 	}
 	return out, nil
-}
-
-func systemOneURL(base string) string {
-	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if strings.HasSuffix(base, "/v1") {
-		return base + "/systemone"
-	}
-	return base + "/v1/systemone"
 }

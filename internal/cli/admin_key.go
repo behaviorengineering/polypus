@@ -198,7 +198,7 @@ func writeAdminKeyList(cio cmdIO, recs []keys.Record) error {
 }
 
 // adminKeyListJSON is `admin-key list --json`. It carries metadata only: the
-// stored argon2id hash and salt never leave the store.
+// stored hash never leaves the store.
 type adminKeyListJSON struct {
 	Keys []adminKeyListItem `json:"keys"`
 }

@@ -87,7 +87,7 @@ func (h filesHandler) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 		Filename: filename,
 		Purpose:  batch.FilePurposeBatch,
 	}
-	if err := h.batchStore.SaveFile(rec, content); err != nil {
+	if err := h.batchStore.SaveFile(r.Context(), rec, content); err != nil {
 		h.writeHandlerError(w, err)
 		return
 	}
@@ -118,7 +118,7 @@ func (h filesHandler) serveFileContent(w http.ResponseWriter, r *http.Request, i
 }
 
 func (h filesHandler) serveFileDelete(w http.ResponseWriter, r *http.Request, id string) {
-	if err := h.batchStore.DeleteFile(id); err != nil {
+	if err := h.batchStore.DeleteFile(r.Context(), id); err != nil {
 		h.writeHandlerError(w, err)
 		return
 	}

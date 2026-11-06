@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
@@ -21,9 +22,12 @@ type healthResponse struct {
 }
 
 type backendProbeResult struct {
-	ID    string `json:"id"`
-	URL   string `json:"url"`
-	OK    bool   `json:"ok"`
+	ID  string `json:"id"`
+	URL string `json:"url"`
+	OK  bool   `json:"ok"`
+	// Code and Error are the failure's domain code and public message; the full
+	// error chain goes to the log only.
+	Code  string `json:"code,omitempty"`
 	Error string `json:"error,omitempty"`
 }
 
@@ -53,44 +57,55 @@ func (h healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 // serveBackendHealth probes configured upstream backends (manual / stack-doctor use).
+// Every probe runs at once under one shared budget, so a slow backend costs the
+// page that backend's wait, not the sum of all of them.
 func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), backendProbeTimeout)
 	defer cancel()
 
-	reg := h.registry
-	cfg := reg.Config()
-	backends := make([]backendProbeResult, 0, len(cfg.Backends))
-	allOK := true
-	for _, id := range cfg.BackendIDs() {
+	cfg := h.registry.Config()
+	ids := cfg.BackendIDs()
+	probes := make([]func() (backendProbeResult, error), 0, len(ids)+1)
+	for _, id := range ids {
 		b := cfg.Backends[id]
-		entry := backendProbeResult{ID: id, URL: b.BaseURL}
-		// Probes must not trip the same circuit breaker as chat/TTS/STT dials.
-		if err := h.probeBackend(ctx, b); err != nil {
-			entry.Error = err.Error()
-			allOK = false
-		} else {
-			entry.OK = true
-		}
-		backends = append(backends, entry)
+		probes = append(probes, func() (backendProbeResult, error) {
+			// Probes must not trip the same circuit breaker as chat/TTS/STT dials.
+			return backendProbeResult{ID: id, URL: b.BaseURL}, h.probeBackend(ctx, b)
+		})
 	}
-
 	if config.SwitchyardEnabled() {
 		switchyardURL := cfg.EffectiveSwitchyardBaseURL()
-		entry := backendProbeResult{ID: "switchyard", URL: switchyardURL}
-		if err := h.compat.CheckHealth(ctx, strings.TrimRight(strings.TrimSpace(switchyardURL), "/")+"/health"); err != nil {
-			entry.Error = err.Error()
-			allOK = false
-		} else {
-			entry.OK = true
-		}
-		backends = append(backends, entry)
+		probes = append(probes, func() (backendProbeResult, error) {
+			healthURL := strings.TrimRight(strings.TrimSpace(switchyardURL), "/") + "/health"
+			return backendProbeResult{ID: "switchyard", URL: switchyardURL}, h.compat.CheckHealth(ctx, healthURL)
+		})
 	}
+
+	backends := make([]backendProbeResult, len(probes))
+	var wg sync.WaitGroup
+	for i, probe := range probes {
+		wg.Go(func() {
+			entry, err := probe()
+			if err != nil {
+				h.log.Warn("polypus: backend health probe failed", "backend", entry.ID, "err", err)
+				entry.Code = string(derrors.CodeOf(err))
+				entry.Error = derrors.PublicMessage(err)
+			} else {
+				entry.OK = true
+			}
+			backends[i] = entry
+		})
+	}
+	wg.Wait()
 
 	status := "ok"
 	code := http.StatusOK
-	if !allOK {
-		status = "degraded"
-		code = http.StatusServiceUnavailable
+	for _, entry := range backends {
+		if !entry.OK {
+			status = "degraded"
+			code = http.StatusServiceUnavailable
+			break
+		}
 	}
 	h.writeJSON(w, code, backendHealthResponse{
 		Status:   status,

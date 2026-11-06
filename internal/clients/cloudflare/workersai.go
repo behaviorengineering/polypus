@@ -50,10 +50,21 @@ func workersAIErrorMessage(raw []byte, fallback string) string {
 // idempotent). ctx must carry the caller's deadline; the outbound seam fails closed
 // without one, and its code (for example CodeFailedPrecondition) is kept.
 func (c *Client) runOnce(ctx context.Context, op string, req *http.Request) (*http.Response, error) {
+	return c.run(ctx, op, req, false)
+}
+
+// run sends req through the outbound seam: once, or with retry true under the retry
+// policy (for an idempotent call such as a batch poll, so a transient 5xx, 429 or
+// transport error is tried again within the caller's deadline).
+func (c *Client) run(ctx context.Context, op string, req *http.Request, retry bool) (*http.Response, error) {
 	if c == nil || c.httpClient == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, op, "not configured")
 	}
-	resp, err := c.policies.DoOnce(ctx, c.dep(), c.httpClient, req)
+	send := c.policies.DoOnce
+	if retry {
+		send = c.policies.Do
+	}
+	resp, err := send(ctx, c.dep(), c.httpClient, req)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "post /run").
 			With("target", req.URL.String())

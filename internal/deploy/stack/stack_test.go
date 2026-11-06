@@ -74,3 +74,53 @@ func TestGatewayLoadsKeysFromEnvFile(t *testing.T) {
 		}
 	}
 }
+
+// TestStackFileModes checks the collector configs the containers read are 0644 and
+// every other stack file 0600, also when an earlier deploy left them 0600.
+func TestStackFileModes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "polypus-work")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// An earlier deploy wrote every file 0600.
+	for name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]os.FileMode{
+		ComposeFileName:              0o600,
+		"hyperdx.custom.config.yaml": 0o644,
+		"otelcol.config.yaml":        0o644,
+	}
+	if len(want) != len(files) {
+		t.Fatalf("the test lists %d files, the stack writes %d", len(want), len(files))
+	}
+	for name, mode := range want {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != mode {
+			t.Errorf("%s mode %o, want %o", name, got, mode)
+		}
+	}
+}
+
+// TestReadableFilesHoldNoSecrets fails when a world-readable stack file starts to
+// reference env values (${VAR}), the usual first step towards carrying a credential,
+// so its mode is reviewed before the change lands.
+func TestReadableFilesHoldNoSecrets(t *testing.T) {
+	for name := range readableFiles {
+		data, ok := files[name]
+		if !ok {
+			t.Fatalf("%s is marked readable but the stack does not write it", name)
+		}
+		if strings.Contains(string(data), "${") {
+			t.Errorf("%s holds a ${VAR} placeholder; keep it 0600 or move the value out", name)
+		}
+	}
+}

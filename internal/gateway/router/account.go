@@ -98,6 +98,12 @@ func (a *account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 		baseType = schemas.Anthropic
 		baseURL = anthropicBaseURL(b.BaseURL)
 	}
+	if b.IsTypesafeExtension() {
+		// Bifrost's Typesafe provider serves SystemOne as its decision operation; it
+		// appends /v1/systemone, so the base is the origin. Empty keeps its default host.
+		baseType = schemas.Typesafe
+		baseURL = anthropicBaseURL(b.BaseURL)
+	}
 	return &schemas.ProviderConfig{
 		NetworkConfig:            networkConfig(baseURL, b, a.timeouts),
 		ConcurrencyAndBufferSize: providerPool,
@@ -116,7 +122,8 @@ func unsupportedProvider(op string, provider schemas.ModelProvider) error {
 }
 
 // anthropicBaseURL returns the origin Bifrost's Anthropic provider expects (it appends
-// /v1/messages). Empty keeps Bifrost's default, https://api.anthropic.com.
+// /v1/messages); the Typesafe provider wants the same (it appends /v1/systemone).
+// Empty keeps the provider's default host.
 func anthropicBaseURL(raw string) string {
 	base := strings.TrimRight(strings.TrimSpace(raw), "/")
 	return strings.TrimSuffix(base, "/v1")
@@ -164,6 +171,7 @@ func allowedRequestsForBackend(b config.BackendDef) *schemas.AllowedRequests {
 		Embedding:            b.HasCapability(config.CapEmbed),
 		Speech:               tts,
 		Transcription:        stt,
+		Decision:             b.HasCapability(config.CapSystemOne) && b.IsTypesafeExtension(),
 	}
 	if b.IsCloudflareExtension() {
 		// Chat/embed use Workers AI OpenAI-compat. Speech/transcription are enabled so

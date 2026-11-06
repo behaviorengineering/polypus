@@ -14,8 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sony/gobreaker"
-
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -93,7 +91,7 @@ func TestRouteWithUnknownMethodSetFailsClosed(t *testing.T) {
 func TestBreakerRefusalSendsOnlyThePublicMessage(t *testing.T) {
 	var logs bytes.Buffer
 	s := &shared{log: slog.New(slog.NewTextHandler(&logs, nil))}
-	err := derrors.Wrap(upstream.UnavailableError("leaf", gobreaker.ErrOpenState), derrors.CodeUnavailable, "gateway.secretOp", "dial")
+	err := derrors.Wrap(upstream.UnavailableError("leaf", upstream.ErrOpen), derrors.CodeUnavailable, "gateway.secretOp", "dial")
 	rec := httptest.NewRecorder()
 	s.writeHandlerError(rec, err)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -116,7 +114,7 @@ func TestAdminAllowOversizedBodyIs413(t *testing.T) {
 	h := newTestGateway(t, config.ServeOptions{}, &fakeRouter{reg: reg}, WithAdminStateDir(t.TempDir()))
 	body := `{"backend":"cf","model":"` + strings.Repeat("x", adminAllowMaxBody) + `"}`
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, pathAdminModelsAllow, strings.NewReader(body)))
+	h.ServeHTTP(rec, adminAllowJSONPost(body))
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
@@ -130,7 +128,7 @@ func TestAdminAllowUnknownBackendUsesTheDomainCode(t *testing.T) {
 	}
 	h := newTestGateway(t, config.ServeOptions{}, &fakeRouter{reg: reg}, WithAdminStateDir(t.TempDir()))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, pathAdminModelsAllow, strings.NewReader(`{"backend":"nope","model":"m"}`)))
+	h.ServeHTTP(rec, adminAllowJSONPost(`{"backend":"nope","model":"m"}`))
 	var got openaiErrorBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
@@ -180,7 +178,7 @@ func TestModelRetrieveBadEscapeIsJSON(t *testing.T) {
 func TestBatchCancelForARemovedBackendFailsBeforeTheProvider(t *testing.T) {
 	h := newBatchGatewayHandler(t, nil)
 	meta := &batch.Meta{BackendID: "removed", Status: batch.StatusInProgress, Endpoint: pathChatCompletions}
-	if err := h.batchStore.SaveBatch(meta); err != nil {
+	if err := h.batchStore.SaveBatch(t.Context(), meta); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()

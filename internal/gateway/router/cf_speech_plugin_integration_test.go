@@ -77,7 +77,7 @@ func TestClientSynthesizeCFViaBifrostPlugin(t *testing.T) {
 			},
 		},
 	}
-	client, err := NewClient(cfg, WithLogger(testLogger()), WithCloudflareClientGet(func(def config.BackendDef) (*cloudflare.Client, error) {
+	client, err := NewClient(t.Context(), cfg, WithLogger(testLogger()), WithCloudflareClientGet(func(def config.BackendDef) (*cloudflare.Client, error) {
 		return cloudflare.NewClient(def)
 	}))
 	if err != nil {
@@ -147,7 +147,7 @@ func TestClientTranscribeCFViaBifrostPlugin(t *testing.T) {
 			},
 		},
 	}
-	client, err := NewClient(cfg, WithLogger(testLogger()), WithCloudflareClientGet(func(def config.BackendDef) (*cloudflare.Client, error) {
+	client, err := NewClient(t.Context(), cfg, WithLogger(testLogger()), WithCloudflareClientGet(func(def config.BackendDef) (*cloudflare.Client, error) {
 		return cloudflare.NewClient(def)
 	}))
 	if err != nil {
@@ -205,7 +205,7 @@ func TestNewClientOmitsCFSpeechPluginWithoutCloudflare(t *testing.T) {
 		},
 	}
 	cfGetCalls := 0
-	client, err := NewClient(cfg, WithLogger(testLogger()), WithCloudflareClientGet(func(def config.BackendDef) (*cloudflare.Client, error) {
+	client, err := NewClient(t.Context(), cfg, WithLogger(testLogger()), WithCloudflareClientGet(func(def config.BackendDef) (*cloudflare.Client, error) {
 		cfGetCalls++
 		return cloudflare.NewClient(def)
 	}))

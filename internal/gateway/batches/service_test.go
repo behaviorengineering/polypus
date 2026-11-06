@@ -1,8 +1,10 @@
-package service
+package batches
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +25,16 @@ import (
 type fakeSubmitter struct {
 	submitErr error
 	poll      Poll
-	cancelled bool
+	// onSubmit runs inside a successful Submit (a test cancels the caller's ctx there).
+	onSubmit func()
+	// breakSave gives the batch an id the store refuses, so the save after a
+	// successful submit fails.
+	breakSave bool
+	cancelErr error
+	cancels   int
+	// cancelCtxErr and cancelHasDeadline record the ctx of the last Cancel.
+	cancelCtxErr      error
+	cancelHasDeadline bool
 }
 
 func (f *fakeSubmitter) Validate(Job) error { return nil }
@@ -33,33 +44,51 @@ func (f *fakeSubmitter) Submit(_ context.Context, _ Job, meta *batch.Meta) error
 		return f.submitErr
 	}
 	meta.UpstreamBatchID = "up_1"
+	if f.breakSave {
+		meta.ID = "../outside"
+	}
+	if f.onSubmit != nil {
+		f.onSubmit()
+	}
 	return nil
 }
 
 func (f *fakeSubmitter) Poll(context.Context, batch.Meta) (Poll, error) { return f.poll, nil }
 
-func (f *fakeSubmitter) Cancel(context.Context, batch.Meta) error {
-	f.cancelled = true
-	return nil
+func (f *fakeSubmitter) Cancel(ctx context.Context, _ batch.Meta) error {
+	f.cancels++
+	f.cancelCtxErr = ctx.Err()
+	_, f.cancelHasDeadline = ctx.Deadline()
+	return f.cancelErr
 }
 
 func newTestService(t *testing.T, sub *fakeSubmitter, now *time.Time) (*Service, *batch.DiskStore) {
+	t.Helper()
+	svc, store, _ := newTestServiceWithLogs(t, sub, now)
+	return svc, store
+}
+
+// newTestServiceWithLogs is newTestService with the service's log lines kept in a
+// buffer, one text record per line.
+func newTestServiceWithLogs(t *testing.T, sub Submitter, now *time.Time) (*Service, *batch.DiskStore, *bytes.Buffer) {
 	t.Helper()
 	clock := func() time.Time { return *now }
 	store, err := batch.NewDiskStore(t.TempDir(), clock)
 	if err != nil {
 		t.Fatal(err)
 	}
+	logs := &bytes.Buffer{}
 	svc, err := Config{
 		Store:     store,
 		Breakers:  upstream.NewBoard(),
 		Now:       clock,
 		Submitter: func(config.BackendDef) (Submitter, error) { return sub, nil },
+		Logger:    slog.New(slog.NewTextHandler(logs, nil)),
 	}.CreateService()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return svc, store
+	return svc, store, logs
 }
 
 var batchBackend = config.BackendDef{ID: "b", Capabilities: []config.Capability{config.CapBatch}}
@@ -126,7 +155,7 @@ func TestCancelledBatchFinishesCancelledWithItsLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta, err = svc.Cancel(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.StatusCancelling || !sub.cancelled {
+	if meta, err = svc.Cancel(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.StatusCancelling || sub.cancels != 1 {
 		t.Fatalf("cancel: %+v %v", meta, err)
 	}
 	sub.poll = Poll{State: PollDone, Lines: []batch.LineResult{{CustomID: "a", Body: []byte(`{}`)}}}
@@ -164,20 +193,8 @@ func (b *brokenSaveSubmitter) Submit(_ context.Context, _ Job, meta *batch.Meta)
 
 func TestCreateKeepsTheSubmitErrorWhenTheSaveFails(t *testing.T) {
 	now := time.Unix(1_000, 0)
-	clock := func() time.Time { return now }
-	store, err := batch.NewDiskStore(t.TempDir(), clock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sub := &brokenSaveSubmitter{}
-	svc, err := Config{
-		Store: store, Breakers: upstream.NewBoard(), Now: clock,
-		Submitter: func(config.BackendDef) (Submitter, error) { return sub, nil },
-	}.CreateService()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = svc.Create(context.Background(), createRequest())
+	svc, _, _ := newTestServiceWithLogs(t, &brokenSaveSubmitter{}, &now)
+	_, err := svc.Create(context.Background(), createRequest())
 	if derrors.CodeOf(err) != derrors.CodeRateLimited || !strings.Contains(err.Error(), "provider said no") {
 		t.Fatalf("the provider's rejection must survive a failed save: %v", err)
 	}
@@ -241,5 +258,137 @@ func TestCloudflareUnknownChatResultFailsTheLine(t *testing.T) {
 	}
 	if lines[1].ErrCode != "" || !strings.Contains(string(lines[1].Body), `"content":"hi"`) {
 		t.Fatalf("a response result becomes a completion: %+v", lines[1])
+	}
+}
+
+// expiredBatch stores a submitted batch whose completion window has passed by now.
+func expiredBatch(t *testing.T, store *batch.DiskStore, now time.Time, upstreamID string) batch.Meta {
+	t.Helper()
+	meta := batch.Meta{
+		Status: batch.StatusInProgress, BackendID: batchBackend.ID, Endpoint: batch.EndpointChatCompletions,
+		UpstreamBatchID: upstreamID, ExpiresAt: now.Add(-time.Hour).Unix(),
+	}
+	if err := store.SaveBatch(t.Context(), &meta); err != nil {
+		t.Fatal(err)
+	}
+	return meta
+}
+
+func TestRefreshExpiredCancelsUpstream(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	sub := &fakeSubmitter{poll: Poll{State: PollRunning}}
+	svc, store, logs := newTestServiceWithLogs(t, sub, &now)
+	meta, err := svc.Refresh(t.Context(), batchBackend, expiredBatch(t, store, now, "up_1"))
+	if err != nil || meta.Status != batch.StatusExpired {
+		t.Fatalf("an expired batch ends expired: %+v %v", meta, err)
+	}
+	if sub.cancels != 1 {
+		t.Fatalf("want one upstream cancel, got %d", sub.cancels)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("a successful cancel logs nothing: %s", logs)
+	}
+}
+
+func TestRefreshExpiredCancelFailureStillExpires(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	sub := &fakeSubmitter{cancelErr: derrors.New(derrors.CodeUnavailable, "p", "provider down")}
+	svc, store, logs := newTestServiceWithLogs(t, sub, &now)
+	meta, err := svc.Refresh(t.Context(), batchBackend, expiredBatch(t, store, now, "up_1"))
+	if err != nil || meta.Status != batch.StatusExpired {
+		t.Fatalf("a failed cancel must not block the expiry: %+v %v", meta, err)
+	}
+	stored, err := store.GetBatch(meta.ID)
+	if err != nil || stored.Status != batch.StatusExpired {
+		t.Fatalf("the expiry is saved: %+v %v", stored, err)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "cancel of expired batch failed") ||
+		!strings.Contains(out, "upstream_batch_id=up_1") {
+		t.Fatalf("want a warning naming the upstream batch, got %q", out)
+	}
+}
+
+func TestRefreshExpiredUnimplementedCancelIsQuiet(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	sub := &fakeSubmitter{cancelErr: derrors.New(derrors.CodeUnimplemented, "p", "cannot cancel")}
+	svc, store, logs := newTestServiceWithLogs(t, sub, &now)
+	meta, err := svc.Refresh(t.Context(), batchBackend, expiredBatch(t, store, now, "up_1"))
+	if err != nil || meta.Status != batch.StatusExpired || sub.cancels != 1 {
+		t.Fatalf("expired %+v, err %v, cancels %d", meta, err, sub.cancels)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("a provider that cannot cancel is skipped quietly: %s", logs)
+	}
+}
+
+func TestRefreshExpiredWithoutUpstreamIDSkipsCancel(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	sub := &fakeSubmitter{}
+	svc, store, _ := newTestServiceWithLogs(t, sub, &now)
+	meta, err := svc.Refresh(t.Context(), batchBackend, expiredBatch(t, store, now, ""))
+	if err != nil || meta.Status != batch.StatusExpired {
+		t.Fatalf("expired %+v, err %v", meta, err)
+	}
+	if sub.cancels != 0 {
+		t.Fatalf("a batch with no upstream id has nothing to cancel, got %d cancels", sub.cancels)
+	}
+}
+
+func TestUnimplementedCancelDoesNotTripTheBreaker(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	sub := &fakeSubmitter{cancelErr: derrors.New(derrors.CodeUnimplemented, "p", "cannot cancel")}
+	svc, store, _ := newTestServiceWithLogs(t, sub, &now)
+	for range 10 {
+		if _, err := svc.Refresh(t.Context(), batchBackend, expiredBatch(t, store, now, "up_1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sub.cancels != 10 {
+		t.Fatalf("every expiry asks once; a provider that cannot cancel is not a failing upstream (breaker open?): %d", sub.cancels)
+	}
+}
+
+func TestCreateSaveFailureCancelsUpstream(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	sub := &fakeSubmitter{breakSave: true}
+	svc, _, _ := newTestServiceWithLogs(t, sub, &now)
+	_, err := svc.Create(t.Context(), createRequest())
+	if err == nil || !strings.Contains(err.Error(), "upstream cancelled") {
+		t.Fatalf("a failed save after a submit must fail the create: %v", err)
+	}
+	if sub.cancels != 1 {
+		t.Fatalf("the unsaved upstream batch must be cancelled once, got %d", sub.cancels)
+	}
+}
+
+func TestCreateSaveFailureCancelUsesOwnDeadline(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// The caller goes away while the provider is accepting the batch.
+	sub := &fakeSubmitter{breakSave: true, onSubmit: cancel}
+	svc, _, _ := newTestServiceWithLogs(t, sub, &now)
+	if _, err := svc.Create(ctx, createRequest()); err == nil {
+		t.Fatal("want the save error")
+	}
+	if sub.cancels != 1 || sub.cancelCtxErr != nil || !sub.cancelHasDeadline {
+		t.Fatalf("the cancel needs a live ctx with its own deadline: cancels %d, ctx err %v, deadline %v",
+			sub.cancels, sub.cancelCtxErr, sub.cancelHasDeadline)
+	}
+}
+
+func TestCreateSaveFailureCancelFailsLogsUpstreamID(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	sub := &fakeSubmitter{breakSave: true, cancelErr: derrors.New(derrors.CodeUnimplemented, "p", "cannot cancel")}
+	svc, _, logs := newTestServiceWithLogs(t, sub, &now)
+	_, err := svc.Create(t.Context(), createRequest())
+	if err == nil || !strings.Contains(err.Error(), "upstream not cancelled") {
+		t.Fatalf("the error must say the upstream batch is still there: %v", err)
+	}
+	if derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("the save failure's code leads: %v", err)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "upstream_batch_id=up_1") {
+		t.Fatalf("want an error line carrying the upstream id, got %q", out)
 	}
 }

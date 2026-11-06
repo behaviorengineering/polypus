@@ -2,19 +2,63 @@ package gatewayconfig
 
 import (
 	"fmt"
-	"os"
+	"net/url"
 	"sort"
 	"strings"
 )
 
+// minimalReasoning is the reasoning effort smoke sends to models that think by default.
+const minimalReasoning = "minimal"
+
+// cloudflareChatSlug is the cheap Workers AI chat model smoke prefers when a
+// Cloudflare backend allows it.
+const cloudflareChatSlug = "@cf/ibm-granite/granite-4.0-h-micro"
+
+// providerShape is the upstream a backend talks to, read from its extension or its
+// base_url host, never from its id, so any deployer's backend names work.
+type providerShape int
+
 const (
-	// cloudflareLocalBackend is the Cloudflare Workers AI backend id the homelab uses.
-	cloudflareLocalBackend = "cf_local"
-	// minimalReasoning is the reasoning effort smoke sends to models that think by default.
-	minimalReasoning = "minimal"
+	shapeGeneric providerShape = iota
+	shapeCloudflare
+	shapeGemini
+	shapeOpenRouter
+	shapeDeepInfra
 )
 
-const homelabGraniteSlug = "@cf/ibm-granite/granite-4.0-h-micro"
+func shapeOf(b backendYAML) providerShape {
+	switch strings.ToLower(strings.TrimSpace(b.Extension)) {
+	case "cloudflare":
+		return shapeCloudflare
+	case "gemini":
+		return shapeGemini
+	}
+	switch host := baseURLHost(b.BaseURL); {
+	case hostIs(host, "api.cloudflare.com"):
+		return shapeCloudflare
+	case hostIs(host, "openrouter.ai"):
+		return shapeOpenRouter
+	case hostIs(host, "deepinfra.com"):
+		return shapeDeepInfra
+	default:
+		return shapeGeneric
+	}
+}
+
+// baseURLHost is the lower-case host of a base_url; ${VAR} placeholders in the
+// path do not stop the parse.
+func baseURLHost(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+// hostIs reports whether host is domain or a subdomain of it.
+func hostIs(host, domain string) bool {
+	return host == domain || strings.HasSuffix(host, "."+domain)
+}
 
 // ChatSmokeTarget is one post-deploy chat probe derived from gateway YAML.
 type ChatSmokeTarget struct {
@@ -24,17 +68,17 @@ type ChatSmokeTarget struct {
 	ReasoningEffort string // when set, smoke sends reasoning.effort (e.g. minimal for Gemini).
 }
 
-// ChatSmokeTargets builds chat smoke probes from backends with chat capability and allow-listed models.
-// OpenRouter yields at most one mistralai/ and one google/gemini slug. DeepInfra yields at most one
-// deepseek-ai/ slug plus Gemma 4 26B and 31B (not Ultra/turbo, not Gemma 3). lm_studio runs only when
-// POLYPUS_SMOKE_LM_STUDIO=1.
+// ChatSmokeTargets builds chat smoke probes from backends with chat capability.
+// A backend's smoke block decides first: smoke.skip leaves it out and smoke.chat
+// names its probe models. Otherwise the provider shape picks from models.allow:
+// OpenRouter yields at most one mistralai/ and one google/gemini slug, DeepInfra at
+// most one deepseek-ai/ slug plus Gemma 4 26B and 31B (not Ultra or turbo, not
+// Gemma 3), and any other backend its first allowed model.
 func ChatSmokeTargets(path string) ([]ChatSmokeTarget, error) {
 	cfg, err := loadGatewayYAML(path)
 	if err != nil {
 		return nil, err
 	}
-	lmStudio := strings.TrimSpace(os.Getenv("POLYPUS_SMOKE_LM_STUDIO")) == "1"
-
 	ids := make([]string, 0, len(cfg.Backends))
 	for id := range cfg.Backends {
 		ids = append(ids, id)
@@ -44,20 +88,11 @@ func ChatSmokeTargets(path string) ([]ChatSmokeTarget, error) {
 	var out []ChatSmokeTarget
 	for _, id := range ids {
 		b := cfg.Backends[id]
-		if !backendHasCapability(b, "chat") {
-			continue
-		}
-		if id == "lm_studio" && !lmStudio {
-			continue
-		}
-		// Homelab: Gemma on gemini_free often returns empty content under deploy smoke
-		// (reasoning + low max_tokens). Probe gemini_paid for Google AI Studio instead.
-		if id == "gemini_free" {
+		if b.Smoke.Skip || !backendHasCapability(b, "chat") {
 			continue
 		}
 		secrets := backendSmokeSecrets(b)
-		targets := chatTargetsForBackend(id, b)
-		for _, t := range targets {
+		for _, t := range chatTargetsForBackend(id, b) {
 			t.SecretEnv = secrets
 			out = append(out, t)
 		}
@@ -82,51 +117,52 @@ func backendSmokeSecrets(b backendYAML) []string {
 }
 
 func chatTargetsForBackend(backendID string, b backendYAML) []ChatSmokeTarget {
+	shape := shapeOf(b)
+	if explicit := dedupeStrings(b.Smoke.Chat); len(explicit) > 0 {
+		out := make([]ChatSmokeTarget, 0, len(explicit))
+		for _, slug := range explicit {
+			out = append(out, chatTarget(backendID, shape, slug))
+		}
+		return out
+	}
 	allow := b.Models.Allow
 	if len(allow) == 0 {
 		return nil
 	}
-	ext := strings.ToLower(strings.TrimSpace(b.Extension))
-	switch {
-	case backendID == cloudflareLocalBackend || ext == "cloudflare":
-		slug := pickCFChatSlug(allow)
-		if slug == "" {
-			return nil
-		}
-		return []ChatSmokeTarget{{
-			BackendID: backendID,
-			Model:     backendID + "/" + slug,
-		}}
-	case ext == "gemini":
-		slug := strings.TrimSpace(allow[0])
-		if slug == "" {
-			return nil
-		}
-		return []ChatSmokeTarget{{
-			BackendID:       backendID,
-			Model:           backendID + "/" + slug,
-			ReasoningEffort: minimalReasoning,
-		}}
-	case backendID == "openrouter":
-		return openRouterChatTargets(backendID, allow)
-	case backendID == "deepinfra":
-		return deepInfraChatTargets(backendID, allow)
-	default:
-		slug := strings.TrimSpace(allow[0])
-		if slug == "" {
-			return nil
-		}
-		return []ChatSmokeTarget{{
-			BackendID: backendID,
-			Model:     backendID + "/" + slug,
-		}}
+	var slugs []string
+	switch shape {
+	case shapeCloudflare:
+		slugs = []string{pickCFChatSlug(allow)}
+	case shapeOpenRouter:
+		slugs = openRouterChatSlugs(allow)
+	case shapeDeepInfra:
+		slugs = deepInfraChatSlugs(allow)
+	case shapeGemini, shapeGeneric:
+		slugs = []string{firstNonEmpty(allow)}
 	}
+	var out []ChatSmokeTarget
+	for _, slug := range slugs {
+		if slug != "" {
+			out = append(out, chatTarget(backendID, shape, slug))
+		}
+	}
+	return out
+}
+
+// chatTarget is the probe for slug on backendID, with minimal reasoning for the
+// models that think by default (Gemini, and Gemma 4 on DeepInfra).
+func chatTarget(backendID string, shape providerShape, slug string) ChatSmokeTarget {
+	t := ChatSmokeTarget{BackendID: backendID, Model: backendID + "/" + slug}
+	if shape == shapeGemini || (shape == shapeDeepInfra && isDeepInfraGemma4(strings.ToLower(slug))) {
+		t.ReasoningEffort = minimalReasoning
+	}
+	return t
 }
 
 func pickCFChatSlug(allow []string) string {
 	for _, s := range allow {
-		if strings.TrimSpace(s) == homelabGraniteSlug {
-			return homelabGraniteSlug
+		if strings.TrimSpace(s) == cloudflareChatSlug {
+			return cloudflareChatSlug
 		}
 	}
 	for _, s := range allow {
@@ -147,13 +183,10 @@ func pickCFChatSlug(allow []string) string {
 	return ""
 }
 
-func openRouterChatTargets(backendID string, allow []string) []ChatSmokeTarget {
+func openRouterChatSlugs(allow []string) []string {
 	var mistral, gemini string
 	for _, s := range allow {
 		s = strings.TrimSpace(s)
-		if s == "" {
-			continue
-		}
 		if mistral == "" && strings.HasPrefix(s, "mistralai/") {
 			mistral = s
 		}
@@ -161,23 +194,13 @@ func openRouterChatTargets(backendID string, allow []string) []ChatSmokeTarget {
 			gemini = s
 		}
 	}
-	var out []ChatSmokeTarget
-	if mistral != "" {
-		out = append(out, ChatSmokeTarget{BackendID: backendID, Model: backendID + "/" + mistral})
-	}
-	if gemini != "" {
-		out = append(out, ChatSmokeTarget{BackendID: backendID, Model: backendID + "/" + gemini})
-	}
-	return out
+	return []string{mistral, gemini}
 }
 
-func deepInfraChatTargets(backendID string, allow []string) []ChatSmokeTarget {
+func deepInfraChatSlugs(allow []string) []string {
 	var deepseek, gemma26, gemma31 string
 	for _, s := range allow {
 		s = strings.TrimSpace(s)
-		if s == "" {
-			continue
-		}
 		low := strings.ToLower(s)
 		if deepseek == "" && strings.HasPrefix(low, "deepseek-ai/") {
 			deepseek = s
@@ -189,25 +212,12 @@ func deepInfraChatTargets(backendID string, allow []string) []ChatSmokeTarget {
 			gemma31 = s
 		}
 	}
-	var out []ChatSmokeTarget
-	if deepseek != "" {
-		out = append(out, ChatSmokeTarget{BackendID: backendID, Model: backendID + "/" + deepseek})
-	}
-	if gemma26 != "" {
-		out = append(out, ChatSmokeTarget{
-			BackendID:       backendID,
-			Model:           backendID + "/" + gemma26,
-			ReasoningEffort: minimalReasoning,
-		})
-	}
-	if gemma31 != "" {
-		out = append(out, ChatSmokeTarget{
-			BackendID:       backendID,
-			Model:           backendID + "/" + gemma31,
-			ReasoningEffort: minimalReasoning,
-		})
-	}
-	return out
+	return []string{deepseek, gemma26, gemma31}
+}
+
+// isDeepInfraGemma4 reports whether a lower-case DeepInfra slug is a Gemma 4 model.
+func isDeepInfraGemma4(low string) bool {
+	return strings.Contains(low, "gemma-4-")
 }
 
 func isDeepInfraGemma431B(low string) bool {

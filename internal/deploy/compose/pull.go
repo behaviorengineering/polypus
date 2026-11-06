@@ -2,7 +2,6 @@ package compose
 
 import (
 	"context"
-	"os/exec"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/deploy/execx"
@@ -45,12 +44,12 @@ func (c Client) Pull(ctx context.Context) error {
 	if ctx == nil {
 		return derrors.New(derrors.CodeInvalid, op, "context required")
 	}
-	if _, err := exec.LookPath("docker"); err != nil {
+	if err := c.lookDocker(); err != nil {
 		return derrors.Wrap(err, derrors.CodeFailedPrecondition, op, "docker not found on PATH (is Docker installed?)")
 	}
 	args := c.Args("pull")
-	err := outbound.Run(ctx, outbound.DepRegistry, func() error {
-		err := execx.RunContext(ctx, "docker", args, c.Environ())
+	err := c.Policies.Run(ctx, outbound.DepRegistry, func() error {
+		err := c.run(ctx, args)
 		if err == nil {
 			return nil
 		}

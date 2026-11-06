@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,8 +11,6 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -20,7 +19,9 @@ import (
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
-// fakeRouter satisfies Router without bifrost.Init (UsesBifrost always false).
+// fakeRouter satisfies Router without bifrost.Init. UsesBifrost is always false, so
+// chat and embeddings through it fail closed; tests that dial use scriptedRouter or
+// recordingRouter.
 type fakeRouter struct {
 	reg *router.Registry
 }
@@ -149,13 +150,10 @@ func newTestGateway(t *testing.T, opts config.ServeOptions, r registryProvider, 
 func TestNewHandlerWithRouterSkipsBifrost(t *testing.T) {
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
 
+	leafHits := 0
 	leaf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"via-fake"}}]}`))
+		leafHits++
+		http.Error(w, "leaf must not be dialed", http.StatusBadGateway)
 	}))
 	t.Cleanup(leaf.Close)
 
@@ -185,7 +183,8 @@ backends:
 
 	opts := config.ServeOptions{BackendURL: leaf.URL}
 	fake := newFakeRouter(t, opts)
-	handler := newTestGateway(t, opts, fake)
+	recRouter := &recordingRouter{reg: fake.reg, uses: map[string]bool{"leaf": true}}
+	handler := newTestGateway(t, opts, recRouter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"leaf/test-model","messages":[{"role":"user","content":"hi"}]}`,
@@ -196,8 +195,8 @@ backends:
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: %d body %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "via-fake") {
-		t.Fatalf("body: %q", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "via-bifrost") || leafHits != 0 {
+		t.Fatalf("the injected router must answer, not the leaf: body %q leaf hits %d", rec.Body.String(), leafHits)
 	}
 	gw, ok := gatewayFromHandler(handler)
 	if !ok {
@@ -346,21 +345,24 @@ backends:
 	}
 }
 
-func TestSwitchyardComposedViaHTTPProxy(t *testing.T) {
-	exporter := tracetest.NewInMemoryExporter()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
-	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
-	otel.SetTracerProvider(tp)
+func TestSwitchyardComposedViaBifrostKeepsTheTrace(t *testing.T) {
+	exporter := installTestTracer(t)
+	prevProp := otel.GetTextMapPropagator()
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}))
+	t.Cleanup(func() { otel.SetTextMapPropagator(prevProp) })
+	tp := otel.GetTracerProvider()
 
 	t.Setenv("POLYPUS_SWITCHYARD", "1")
-	var sawTraceparent bool
+	var gotTraceparent, gotPath string
+	var gotBody []byte
 	sy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("traceparent") != "" {
-			sawTraceparent = true
-		}
+		gotTraceparent = r.Header.Get("traceparent")
+		gotPath = r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"via-proxy"}}]}`))
+		w.Header().Set("X-Switchyard-Selected-Model", "leaf/b")
+		w.Header().Set("X-Switchyard-Internal", "not for the caller")
+		_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","created":1,"model":"leaf/b","choices":[{"index":0,"message":{"role":"assistant","content":"via-switchyard"},"finish_reason":"stop"}]}`))
 	}))
 	t.Cleanup(sy.Close)
 	t.Setenv("POLYPUS_SWITCHYARD_BASE_URL", sy.URL)
@@ -399,17 +401,16 @@ routers:
 `
 	writeConfig(t, dir, content)
 
-	opts := config.ServeOptions{BackendURL: "http://127.0.0.1:9"}
-	rcfg, err := config.LoadRouterConfig(opts)
+	// No injected router: the gateway builds a real Bifrost client, which registers
+	// Switchyard as a provider.
+	inner, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:9"}, WithAdminStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := router.NewRegistry(rcfg)
-	if err != nil {
-		t.Fatal(err)
+	if gw, ok := gatewayFromHandler(inner); ok {
+		t.Cleanup(gw.Close)
 	}
-	recRouter := &recordingRouter{reg: reg}
-	handler := observability.WrapHandler(newTestGateway(t, opts, recRouter), nil)
+	handler := observability.WrapHandler(inner, nil)
 
 	ctx, root := tp.Tracer("client").Start(context.Background(), "test.client")
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
@@ -424,14 +425,20 @@ routers:
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: %d body %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "via-proxy") {
+	if !strings.Contains(rec.Body.String(), "via-switchyard") {
 		t.Fatalf("body: %q", rec.Body.String())
 	}
-	if len(recRouter.chatProviders) != 0 {
-		t.Fatalf("expected HTTP proxy to Switchyard, bifrost chatProviders=%v", recRouter.chatProviders)
+	if gotPath != "/v1/chat/completions" || !strings.Contains(string(gotBody), `"router/investigator"`) {
+		t.Fatalf("Switchyard must get the client's body on the chat path: %s %s", gotPath, gotBody)
 	}
-	if !sawTraceparent {
-		t.Fatal("expected traceparent on Switchyard proxy request")
+	if gotTraceparent == "" || !strings.Contains(gotTraceparent, root.SpanContext().TraceID().String()) {
+		t.Fatalf("Switchyard must get the request's trace: traceparent %q", gotTraceparent)
+	}
+	if rec.Header().Get("X-Switchyard-Selected-Model") != "leaf/b" || rec.Header().Get("X-Switchyard-Internal") != "" {
+		t.Fatalf("only the selected-model header reaches the caller: %v", rec.Header())
+	}
+	if got := spanAttr(exporter, "polypus.router", "polypus.downstream_model"); got != "leaf/b" {
+		t.Fatalf("downstream model on the router span = %q", got)
 	}
 }
 

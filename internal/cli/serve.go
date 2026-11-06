@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/gateway"
 	"github.com/behaviorengineering/polypus/internal/observability"
-	"github.com/behaviorengineering/polypus/pkg/polypus"
 )
 
 func runServeWithOpts(ctx context.Context, errOut io.Writer, host string, port int, backend string) int {
@@ -23,17 +23,43 @@ func runServeWithOpts(ctx context.Context, errOut io.Writer, host string, port i
 	// gateway loads the router config once and logs what it serves.
 	logger := slog.Default()
 	logger.Info("polypus gateway", "url", opts.GatewayBaseURL())
+	if err := warnIfKeyless(logger); err != nil {
+		logger.Error("polypus serve: admin keys", "err", err)
+		return 1
+	}
 	return withObservability(logger, func(otelCfg observability.Config) int {
 		// SIGINT and SIGTERM end ctx, and Serve then drains and shuts down.
 		ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
-		if err := polypus.Serve(ctx, opts, polypus.WithLogger(logger),
-			polypus.WithObservability(otelCfg.ActiveDumpDir(), otelCfg.SkipPaths)); err != nil {
+		if err := gateway.ListenAndServe(ctx, opts, gateway.WithLogger(logger),
+			gateway.WithObservability(otelCfg.ActiveDumpDir(), otelCfg.SkipPaths)); err != nil {
 			logger.Error("polypus serve failed", "err", err, "config", opts.ConfigPath)
 			return 1
 		}
 		return 0
 	})
+}
+
+// keylessHint is the command that locks a gateway running without access keys.
+const keylessHint = "polypus admin-key generate --name <name>"
+
+// warnIfKeyless reads the admin key store serve's gateway uses and, when it holds
+// no key, warns once that the gateway answers anyone who can reach it. A store
+// that cannot be read is an error: the gateway would fail on it too.
+func warnIfKeyless(logger *slog.Logger) error {
+	store, err := openAdminKeyStore()
+	if err != nil {
+		return err
+	}
+	records, err := store.List()
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		logger.Warn("polypus: no access keys; anyone who can reach this gateway can use it, including admin routes",
+			"hint", keylessHint)
+	}
+	return nil
 }
 
 // resolveServeOptions reads the serve options from the environment and applies the

@@ -1,85 +1,19 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
-	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
-	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 const (
 	chatMaxBody        = 32 << 20
 	msgBackendNotFound = "polypus: backend not found"
 )
-
-// proxyTransport is how the gateway sends its own HTTP hops to OpenAI-shaped
-// backends. Every field is required.
-type proxyTransport struct {
-	// client sends non-stream calls; its Timeout is the outer Max budget.
-	client *http.Client
-	// streamClient sends streams. It has no Client.Timeout, which would cover the
-	// whole body read: the hop and idle timers bound a stream instead.
-	streamClient *http.Client
-	// policies is the gateway's own outbound breaker set.
-	policies *outbound.Policies
-}
-
-func newProxyTransport(limit time.Duration, policies *outbound.Policies) proxyTransport {
-	if policies == nil {
-		panic("gateway: newProxyTransport needs outbound policies")
-	}
-	if limit <= 0 {
-		limit = config.DefaultTimeouts().Max
-	}
-	rt := observability.WrapTransport(http.DefaultTransport)
-	return proxyTransport{
-		client:       &http.Client{Timeout: limit, Transport: rt},
-		streamClient: &http.Client{Transport: rt},
-		policies:     policies,
-	}
-}
-
-func (t proxyTransport) ready() bool {
-	return t.client != nil && t.streamClient != nil && t.policies != nil
-}
-
-// newBackendPOST builds a JSON POST to target with the backend credential, or the
-// caller's Authorization when the backend has none. accept is the Accept header.
-func newBackendPOST(ctx context.Context, in *http.Request, target, backendAuth, accept string, body []byte) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", accept)
-	if backendAuth == "" {
-		backendAuth = in.Header.Get("Authorization")
-	}
-	if backendAuth != "" {
-		req.Header.Set("Authorization", backendAuth)
-	}
-	return req, nil
-}
-
-// chatCompletionsURL joins base (with or without trailing /v1 or /v1/openai) to the OpenAI chat path.
-func chatCompletionsURL(base string) string {
-	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if isOpenAICompatAPIRoot(base) {
-		return base + "/chat/completions"
-	}
-	return base + "/v1/chat/completions"
-}
 
 const (
 	headerRouterSelectedModel     = "x-model-router-selected-model"
@@ -88,7 +22,7 @@ const (
 
 // extractRouterSelectedModel reads Switchyard routing metadata from response headers or JSON body.
 func extractRouterSelectedModel(hdr http.Header, body []byte) string {
-	for _, key := range []string{headerRouterSelectedModel, headerSwitchyardSelectedModel} {
+	for _, key := range selectedModelHeaders {
 		if v := strings.TrimSpace(hdr.Get(key)); v != "" {
 			return v
 		}
@@ -102,173 +36,47 @@ func extractRouterSelectedModel(hdr http.Header, body []byte) string {
 	return strings.TrimSpace(root.Model)
 }
 
-// chatDial is one chat completion sent to an OpenAI-shaped backend or Switchyard.
-type chatDial struct {
-	backendURL string
-	transport  proxyTransport
-	// hop bounds a non-stream call end to end, and a stream until its headers arrive.
-	hop time.Duration
-	// streamIdle is the longest gap allowed between stream chunks.
-	streamIdle  time.Duration
-	backendAuth string
-	// stream is whether the body asks for SSE.
-	stream bool
-	// recordRouterSelectedModel tags the span with the model a router picked.
-	recordRouterSelectedModel bool
-	log                       *slog.Logger
-	// chunkDumps is where dropped stream chunks are dumped.
-	chunkDumps chunkDumpSink
+// selectedModel records the model a composed router (Switchyard) picked on the
+// request span, once: from the router's response headers, else from the first
+// response body that names a model. A nil *selectedModel records nothing.
+type selectedModel struct {
+	ctx      context.Context
+	recorded bool
 }
 
-func proxyChat(w http.ResponseWriter, r *http.Request, body []byte, d chatDial) error {
-	if d.log == nil || !d.transport.ready() {
-		return derrors.New(derrors.CodeInternal, "gateway.proxyChat", "chat dial needs a logger and a transport")
+// selectedModelHeaders are the router response headers that reach the caller. The
+// gateway forwards no other Switchyard header.
+var selectedModelHeaders = []string{headerRouterSelectedModel, headerSwitchyardSelectedModel}
+
+// fromHeader copies the router's selected-model headers to the caller (before the
+// status is written) and records the pick they name.
+func (s *selectedModel) fromHeader(w http.ResponseWriter, header http.Header) {
+	if s == nil {
+		return
 	}
-	target := chatCompletionsURL(d.backendURL)
-	observability.RecordProxyIO(r.Context(), observability.ProxyIO{Target: target, Streaming: d.stream, BodyBytes: -1})
-	hop := hopBudget(d.hop, config.DefaultTimeouts().Chat)
-	// Non-stream: the hop bounds the whole call. Stream: the hop bounds the wait for
-	// headers, then the idle limit bounds each gap between chunks.
-	var ctx context.Context
-	var cancel context.CancelFunc
-	if d.stream {
-		ctx, cancel = context.WithCancel(r.Context())
-	} else {
-		ctx, cancel = context.WithTimeout(r.Context(), hop)
+	for _, key := range selectedModelHeaders {
+		if v := strings.TrimSpace(header.Get(key)); v != "" {
+			w.Header().Set(key, v)
+		}
 	}
-	defer cancel()
-	req, err := d.newRequest(ctx, r, target, body, hop)
-	if err != nil {
-		return err
-	}
-	resp, err := d.send(ctx, req, hop, cancel)
-	if err != nil {
-		return derrors.Wrap(err, derrors.CodeUnavailable, "gateway.proxyChat", "post").
-			With("target", target)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if d.stream {
-		resp.Body = newIdleTimeoutBody(resp.Body, d.streamIdle, cancel)
-		return d.writeStreamResponse(w, r, resp, target)
-	}
-	return d.writeResponse(w, r, resp, target)
+	s.record(extractRouterSelectedModel(header, nil))
 }
 
-// newRequest builds the backend POST. The backend's own credential wins; without one
-// the caller's Authorization header is forwarded.
-func (d chatDial) newRequest(ctx context.Context, r *http.Request, target string, body []byte, hop time.Duration) (*http.Request, error) {
-	accept := "application/json"
-	if d.stream {
-		accept = "text/event-stream, application/json"
+// fromBody records the model a response body (or stream chunk) names, unless a
+// pick is already recorded.
+func (s *selectedModel) fromBody(body []byte) {
+	if s == nil || s.recorded {
+		return
 	}
-	req, err := newBackendPOST(ctx, r, target, d.backendAuth, accept, body)
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeInternal, "gateway.proxyChat", "request")
-	}
-	req.Header.Set(config.TimeoutHeader, hop.String())
-	return req, nil
+	s.record(extractRouterSelectedModel(nil, body))
 }
 
-// send dials once. A stream must get its headers within hop (cancel ends it
-// otherwise); a non-stream call is bounded by ctx.
-func (d chatDial) send(ctx context.Context, req *http.Request, hop time.Duration, cancel context.CancelFunc) (*http.Response, error) {
-	if d.stream {
-		// Streams carry no ctx deadline: the first-byte timer and the idle body bound
-		// them, so the dial goes through the breaker without a deadline check.
-		firstByte := time.AfterFunc(hop, cancel)
-		resp, err := d.transport.policies.DoStreamOnce(ctx, outbound.DepGateway, d.transport.streamClient, req)
-		if !firstByte.Stop() && err != nil {
-			err = derrors.Wrap(err, derrors.CodeTimeout, "gateway.proxyChat", "no response headers within the hop budget").
-				With("hop", hop.String())
-		}
-		return resp, err
+func (s *selectedModel) record(model string) {
+	if s.recorded || model == "" {
+		return
 	}
-	// Sent once: retries belong to the caller and the fallback router, which get the
-	// first 429 or 5xx with its Retry-After.
-	return d.transport.policies.DoOnce(ctx, outbound.DepGateway, d.transport.client, req)
-}
-
-// writeResponse relays a non-stream answer: a rate limit becomes an OpenAI 429 body,
-// and a success has reasoning merged into content (and the router's pick recorded).
-func (d chatDial) writeResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string) error {
-	raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
-	if err != nil {
-		observability.RecordProxyIO(r.Context(), observability.ProxyIO{Target: target, StatusCode: resp.StatusCode, BodyBytes: -1})
-		return err
-	}
-	observability.RecordProxyIO(r.Context(), observability.ProxyIO{Target: target, StatusCode: resp.StatusCode, BodyBytes: len(raw)})
-	status := resp.StatusCode
-	if rewritten, ok := openaiRateLimitBody(resp.StatusCode, resp.Header, raw); ok {
-		raw = rewritten
-		status = http.StatusTooManyRequests
-	} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		raw = normalizeChatCompletion(r.Context(), w, raw)
-		if d.recordRouterSelectedModel {
-			observability.RecordDownstreamModel(r.Context(), extractRouterSelectedModel(resp.Header, raw))
-		}
-	}
-	copyChatResponseHeaders(w, resp.Header)
-	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
-	w.WriteHeader(status)
-	if _, err := w.Write(raw); err != nil {
-		return afterHeaders(r.Context(), err, true, "gateway.proxyChat", "write response")
-	}
-	return upstream.StatusFailure(status)
-}
-
-func (d chatDial) writeStreamResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, target string) error {
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, err := readUpstream(resp.Body, chatMaxBody, "gateway.proxyChat")
-		if err != nil {
-			observability.RecordProxyIO(r.Context(), observability.ProxyIO{Target: target, Streaming: true, StatusCode: resp.StatusCode, BodyBytes: -1})
-			return err
-		}
-		status := resp.StatusCode
-		if rewritten, ok := openaiRateLimitBody(resp.StatusCode, resp.Header, raw); ok {
-			raw = rewritten
-			status = http.StatusTooManyRequests
-		}
-		copyChatResponseHeaders(w, resp.Header)
-		w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
-		w.WriteHeader(status)
-		_, err = w.Write(raw)
-		observability.RecordProxyIO(r.Context(), observability.ProxyIO{Target: target, Streaming: true, StatusCode: status, BodyBytes: len(raw)})
-		if err != nil {
-			return afterHeaders(r.Context(), err, true, "gateway.proxyChat", "write stream")
-		}
-		return upstream.StatusFailure(status)
-	}
-	copyChatResponseHeaders(w, resp.Header)
-	ctx := withStreamChunkCounter(r.Context(), d.chunkDumps)
-	n, err := copyOpenAIChatStreamWithOpts(ctx, w, io.LimitReader(resp.Body, chatMaxBody), false, &streamCopyOpts{
-		responseWriter:   w,
-		statusCode:       resp.StatusCode,
-		delayWriteHeader: true,
-	})
-	observability.RecordProxyIO(r.Context(), observability.ProxyIO{Target: target, Streaming: true, StatusCode: resp.StatusCode, BodyBytes: int(n)})
-	if err != nil {
-		return afterHeaders(r.Context(), err, false, "gateway.proxyChat", "copy stream")
-	}
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	return upstream.StatusFailure(resp.StatusCode)
-}
-
-func copyChatResponseHeaders(w http.ResponseWriter, header http.Header) {
-	for k, vals := range header {
-		if len(vals) == 0 {
-			continue
-		}
-		switch strings.ToLower(k) {
-		case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-			"te", "trailers", "transfer-encoding", "upgrade", "content-length":
-			continue
-		}
-		for _, v := range vals {
-			w.Header().Add(k, v)
-		}
-	}
+	observability.RecordDownstreamModel(s.ctx, model)
+	s.recorded = true
 }
 
 // applyChatThinkingRoot maps inbound OpenAI reasoning to the backend's own fields in

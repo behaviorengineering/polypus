@@ -53,6 +53,7 @@ func (c Client) ListModels(ctx context.Context, target, auth string) ([]Model, e
 	}
 	resp, err := c.Policies.Do(ctx, outbound.DepGateway, c.HTTP, req)
 	if err != nil {
+		outbound.CloseResponse(resp)
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "get")
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -116,6 +117,7 @@ func (c Client) probe(ctx context.Context, op, target string, healthy func(statu
 	}
 	resp, err := c.Policies.Do(ctx, outbound.DepHealth, c.HTTP, req)
 	if err != nil {
+		outbound.CloseResponse(resp)
 		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "get")
 	}
 	defer func() { _ = resp.Body.Close() }()

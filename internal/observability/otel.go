@@ -116,11 +116,14 @@ func httpServerSpanName(r *http.Request) string {
 	return defaultServiceName + " SERVER " + r.Method + " " + r.URL.Path
 }
 
+// httpClientSpanName names an outbound span by method and host only. The path stays
+// out of the name: it can carry ids (a Cloudflare account, a batch, a file) that
+// would make every span name unique. redactSpanRequestURL records it as url.path.
 func httpClientSpanName(r *http.Request) string {
 	if r == nil || r.URL == nil {
 		return defaultServiceName + " CLIENT HTTP"
 	}
-	return defaultServiceName + " CLIENT " + r.Method + " " + r.URL.Host + r.URL.Path
+	return defaultServiceName + " CLIENT " + r.Method + " " + r.URL.Host
 }
 
 // WrapTransport injects W3C context on outbound HTTP (backend arms).

@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -11,19 +12,43 @@ import (
 	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/statefile"
 )
 
 const (
 	fileMetaDir    = "files"
 	fileContentDir = "files/content"
 	batchMetaDir   = "batches"
+	// lockBase names the cross-process lock: statefile adds ".lock", so the lock
+	// file is <root>/store.lock.
+	lockBase = "store"
 )
 
 // DiskStore persists OpenAI-shaped files and batch metadata under a root directory.
+// Every write holds mu (ordering within this process) and a file lock under the root
+// (ordering between processes that share it), so two gateways on one batch directory
+// cannot interleave a read-modify-write. Reads take mu only: each record is replaced
+// by an atomic rename, so a reader sees the old record or the new one.
 type DiskStore struct {
 	root string
 	mu   sync.Mutex
 	now  func() time.Time
+}
+
+// withWriteLock runs fn holding mu and the store's file lock. ctx bounds the wait for
+// another process to release the lock. fn's own error is returned as it is; only a
+// lock failure is wrapped with op.
+func (s *DiskStore) withWriteLock(ctx context.Context, op string, fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var fnErr error
+	if err := statefile.WithFileLock(ctx, filepath.Join(s.root, lockBase), func() error {
+		fnErr = fn()
+		return nil
+	}); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), op, "lock")
+	}
+	return fnErr
 }
 
 // NewDiskStore creates a store at root. now must be non-nil (inject at gateway entry).
@@ -48,16 +73,16 @@ func (s *DiskStore) unixNow() int64 {
 }
 
 // SaveFile stores content and metadata; rec sets ID and timestamps when empty.
-func (s *DiskStore) SaveFile(rec *FileRecord, content []byte) error {
+func (s *DiskStore) SaveFile(ctx context.Context, rec *FileRecord, content []byte) error {
 	if s == nil || rec == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.SaveFile", "not configured")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.prepareFileRecordLocked(rec, content); err != nil {
-		return err
-	}
-	return s.saveFileUnlocked(rec, content)
+	return s.withWriteLock(ctx, "batch.SaveFile", func() error {
+		if err := s.prepareFileRecordLocked(rec, content); err != nil {
+			return err
+		}
+		return s.saveFileUnlocked(rec, content)
+	})
 }
 
 func (s *DiskStore) prepareFileRecordLocked(rec *FileRecord, content []byte) error {
@@ -149,7 +174,7 @@ func (s *DiskStore) ReadFileContent(id string) ([]byte, error) {
 }
 
 // DeleteFile removes metadata and content when not referenced by an active batch.
-func (s *DiskStore) DeleteFile(id string) error {
+func (s *DiskStore) DeleteFile(ctx context.Context, id string) error {
 	if s == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.DeleteFile", "not configured")
 	}
@@ -157,17 +182,17 @@ func (s *DiskStore) DeleteFile(id string) error {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := s.readFileMeta("batch.DeleteFile", id); err != nil {
-		return err
-	}
-	if inUse, err := s.fileReferencedByBatchLocked(id); err != nil {
-		return err
-	} else if inUse {
-		return derrors.New(derrors.CodeConflict, "batch.DeleteFile", "file referenced by a batch")
-	}
-	return s.removeFileUnlocked(id)
+	return s.withWriteLock(ctx, "batch.DeleteFile", func() error {
+		if _, err := s.readFileMeta("batch.DeleteFile", id); err != nil {
+			return err
+		}
+		if inUse, err := s.fileReferencedByBatchLocked(id); err != nil {
+			return err
+		} else if inUse {
+			return derrors.New(derrors.CodeConflict, "batch.DeleteFile", "file referenced by a batch")
+		}
+		return s.removeFileUnlocked(id)
+	})
 }
 
 // removeFileUnlocked deletes a file's metadata and content; the caller holds s.mu.
@@ -217,7 +242,7 @@ func (s *DiskStore) eachBatchUnlocked(op string, fn func(Meta) bool) error {
 }
 
 // SaveBatch writes batch metadata.
-func (s *DiskStore) SaveBatch(meta *Meta) error {
+func (s *DiskStore) SaveBatch(ctx context.Context, meta *Meta) error {
 	if s == nil || meta == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.SaveBatch", "not configured")
 	}
@@ -230,22 +255,22 @@ func (s *DiskStore) SaveBatch(meta *Meta) error {
 	if meta.CreatedAt == 0 {
 		meta.CreatedAt = s.unixNow()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.writeBatchMeta("batch.SaveBatch", meta)
+	return s.withWriteLock(ctx, "batch.SaveBatch", func() error {
+		return s.writeBatchMeta("batch.SaveBatch", meta)
+	})
 }
 
 // UpdateBatch replaces batch metadata.
-func (s *DiskStore) UpdateBatch(meta Meta) error {
+func (s *DiskStore) UpdateBatch(ctx context.Context, meta Meta) error {
 	if s == nil {
 		return derrors.New(derrors.CodeFailedPrecondition, "batch.UpdateBatch", "not configured")
 	}
 	if _, err := checkID("batch.UpdateBatch", meta.ID); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.writeBatchMeta("batch.UpdateBatch", &meta)
+	return s.withWriteLock(ctx, "batch.UpdateBatch", func() error {
+		return s.writeBatchMeta("batch.UpdateBatch", &meta)
+	})
 }
 
 // writeBatchMeta stores meta; op names the caller in errors. The caller holds s.mu.
@@ -326,26 +351,12 @@ func readJSON(path string, out any) error {
 	return json.Unmarshal(raw, out)
 }
 
+// writeFileAtomic replaces path through statefile.WriteAtomic, which syncs the temp
+// file before the rename and the directory after it, so a crash keeps the old record
+// or the new one.
 func writeFileAtomic(path string, content []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "batch.writeFileAtomic", "mkdir")
-	}
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, "batch.writeFileAtomic", "temp")
-	}
-	tmpName := tmp.Name()
-	// Cleanup errors join the cause, so a leftover .tmp-* file leaves a trace.
-	if _, err := tmp.Write(content); err != nil {
-		cleanup := errors.Join(tmp.Close(), os.Remove(tmpName))
-		return derrors.Wrap(errors.Join(err, cleanup), derrors.CodeInternal, "batch.writeFileAtomic", "write")
-	}
-	if err := tmp.Close(); err != nil {
-		return derrors.Wrap(errors.Join(err, os.Remove(tmpName)), derrors.CodeInternal, "batch.writeFileAtomic", "close")
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return derrors.Wrap(errors.Join(err, os.Remove(tmpName)), derrors.CodeInternal, "batch.writeFileAtomic", "rename")
+	if err := statefile.WriteAtomic(path, content, 0o600); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "batch.writeFileAtomic", "write").With("path", path)
 	}
 	return nil
 }

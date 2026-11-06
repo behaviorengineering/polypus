@@ -25,8 +25,28 @@ func TestPollOKAfterTransient(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := Poll(ctx, srv.Client(), srv.URL); err != nil {
+	if err := Poll(ctx, srv.Client(), srv.URL, time.Millisecond); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPollZeroIntervalUsesDefault(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "starting", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	// The budget ends well before DefaultPollInterval, so a zero interval that
+	// resolves to the default leaves time for one round only.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := Poll(ctx, srv.Client(), srv.URL, 0); derrors.CodeOf(err) != derrors.CodeTimeout {
+		t.Fatalf("err = %v, want a timeout", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("health calls = %d, want 1 (one round, then the default pause)", got)
 	}
 }
 
@@ -38,7 +58,7 @@ func TestPollTimeoutKeepsLastError(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	err := Poll(ctx, srv.Client(), srv.URL)
+	err := Poll(ctx, srv.Client(), srv.URL, 0)
 	if derrors.CodeOf(err) != derrors.CodeTimeout {
 		t.Fatalf("err = %v, want a timeout", err)
 	}
@@ -53,7 +73,7 @@ func TestPollTransportErrorKept(t *testing.T) {
 	srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	err := Poll(ctx, &http.Client{}, url)
+	err := Poll(ctx, &http.Client{}, url, time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "GET /health") {
 		t.Fatalf("err = %v, want the dial failure named", err)
 	}
@@ -70,14 +90,14 @@ func TestPollCancelDuringWait(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	err := Poll(ctx, srv.Client(), srv.URL)
+	err := Poll(ctx, srv.Client(), srv.URL, 0)
 	if derrors.CodeOf(err) != derrors.CodeCanceled {
 		t.Fatalf("err = %v, want canceled", err)
 	}
 }
 
 func TestPollNeedsDeadline(t *testing.T) {
-	if err := Poll(context.Background(), &http.Client{}, "http://127.0.0.1:1"); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+	if err := Poll(context.Background(), &http.Client{}, "http://127.0.0.1:1", 0); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
 		t.Fatalf("err = %v, want a missing deadline refused", err)
 	}
 }

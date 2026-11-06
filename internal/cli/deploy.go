@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/buildinfo"
-	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/deploy"
 	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
 	"github.com/behaviorengineering/polypus/internal/deploy/paths"
@@ -150,6 +149,10 @@ func newDeployRunCmd() *cobra.Command {
 		Short:   "Deploy the stack, then check health and smoke",
 		GroupID: groupMutate,
 		Args:    cobra.NoArgs,
+		PreRunE: envBoolDefaults(
+			envBoolFlag{name: "skip-smoke", env: "POLYPUS_DEPLOY_SKIP_SMOKE", dst: &o.SkipSmoke},
+			envBoolFlag{name: "skip-overlay-prune", env: "POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE", dst: &o.SkipOverlayPrune},
+		),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts, err := t.options()
 			if err != nil {
@@ -181,8 +184,8 @@ func newDeployRunCmd() *cobra.Command {
 	f.BoolVar(&o.SkipPull, "skip-pull", false, "skip docker compose pull")
 	f.StringVar(&o.HealthURL, "health-url", "", healthURLHelp)
 	f.DurationVar(&o.HealthTimeout, "health-timeout", 120*time.Second, "health poll timeout")
-	f.BoolVar(&o.SkipSmoke, "skip-smoke", config.EnvBool("POLYPUS_DEPLOY_SKIP_SMOKE", false), "skip the inference smoke after health (env POLYPUS_DEPLOY_SKIP_SMOKE=1)")
-	f.BoolVar(&o.SkipOverlayPrune, "skip-overlay-prune", config.EnvBool("POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE", false), "skip the models allow overlay prune before the gateway is recreated (env POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE=1)")
+	f.BoolVar(&o.SkipSmoke, "skip-smoke", false, "skip the inference smoke after health (env POLYPUS_DEPLOY_SKIP_SMOKE=1)")
+	f.BoolVar(&o.SkipOverlayPrune, "skip-overlay-prune", false, "skip the models allow overlay prune before the gateway is recreated (env POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE=1)")
 	bindSmokeModelFlags(cmd, &o.SmokeTimeout, &o.SmokeChatModel)
 	return cmd
 }
@@ -209,6 +212,11 @@ when the YAML enables it. A --with-* flag you pass, or --smoke-chat-model, wins 
 that. Without an environment, smoke sends one chat to --smoke-chat-model.`,
 		GroupID: groupInspect,
 		Args:    cobra.NoArgs,
+		PreRunE: envBoolDefaults(
+			envBoolFlag{name: "with-router", env: "POLYPUS_SWITCHYARD", dst: &o.WithRouter},
+			envBoolFlag{name: "with-systemone", env: "POLYPUS_SMOKE_SYSTEMONE", dst: &o.WithSystemOne},
+			envBoolFlag{name: "with-providers", env: "POLYPUS_SMOKE_PROVIDERS", dst: &o.WithProviders},
+		),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := resolveDeploySmoke(cmd, &t, &o, envDeploy); err != nil {
 				return err
@@ -227,12 +235,12 @@ that. Without an environment, smoke sends one chat to --smoke-chat-model.`,
 	t.bind(cmd)
 	f := cmd.Flags()
 	f.StringVar(&o.BaseURL, "health-url", "", healthURLHelp)
-	// POLYPUS_SWITCHYARD is read with the same parser serve uses. Unset means off
-	// here: a router smoke needs an environment's gateway YAML, and with one the
-	// deploy run checks decide instead.
-	f.BoolVar(&o.WithRouter, "with-router", config.EnvBool("POLYPUS_SWITCHYARD", false), "also smoke each chat router in the gateway YAML, reporting the model that answered (default with an environment: as deploy run)")
-	f.BoolVar(&o.WithSystemOne, "with-systemone", config.EnvBool("POLYPUS_SMOKE_SYSTEMONE", false), "also smoke /v1/systemone for the gateway YAML's SystemOne backends (default with an environment: as deploy run)")
-	f.BoolVar(&o.WithProviders, "with-providers", config.EnvBool("POLYPUS_SMOKE_PROVIDERS", false), "smoke chat per backend in the gateway YAML whose secrets are set, in place of --smoke-chat-model (default with an environment: as deploy run)")
+	// POLYPUS_SWITCHYARD is read with the same parser serve uses (see PreRunE).
+	// Unset means off here: a router smoke needs an environment's gateway YAML, and
+	// with one the deploy run checks decide instead.
+	f.BoolVar(&o.WithRouter, "with-router", false, "also smoke each chat router in the gateway YAML, reporting the model that answered (default with an environment: as deploy run)")
+	f.BoolVar(&o.WithSystemOne, "with-systemone", false, "also smoke /v1/systemone for the gateway YAML's SystemOne backends (default with an environment: as deploy run)")
+	f.BoolVar(&o.WithProviders, "with-providers", false, "smoke chat per backend in the gateway YAML whose secrets are set, in place of --smoke-chat-model (default with an environment: as deploy run)")
 	f.StringVar(&envDeploy, "env-deploy", "", "dotenv with secret names for --with-providers (default: .env.deploy in the environment's state folder)")
 	bindSmokeModelFlags(cmd, &timeout, &o.ChatModel)
 	return cmd
@@ -243,6 +251,7 @@ that. Without an environment, smoke sends one chat to --smoke-chat-model.`,
 // Without an environment the options stay as the flags set them, and only a check
 // that needs one fails.
 func resolveDeploySmoke(cmd *cobra.Command, t *deployTarget, o *smoke.Options, envDeploy string) error {
+	o.SystemOneRequested = cmd.Flags().Changed("with-systemone") && o.WithSystemOne
 	env, found, err := discoverOptional(t.config)
 	if err != nil {
 		return err

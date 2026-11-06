@@ -12,8 +12,8 @@ import (
 
 const opGet = "anthropic.Clients.Get"
 
-// Clients caches one catalog client per backend, credential and URL. A gateway owns
-// one; its clients share the gateway's outbound policies and clock.
+// Clients caches one catalog client per backend; a changed credential or URL replaces
+// it. A gateway owns one; its clients share the gateway's outbound policies and clock.
 type Clients struct {
 	Policies *outbound.Policies
 	// Logger receives the clients' warnings; nil discards them.
@@ -36,8 +36,7 @@ func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "resolve token").With("backend", b.ID)
 	}
 	listURL := modelsListURL(b.BaseURL)
-	key := b.ID + "\x00" + token + "\x00" + listURL
-	return cs.reg.Get(key, func() (*Client, error) {
+	return cs.reg.Get(b.ID, token+"\x00"+listURL, func() (*Client, error) {
 		c, err := newClient(listURL, token, cs.Now)
 		if err != nil {
 			return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "build client").With("backend", b.ID)

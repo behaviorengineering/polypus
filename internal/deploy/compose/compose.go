@@ -5,12 +5,21 @@ package compose
 import (
 	"context"
 	"os"
+	"os/exec"
 	"slices"
 
 	"github.com/behaviorengineering/polypus/internal/deploy/execx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
+
+// Runner runs one docker command with env and returns its failure; the default is
+// execx.RunContext.
+type Runner func(ctx context.Context, name string, args, env []string) error
+
+// OutputRunner runs one docker command with env and returns its combined output,
+// for text a person reads; the default is execx.OutputContext.
+type OutputRunner func(ctx context.Context, name string, args, env []string) ([]byte, error)
 
 // Client runs docker compose for one environment's project.
 type Client struct {
@@ -23,6 +32,16 @@ type Client struct {
 	// environment of every docker command (later entries win), so the deploy never
 	// changes its own process environment.
 	Env []string
+	// Run runs each docker command; nil uses execx.RunContext.
+	Run Runner
+	// Output runs each docker command whose output is read; nil uses
+	// execx.OutputContext.
+	Output OutputRunner
+	// LookPath finds the docker binary before a pull; nil uses exec.LookPath.
+	LookPath func(file string) (string, error)
+	// Policies holds the retry and breaker state for docker and registry calls;
+	// nil uses the process default.
+	Policies *outbound.Policies
 }
 
 // Args returns the docker arguments for compose subcommand sub in this project.
@@ -43,12 +62,41 @@ func (c Client) Environ() []string {
 	return append(os.Environ(), slices.Clone(c.Env)...)
 }
 
+// run runs docker with args in this project's environment, through Run.
+func (c Client) run(ctx context.Context, args []string) error {
+	run := c.Run
+	if run == nil {
+		run = execx.RunContext
+	}
+	return run(ctx, "docker", args, c.Environ())
+}
+
+// CombinedOutput runs docker with args in this project's environment and returns
+// what it wrote, through Output. It is for output a person reads, such as logs.
+func (c Client) CombinedOutput(ctx context.Context, args []string) ([]byte, error) {
+	output := c.Output
+	if output == nil {
+		output = execx.OutputContext
+	}
+	return output(ctx, "docker", args, c.Environ())
+}
+
+// lookDocker finds the docker binary through LookPath.
+func (c Client) lookDocker() error {
+	look := c.LookPath
+	if look == nil {
+		look = exec.LookPath
+	}
+	_, err := look("docker")
+	return err
+}
+
 func (c Client) runCompose(ctx context.Context, op string, args []string) error {
 	if ctx == nil {
 		return derrors.New(derrors.CodeInvalid, op, "context required")
 	}
-	err := outbound.Run(ctx, outbound.DepDockerDaemon, func() error {
-		err := execx.RunContext(ctx, "docker", args, c.Environ())
+	err := c.Policies.Run(ctx, outbound.DepDockerDaemon, func() error {
+		err := c.run(ctx, args)
 		if err == nil {
 			return nil
 		}

@@ -8,8 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/failsafe-go/failsafe-go"
+	"github.com/failsafe-go/failsafe-go/circuitbreaker"
+
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/sony/gobreaker"
 )
 
 // Well-known breaker names.
@@ -17,11 +19,22 @@ const (
 	NameSwitchyard = "switchyard"
 )
 
-// Gobreaker policy shared with HTTP Retry-After on breaker rejects.
+// Breaker policy, shared with HTTP Retry-After on breaker refusals.
 const (
-	OpenTimeout             = 30 * time.Second
-	halfOpenMaxRequests     = uint32(1)
-	ConsecutiveFailuresTrip = uint32(3)
+	// OpenTimeout is how long a tripped breaker stays open before a trial call.
+	OpenTimeout = 30 * time.Second
+	// halfOpenMaxRequests is the trial calls a half-open breaker lets through; that
+	// many successes close it again.
+	halfOpenMaxRequests = uint(1)
+	// ConsecutiveFailuresTrip is the run of upstream failures that opens a breaker.
+	ConsecutiveFailuresTrip = uint(3)
+)
+
+// ErrOpen and ErrHalfOpen are the causes UnavailableError wraps when a breaker
+// refuses a call: open, or half-open with its trial call already in flight.
+var (
+	ErrOpen     = errors.New("circuit breaker is open")
+	ErrHalfOpen = errors.New("circuit breaker is half-open")
 )
 
 // ErrResponseWritten means the upstream HTTP status was already copied to the
@@ -33,29 +46,45 @@ var ErrResponseWritten = errors.New("upstream: response already written")
 // (backend id or NameSwitchyard). The zero value is ready to use.
 type Board struct {
 	mu sync.Mutex
-	cb map[string]*gobreaker.CircuitBreaker
+	cb map[string]circuitbreaker.CircuitBreaker[any]
+	// openDelay overrides OpenTimeout (tests); zero means OpenTimeout.
+	openDelay time.Duration
 }
 
 // NewBoard returns an empty breaker board.
 func NewBoard() *Board {
-	return &Board{cb: make(map[string]*gobreaker.CircuitBreaker)}
+	return &Board{cb: make(map[string]circuitbreaker.CircuitBreaker[any])}
 }
 
-// Execute runs fn under the named breaker. A nil Board runs fn directly.
+// Execute runs fn under the named breaker. A nil Board runs fn directly. A call the
+// breaker refuses returns UnavailableError without running fn; any other error is
+// fn's own, unchanged.
 func (b *Board) Execute(name string, fn func() error) error {
 	if b == nil {
 		return fn()
 	}
 	name = normalizeName(name)
-	_, err := b.breaker(name).Execute(func() (interface{}, error) {
-		return nil, fn()
+	cb := b.breaker(name)
+	ran := false
+	err := failsafe.With[any](cb).Run(func() error {
+		ran = true
+		return fn()
 	})
-	return mapExecuteErr(name, err)
+	if err == nil || ran || !errors.Is(err, circuitbreaker.ErrOpen) {
+		return err
+	}
+	// Read the state at refusal time: a half-open breaker refuses while its trial
+	// call is in flight.
+	if cb.IsHalfOpen() {
+		return UnavailableError(name, ErrHalfOpen)
+	}
+	return UnavailableError(name, ErrOpen)
 }
 
-// Unavailable reports whether err is a fail-open (circuit open / half-open limit).
+// Unavailable reports whether err is a breaker refusal (open, or half-open with its
+// trial call in flight).
 func Unavailable(err error) bool {
-	return errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests)
+	return errors.Is(err, ErrOpen) || errors.Is(err, ErrHalfOpen)
 }
 
 // ResponseWritten reports whether the dial already wrote the client response.
@@ -72,31 +101,30 @@ func StatusFailure(status int) error {
 	return nil
 }
 
-func (b *Board) breaker(name string) *gobreaker.CircuitBreaker {
+func (b *Board) breaker(name string) circuitbreaker.CircuitBreaker[any] {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.cb == nil {
-		b.cb = make(map[string]*gobreaker.CircuitBreaker)
+		b.cb = make(map[string]circuitbreaker.CircuitBreaker[any])
 	}
 	if c, ok := b.cb[name]; ok {
 		return c
 	}
-	c := gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		Name:        name,
-		MaxRequests: halfOpenMaxRequests,
-		Interval:    0,
-		Timeout:     OpenTimeout,
-		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			return counts.ConsecutiveFailures >= ConsecutiveFailuresTrip
-		},
-		IsSuccessful: func(err error) bool {
-			if err == nil {
-				return true
-			}
+	delay := b.openDelay
+	if delay <= 0 {
+		delay = OpenTimeout
+	}
+	// Count based: it opens when the last ConsecutiveFailuresTrip calls all failed,
+	// so any success in between keeps it closed.
+	c := circuitbreaker.NewBuilder[any]().
+		HandleIf(func(_ any, err error) bool {
 			// Quota and capacity 429s and caller errors (4xx) are caller-visible, not a dead upstream.
-			return callerVisible(derrors.CodeOf(err))
-		},
-	})
+			return err != nil && !callerVisible(derrors.CodeOf(err))
+		}).
+		WithFailureThreshold(ConsecutiveFailuresTrip).
+		WithDelay(delay).
+		WithSuccessThreshold(halfOpenMaxRequests).
+		Build()
 	b.cb[name] = c
 	return c
 }
@@ -111,18 +139,8 @@ func normalizeName(name string) string {
 	return name
 }
 
-func mapExecuteErr(name string, err error) error {
-	if err == nil {
-		return nil
-	}
-	if Unavailable(err) {
-		return UnavailableError(name, err)
-	}
-	return err
-}
-
-// UnavailableError is the error for a call the breaker for name refused; err is the
-// breaker's (gobreaker.ErrOpenState or ErrTooManyRequests).
+// UnavailableError is the error for a call the breaker for name refused; err is
+// ErrOpen or ErrHalfOpen.
 func UnavailableError(name string, err error) error {
 	return derrors.Wrap(err, derrors.CodeUnavailable, "upstream.Execute", "upstream "+name+" unavailable").
 		With(FieldUpstream, name)

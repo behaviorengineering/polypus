@@ -159,7 +159,11 @@ func requireEnvironmentSecret(env envconfig.Environment, name string) error {
 
 func readDeploySecret(errOut io.Writer, name string, fromStdin bool) (string, error) {
 	if fromStdin {
-		return readLineStdin(os.Stdin)
+		return readSecretStdin(os.Stdin)
 	}
-	return readSecretPrompt(errOut, "polypus deploy secret set", name, os.Stdin)
+	v, err := readSecretPrompt(errOut, "polypus deploy secret set", name, os.Stdin)
+	if err != nil {
+		return "", err
+	}
+	return validateSecretValue(v)
 }

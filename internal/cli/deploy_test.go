@@ -247,21 +247,66 @@ func TestDeploySmokeFollowsDeployChecks(t *testing.T) {
 }
 
 // TestDeploySmokeReadsSwitchyardEnvLikeServe checks POLYPUS_SWITCHYARD goes through
-// the same boolean parser serve uses, so true, yes and on count as on.
+// the same boolean parser serve uses, so true, yes and on count as on, and unset
+// leaves --with-router off.
 func TestDeploySmokeReadsSwitchyardEnvLikeServe(t *testing.T) {
-	for raw, want := range map[string]string{
-		"":     "false",
-		"1":    "true",
-		"true": "true",
-		"yes":  "true",
-		"on":   "true",
-		"0":    "false",
-		"off":  "false",
+	for raw, want := range map[string]bool{
+		"":     false,
+		"1":    true,
+		"true": true,
+		"yes":  true,
+		"on":   true,
+		"0":    false,
+		"off":  false,
 	} {
 		t.Setenv("POLYPUS_SWITCHYARD", raw)
-		got := newDeploySmokeCmd().Flags().Lookup("with-router").DefValue
-		if got != want {
-			t.Errorf("POLYPUS_SWITCHYARD=%q: --with-router default %s, want %s", raw, got, want)
+		cmd := newDeploySmokeCmd()
+		if err := cmd.PreRunE(cmd, nil); err != nil {
+			t.Fatalf("POLYPUS_SWITCHYARD=%q: %v", raw, err)
 		}
+		got, err := cmd.Flags().GetBool("with-router")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("POLYPUS_SWITCHYARD=%q: --with-router %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// TestDeployFlagsRejectUnknownEnvWord checks each on/off variable behind a deploy
+// flag refuses a word it does not know with a usage error (exit 2), instead of
+// keeping the default.
+func TestDeployFlagsRejectUnknownEnvWord(t *testing.T) {
+	for env, cmd := range map[string]string{
+		"POLYPUS_DEPLOY_SKIP_SMOKE":         "run",
+		"POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE": "run",
+		"POLYPUS_SWITCHYARD":                "smoke",
+		"POLYPUS_SMOKE_SYSTEMONE":           "smoke",
+		"POLYPUS_SMOKE_PROVIDERS":           "smoke",
+	} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv(env, "maybe")
+			code, _, errOut := captureRun([]string{"deploy", cmd})
+			if code != 2 || !strings.Contains(errOut, env) {
+				t.Fatalf("%s=maybe: exit %d, want 2 naming %s\nstderr=%s", env, code, env, errOut)
+			}
+		})
+	}
+}
+
+// TestDeployFlagWinsOverEnvWord checks a flag the operator passes is not
+// overwritten by its env variable.
+func TestDeployFlagWinsOverEnvWord(t *testing.T) {
+	t.Setenv("POLYPUS_DEPLOY_SKIP_SMOKE", "1")
+	cmd := newDeployRunCmd()
+	if err := cmd.Flags().Set("skip-smoke", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.PreRunE(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := cmd.Flags().GetBool("skip-smoke"); err != nil || got {
+		t.Fatal("a passed --skip-smoke must not be replaced by POLYPUS_DEPLOY_SKIP_SMOKE")
 	}
 }

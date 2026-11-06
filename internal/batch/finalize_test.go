@@ -23,7 +23,7 @@ func TestTryFinalizeBatchConcurrent(t *testing.T) {
 		InputFileID: "file-in",
 		Endpoint:    EndpointChatCompletions,
 	}
-	if err := store.SaveBatch(meta); err != nil {
+	if err := store.SaveBatch(t.Context(), meta); err != nil {
 		t.Fatal(err)
 	}
 	patch := FinalizePatch{
@@ -38,7 +38,7 @@ func TestTryFinalizeBatchConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			_, ok, err := store.TryFinalizeBatch(meta.ID, patch)
+			_, ok, err := store.TryFinalizeBatch(t.Context(), meta.ID, patch)
 			if err != nil {
 				t.Errorf("finalize: %v", err)
 				return
@@ -76,7 +76,7 @@ func TestTryFinalizeBatchRejectsPathIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"../../x", "a/b", `..\x`, " "} {
-		_, applied, err := store.TryFinalizeBatch(id, FinalizePatch{Status: StatusCompleted})
+		_, applied, err := store.TryFinalizeBatch(t.Context(), id, FinalizePatch{Status: StatusCompleted})
 		if applied || derrors.CodeOf(err) != derrors.CodeInvalid {
 			t.Fatalf("id %q: applied=%v err=%v, want CodeInvalid", id, applied, err)
 		}
@@ -99,11 +99,11 @@ func TestStoreErrorsNameTheCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.UpdateBatch(Meta{ID: "missing-dir/../x"})
+	err = store.UpdateBatch(t.Context(), Meta{ID: "missing-dir/../x"})
 	if err == nil || !strings.Contains(err.Error(), "batch.UpdateBatch") {
 		t.Fatalf("want the UpdateBatch op, got %v", err)
 	}
-	if err := store.DeleteFile("file_none"); derrors.CodeOf(err) != derrors.CodeNotFound || !strings.Contains(err.Error(), "batch.DeleteFile") {
+	if err := store.DeleteFile(t.Context(), "file_none"); derrors.CodeOf(err) != derrors.CodeNotFound || !strings.Contains(err.Error(), "batch.DeleteFile") {
 		t.Fatalf("want a DeleteFile not-found, got %v", err)
 	}
 }

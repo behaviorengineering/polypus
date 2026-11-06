@@ -4,17 +4,19 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/sony/gobreaker"
+	"github.com/failsafe-go/failsafe-go/circuitbreaker"
 )
 
-// Snapshot is a point-in-time circuit breaker view.
+// Snapshot is a point-in-time circuit breaker view. The counts are failsafe-go's
+// breaker metrics: they cover the current state (closed or half-open), or the
+// closed state that tripped while the breaker is open, and reset on each change.
 type Snapshot struct {
-	Name                string `json:"name"`
-	State               string `json:"state"`
-	Requests            uint32 `json:"requests"`
-	TotalSuccesses      uint32 `json:"total_successes"`
-	TotalFailures       uint32 `json:"total_failures"`
-	ConsecutiveFailures uint32 `json:"consecutive_failures"`
+	Name        string  `json:"name"`
+	State       string  `json:"state"`
+	Executions  uint    `json:"executions"`
+	Successes   uint    `json:"successes"`
+	Failures    uint    `json:"failures"`
+	FailureRate float64 `json:"failure_rate"`
 }
 
 // Snapshot returns breaker state for all lazily created upstream names.
@@ -29,14 +31,14 @@ func (b *Board) Snapshot() []Snapshot {
 		if cb == nil {
 			continue
 		}
-		counts := cb.Counts()
+		m := cb.Metrics()
 		out = append(out, Snapshot{
-			Name:                name,
-			State:               breakerStateString(cb.State()),
-			Requests:            counts.Requests,
-			TotalSuccesses:      counts.TotalSuccesses,
-			TotalFailures:       counts.TotalFailures,
-			ConsecutiveFailures: counts.ConsecutiveFailures,
+			Name:        name,
+			State:       breakerStateString(cb.State()),
+			Executions:  m.Executions(),
+			Successes:   m.Successes(),
+			Failures:    m.Failures(),
+			FailureRate: m.FailureRate(),
 		})
 	}
 	// A stable order, so /health/upstreams lists the same way on every call.
@@ -52,13 +54,13 @@ const (
 	stateUnknown  = "unknown"
 )
 
-func breakerStateString(state gobreaker.State) string {
+func breakerStateString(state circuitbreaker.State) string {
 	switch state {
-	case gobreaker.StateClosed:
+	case circuitbreaker.ClosedState:
 		return stateClosed
-	case gobreaker.StateOpen:
+	case circuitbreaker.OpenState:
 		return stateOpen
-	case gobreaker.StateHalfOpen:
+	case circuitbreaker.HalfOpenState:
 		return stateHalfOpen
 	default:
 		return stateUnknown

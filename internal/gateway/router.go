@@ -10,12 +10,12 @@ import (
 	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 
-	"github.com/behaviorengineering/polypus/internal/batch/service"
 	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/clients/gemini"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/batches"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
 
@@ -24,7 +24,8 @@ type registryProvider interface {
 	Registry() *router.Registry
 }
 
-// chatRouter is the Bifrost/OpenAI chat and embed dial surface (≤4 methods).
+// chatRouter is the Bifrost chat and embed dial surface (≤4 methods). A backend it
+// does not register fails closed: there is no HTTP fallback.
 type chatRouter interface {
 	UsesBifrost(backendID string) bool
 	ChatCompletionRaw(ctx context.Context, call router.Call) ([]byte, error)
@@ -38,7 +39,8 @@ type speechRouter interface {
 	Transcribe(ctx context.Context, req router.TranscriptionRequest) ([]byte, string, error)
 }
 
-// systemOneRouter is the Bifrost Decision dial surface for native OpenRouter SystemOne.
+// systemOneRouter is the Bifrost Decision dial surface for SystemOne on native
+// OpenRouter and Typesafe backends.
 type systemOneRouter interface {
 	SystemOneDecisionRaw(ctx context.Context, call router.Call) ([]byte, error)
 }
@@ -133,7 +135,7 @@ type handlerOptions struct {
 	overlayPath    string
 	adminKeysPath  string
 	clock          func() time.Time
-	claudeBatches  service.ClaudeBatches
+	claudeBatches  batches.ClaudeBatches
 	policies       *outbound.Policies
 	openRouterGet  func(config.BackendDef) (*openrouter.Client, error)
 	logger         *slog.Logger
@@ -180,7 +182,7 @@ func WithAdminStateDir(dir string) HandlerOption {
 
 // withClaudeBatches sets the Anthropic Message Batches surface the batch service
 // uses (tests). By default it comes from the router client. Panics if b is nil.
-func withClaudeBatches(b service.ClaudeBatches) HandlerOption {
+func withClaudeBatches(b batches.ClaudeBatches) HandlerOption {
 	if b == nil {
 		panic("gateway: withClaudeBatches(nil)")
 	}

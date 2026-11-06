@@ -27,6 +27,7 @@ func (a probeAnswer) ok() bool { return a.status >= 200 && a.status < 300 }
 func fetch(ctx context.Context, req *http.Request) (probeAnswer, error) {
 	resp, err := outbound.Do(ctx, outbound.DepHealth, http.DefaultClient, req)
 	if err != nil {
+		outbound.CloseResponse(resp)
 		return probeAnswer{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()

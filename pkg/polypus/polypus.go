@@ -1,7 +1,8 @@
 // Package polypus is the public product façade for the Polypus inference gateway.
 //
 // Import this package from hosts and CI. Implementation and quality runners live
-// under internal/; cmd binaries are thin wrappers over this API.
+// under internal/, and the cmd binaries wire internal/cli directly. Nothing under
+// internal/ imports this package, so it stays the outside hosts' contract.
 package polypus
 
 import (

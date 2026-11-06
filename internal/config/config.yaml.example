@@ -56,6 +56,12 @@ backends:
 #     allow:
 #       - allenai/olmocr-2-7b
 #       - text-embedding-nomic-embed-text-v1.5
+#   # Optional smoke block, read by polypus deploy for its post-deploy probes.
+#   # Absent: deploy probes a model it picks from models.allow.
+#   smoke:
+#     skip: true             # no deploy probes for this backend
+#     # chat: [qwen2.5-7b]   # or name the chat probe models (no backend prefix)
+#     # systemone: <model>   # and the SystemOne probe model
 
 # Optional Cloudflare in-process extension (needs CF_AI_API_KEY + CF_ACCOUNT_ID):
 # cf_local:

@@ -14,8 +14,9 @@ import (
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
-// pollInterval is the pause between rounds of health checks.
-const pollInterval = 2 * time.Second
+// DefaultPollInterval is the pause between rounds of health checks when the
+// caller passes zero.
+const DefaultPollInterval = 2 * time.Second
 
 // endpoints must all answer 200 for the gateway to count as up.
 var endpoints = []string{"/health", "/health/backends"}
@@ -23,8 +24,9 @@ var endpoints = []string{"/health", "/health/backends"}
 // Poll waits until both health endpoints at baseURL answer 200. ctx must carry a
 // deadline: it is the health budget. On timeout the error wraps the last failure
 // (transport error or status), so a TLS, DNS or 401 problem is not reported as a
-// gateway that is merely down. Each GET is sent once; the loop is the retry.
-func Poll(ctx context.Context, client *http.Client, baseURL string) error {
+// gateway that is merely down. Each GET is sent once; the loop is the retry, with
+// interval between rounds (zero or less uses DefaultPollInterval).
+func Poll(ctx context.Context, client *http.Client, baseURL string, interval time.Duration) error {
 	const op = "health.Poll"
 	if ctx == nil {
 		return derrors.New(derrors.CodeInvalid, op, "context required")
@@ -35,13 +37,16 @@ func Poll(ctx context.Context, client *http.Client, baseURL string) error {
 	if client == nil {
 		return derrors.New(derrors.CodeInvalid, op, "http client required")
 	}
+	if interval <= 0 {
+		interval = DefaultPollInterval
+	}
 	var lastErr error
 	for {
 		lastErr = checkOnce(ctx, client, baseURL)
 		if lastErr == nil {
 			return nil
 		}
-		if err := sleepCtx(ctx, pollInterval); err != nil {
+		if err := sleepCtx(ctx, interval); err != nil {
 			code := derrors.CodeTimeout
 			if errors.Is(err, context.Canceled) {
 				code = derrors.CodeCanceled

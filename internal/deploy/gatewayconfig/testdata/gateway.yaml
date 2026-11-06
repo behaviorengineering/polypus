@@ -145,6 +145,10 @@ backends:
     auth:
       bearer_env: GEMINI_API_KEY_FREE
     capabilities: [chat, vision]
+    # Gemma here often returns empty content under deploy smoke (reasoning and a
+    # low max_tokens), so deploy probes Google AI Studio through gemini_paid instead.
+    smoke:
+      skip: true
     models:
       sync: true
       allow:

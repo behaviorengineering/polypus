@@ -57,6 +57,7 @@ func TestAdminAllowGeminiFromLiveInventory(t *testing.T) {
 	)
 	body := []byte(`{"backend":"gemini_studio","model":"gemma-4-26b-a4b-it"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/models/allow", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -87,6 +88,7 @@ func TestAdminAllowGeminiInventoryMiss(t *testing.T) {
 		withGeminiClientGet(geminiTestClientGet(modelsSrv.URL)),
 	)
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/models/allow", bytes.NewReader([]byte(`{"backend":"gemini_studio","model":"not-in-google-catalog"}`)))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -155,6 +157,7 @@ func TestGeminiInventorySyncFalseSynthetic(t *testing.T) {
 		withGeminiClientGet(geminiTestClientGet(modelsSrv.URL)),
 	)
 	allowReq := httptest.NewRequest(http.MethodPost, "/v1/admin/models/allow", bytes.NewReader([]byte(`{"backend":"gemini_studio","model":"gemma-4-26b-a4b-it"}`)))
+	allowReq.Header.Set("Content-Type", "application/json")
 	allowRec := httptest.NewRecorder()
 	h2.ServeHTTP(allowRec, allowReq)
 	if allowRec.Code != http.StatusBadRequest {

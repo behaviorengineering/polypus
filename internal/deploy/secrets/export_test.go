@@ -128,3 +128,28 @@ func TestExportWithKeyringReadsTheGivenKeyring(t *testing.T) {
 		t.Fatalf("%v: want the key from the injected keyring", got)
 	}
 }
+
+// TestExportInvalidKeyWritesNothing checks a key that fails its shape check leaves
+// neither dotenv file behind, for the account ID and for a short API key.
+func TestExportInvalidKeyWritesNothing(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"short API key":     {"TS_AUTHKEY": "ts", "OPENROUTER_API_KEY": "short", "CF_ACCOUNT_ID": strings.Repeat("a", 32)},
+		"malformed account": {"TS_AUTHKEY": "ts", "OPENROUTER_API_KEY": strings.Repeat("k", minAPIKeyLen), "CF_ACCOUNT_ID": "not-an-id"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			out := filepath.Join(t.TempDir(), ".env.deploy")
+			err := ExportWithKeyring(operatorconfig.NewMemKeyring(), "polypus-work", []string{"TS_AUTHKEY", "OPENROUTER_API_KEY", "CF_ACCOUNT_ID"}, out)
+			if err == nil {
+				t.Fatal("expected the bad value refused")
+			}
+			for _, p := range []string{out, filepath.Join(filepath.Dir(out), GatewayEnvFileName)} {
+				if _, statErr := os.Stat(p); !os.IsNotExist(statErr) {
+					t.Errorf("%s should not exist after a failed check (stat err %v)", filepath.Base(p), statErr)
+				}
+			}
+		})
+	}
+}

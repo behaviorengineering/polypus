@@ -28,7 +28,7 @@ func ListenAndServe(ctx context.Context, opts config.ServeOptions, options ...Ha
 	if ctx == nil {
 		return derrors.New(derrors.CodeInvalid, "gateway.ListenAndServe", "context is required")
 	}
-	handler, g, err := newServingHandler(opts, options...)
+	handler, g, err := newServingHandler(ctx, opts, options...)
 	if err != nil {
 		return err
 	}
@@ -57,8 +57,8 @@ func ListenAndServe(ctx context.Context, opts config.ServeOptions, options ...Ha
 }
 
 // newServingHandler builds the public handler and the gateway behind it.
-func newServingHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handler, *gatewayHandler, error) {
-	handler, err := NewHandler(opts, options...)
+func newServingHandler(ctx context.Context, opts config.ServeOptions, options ...HandlerOption) (http.Handler, *gatewayHandler, error) {
+	handler, err := newHandler(ctx, opts, options...)
 	if err != nil {
 		return nil, nil, err
 	}

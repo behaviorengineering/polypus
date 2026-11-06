@@ -7,7 +7,6 @@ import (
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/ratelimit"
-	"github.com/sony/gobreaker"
 )
 
 // Layer values attribute a dial failure to the hop that failed.
@@ -47,7 +46,7 @@ func ClassifyDialFailure(err error, upstreamName string) FailureClass {
 	upstreamName = ResolveUpstreamName(err, upstreamName)
 	if Unavailable(err) {
 		state := stateOpen
-		if errors.Is(err, gobreaker.ErrTooManyRequests) {
+		if errors.Is(err, ErrHalfOpen) {
 			state = stateHalfOpen
 		}
 		return FailureClass{

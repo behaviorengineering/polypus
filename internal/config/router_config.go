@@ -53,7 +53,12 @@ const (
 	ExtensionCloudflare = "cloudflare"
 	ExtensionGemini     = "gemini"
 	ExtensionAnthropic  = "anthropic"
+	ExtensionTypesafe   = "typesafe"
 )
+
+// openRouterBackendID is the backend id Bifrost serves with its native OpenRouter
+// provider, which implements the SystemOne decision operation.
+const openRouterBackendID = "openrouter"
 
 // BackendDef is one OpenAI-compatible inference worker.
 type BackendDef struct {
@@ -67,6 +72,8 @@ type BackendDef struct {
 	Models       *BackendModels
 	// PromptCache turns automatic prompt caching off when false (Anthropic extension only; default on).
 	PromptCache *bool
+	// Smoke holds the deploy smoke choices for this backend (read by polypus deploy).
+	Smoke BackendSmoke
 }
 
 // HasExtension reports whether the backend uses a named extension module.
@@ -89,10 +96,23 @@ func (b BackendDef) IsAnthropicExtension() bool {
 	return b.HasExtension(ExtensionAnthropic)
 }
 
+// IsTypesafeExtension reports whether the backend is Typesafe's System One API, which
+// Bifrost serves through its Typesafe provider (POST /v1/systemone).
+func (b BackendDef) IsTypesafeExtension() bool {
+	return b.HasExtension(ExtensionTypesafe)
+}
+
+// HasSystemOneRoute reports whether a SystemOne decision can reach the backend: the
+// Cloudflare client (Workers AI jev), or Bifrost's decision operation on the native
+// OpenRouter provider or the Typesafe provider.
+func (b BackendDef) HasSystemOneRoute() bool {
+	return b.IsCloudflareExtension() || b.ID == openRouterBackendID || b.IsTypesafeExtension()
+}
+
 // IsOpenRouter reports whether the backend is OpenRouter: the backend id openrouter (which
 // Bifrost serves with its native OpenRouter provider) or a base_url on openrouter.ai.
 func (b BackendDef) IsOpenRouter() bool {
-	if strings.EqualFold(strings.TrimSpace(b.ID), "openrouter") {
+	if strings.EqualFold(strings.TrimSpace(b.ID), openRouterBackendID) {
 		return true
 	}
 	u, err := url.Parse(strings.TrimSpace(b.BaseURL))
@@ -114,7 +134,7 @@ func (b BackendDef) AutoPromptCache() bool {
 
 // baseURLOptional reports whether the extension supplies its own default upstream URL.
 func (b BackendDef) baseURLOptional() bool {
-	return b.IsGeminiExtension() || b.IsAnthropicExtension()
+	return b.IsGeminiExtension() || b.IsAnthropicExtension() || b.IsTypesafeExtension()
 }
 
 // CapabilityBackend is an optional capability default (chat, vision, embed, TTS, STT, proxy, systemone, batch).
@@ -254,6 +274,7 @@ type backendFileEntry struct {
 	Models       *BackendModels    `yaml:"models"`
 	PromptCache  *bool             `yaml:"prompt_cache"`
 	ExtraHeaders map[string]string `yaml:"extra_headers"`
+	Smoke        BackendSmoke      `yaml:"smoke"`
 }
 
 func parseCapabilityBackend(file capabilityBackendFile) CapabilityBackend {
@@ -282,7 +303,9 @@ func loadRouterConfig(opts ServeOptions) (RouterConfig, error) {
 	if err != nil {
 		return RouterConfig{}, err
 	}
-	if !fromFile || len(cfg.Backends) == 0 {
+	if !fromFile {
+		// No config file at all: the simple local default. A file with no backends
+		// is refused in loadRouterFileAt, never swapped for this.
 		cfg = defaultRouterFromEnv(opts)
 	}
 	if cfg.Timeouts.Max == 0 {
@@ -290,6 +313,11 @@ func loadRouterConfig(opts ServeOptions) (RouterConfig, error) {
 	}
 	applyRouterEnvOverrides(&cfg, opts)
 	applySwitchyardEnvOverrides(&cfg)
+	// SwitchyardEnabled reads POLYPUS_SWITCHYARD while serving; an unknown word is
+	// refused here, so a typo cannot flip Switchyard on behind the operator.
+	if _, err := ParseEnvBool("POLYPUS_SWITCHYARD", true); err != nil {
+		return RouterConfig{}, err
+	}
 	if err := normalizeRouterConfig(&cfg); err != nil {
 		return RouterConfig{}, err
 	}
@@ -370,6 +398,12 @@ func loadRouterFileAt(opts ServeOptions, path string) (RouterConfig, bool, error
 		}
 		cfg.Backends[id] = def
 	}
+	if len(cfg.Backends) == 0 {
+		// A config the operator wrote is served or refused, never swapped for the
+		// env default, which would drop its routers, policy and timeouts.
+		return RouterConfig{}, false, derrors.New(derrors.CodeInvalid, "config.loadRouterConfig",
+			fmt.Sprintf("config file %s has no backends", path)).With("path", path)
+	}
 	return cfg, true, nil
 }
 
@@ -408,6 +442,7 @@ func parseBackendEntry(path, id string, entry backendFileEntry) (BackendDef, err
 		Models:       entry.Models,
 		PromptCache:  entry.PromptCache,
 		ExtraHeaders: headers,
+		Smoke:        entry.Smoke,
 	}, nil
 }
 
@@ -490,9 +525,16 @@ func applySwitchyardEnvOverrides(cfg *RouterConfig) {
 	}
 }
 
-// SwitchyardEnabled reports whether the stack expects a Switchyard process (POLYPUS_SWITCHYARD, default on).
+// SwitchyardEnabled reports whether the stack expects a Switchyard process
+// (POLYPUS_SWITCHYARD, default on). LoadRouterConfig refuses a word ParseEnvBool
+// does not know, so a gateway that loaded its config never reaches the error
+// branch; there it reads as the default.
 func SwitchyardEnabled() bool {
-	return EnvBool("POLYPUS_SWITCHYARD", true)
+	on, err := ParseEnvBool("POLYPUS_SWITCHYARD", true)
+	if err != nil {
+		return true
+	}
+	return on
 }
 
 // fillDefaultBatchBackend turns Cloudflare batch on when YAML omitted batch_backend.
@@ -645,6 +687,11 @@ func normalizeBackends(cfg *RouterConfig) error {
 		}
 		if len(b.Capabilities) == 0 {
 			return fmt.Errorf("router: backends.%s.capabilities required", id)
+		}
+		if b.HasCapability(CapSystemOne) && !b.HasSystemOneRoute() {
+			return derrors.New(derrors.CodeInvalid, "config.normalizeBackends",
+				"backends."+id+": capability systemone needs extension cloudflare or typesafe, or the backend id openrouter").
+				With("backend", id)
 		}
 		if err := b.Models.validate(id); err != nil {
 			return err

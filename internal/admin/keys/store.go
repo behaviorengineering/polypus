@@ -12,6 +12,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -34,6 +36,18 @@ type Store struct {
 	path  string
 	clock func() time.Time
 	rand  io.Reader
+
+	// mu guards cache, the parsed key file Authorize and Verify read. It is
+	// reloaded only when the file on disk is replaced or its mtime or size change.
+	mu     sync.Mutex
+	cache  *cachedFile
+	parses atomic.Int64 // files parsed by read, for tests.
+}
+
+// cachedFile is a parsed key file and the file info it was read under.
+type cachedFile struct {
+	info fs.FileInfo
+	file filePayload
 }
 
 // Record is one key metadata row (no plaintext).
@@ -95,15 +109,11 @@ func (s *Store) Generate(ctx context.Context, name string) (GenerateResult, erro
 		if err != nil {
 			return err
 		}
-		hash, err := hashSecret(s.rand, []byte(secret))
-		if err != nil {
-			return derrors.Wrap(err, derrors.CodeInternal, "keys.Generate", "hash")
-		}
 		rec := Record{
 			ID:        id,
 			Name:      name,
 			Prefix:    tokenPrefix + id,
-			Hash:      hash,
+			Hash:      hashSecret([]byte(secret)),
 			CreatedAt: s.clock().UTC().Format(time.RFC3339),
 		}
 		file.Keys = append(file.Keys, rec)
@@ -166,11 +176,7 @@ func (s *Store) Rotate(ctx context.Context, name string) (GenerateResult, error)
 		if err != nil {
 			return err
 		}
-		hash, err := hashSecret(s.rand, []byte(secret))
-		if err != nil {
-			return derrors.Wrap(err, derrors.CodeInternal, "keys.Rotate", "hash")
-		}
-		file.Keys[idx].Hash = hash
+		file.Keys[idx].Hash = hashSecret([]byte(secret))
 		file.Keys[idx].RotatedAt = s.clock().UTC().Format(time.RFC3339)
 		if err := s.write(file); err != nil {
 			return err
@@ -215,45 +221,112 @@ func (s *Store) List() ([]Record, error) {
 	return append([]Record(nil), file.Keys...), nil
 }
 
-// Verify checks a bearer token against the on-disk store (re-reads each call).
+// Verify checks a bearer token against the store. It reads the cached key file and
+// does not upgrade a legacy hash; Authorize does.
 func (s *Store) Verify(token string) (Record, error) {
-	file, err := s.read()
+	file, err := s.readCached()
 	if err != nil {
 		return Record{}, err
 	}
-	return verifyIn(file, token)
+	rec, _, err := verifyIn(file, token)
+	return rec, err
 }
 
-// Authorize reads the store once for a request: open is true when no keys exist
-// (the gateway is unlocked); otherwise token must verify, and a bad or missing
-// token is CodeUnauthorized.
-func (s *Store) Authorize(token string) (open bool, err error) {
-	file, err := s.read()
+// Authorize decides one request from the cached key file: open is true when no keys
+// exist (the gateway is unlocked); otherwise token must verify, and a bad or
+// missing token is CodeUnauthorized. A key still stored as argon2id is rewritten as
+// SHA-256 under the file lock after it matches; a failed rewrite is returned, so a
+// key file the gateway cannot write is reported instead of re-hashed on every call.
+func (s *Store) Authorize(ctx context.Context, token string) (open bool, err error) {
+	if ctx == nil {
+		return false, derrors.New(derrors.CodeInvalid, "keys.Authorize", "context is required")
+	}
+	file, err := s.readCached()
 	if err != nil {
 		return false, err
 	}
 	if len(file.Keys) == 0 {
 		return true, nil
 	}
-	_, err = verifyIn(file, token)
-	return false, err
+	rec, legacy, err := verifyIn(file, token)
+	if err != nil || !legacy {
+		return false, err
+	}
+	_, secret, _ := parseToken(token)
+	if err := s.upgradeHash(ctx, rec.ID, rec.Hash, []byte(secret)); err != nil {
+		return false, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "keys.Authorize", "upgrade legacy hash").
+			With("key_id", rec.ID)
+	}
+	return false, nil
 }
 
-func verifyIn(file filePayload, token string) (Record, error) {
+// upgradeHash rewrites key id's argon2id hash as SHA-256 of secret, which has just
+// matched it. Under the file lock it rewrites only when the stored hash is still
+// legacyHash, so a rotate or delete in between wins.
+func (s *Store) upgradeHash(ctx context.Context, id, legacyHash string, secret []byte) error {
+	return statefile.WithFileLock(ctx, s.path, func() error {
+		file, err := s.read()
+		if err != nil {
+			return err
+		}
+		for i := range file.Keys {
+			if file.Keys[i].ID == id && file.Keys[i].Hash == legacyHash {
+				file.Keys[i].Hash = hashSecret(secret)
+				return s.write(file)
+			}
+		}
+		return nil
+	})
+}
+
+// verifyIn checks token against file. legacy is true when the matching record
+// still holds an argon2id hash.
+func verifyIn(file filePayload, token string) (rec Record, legacy bool, err error) {
 	id, secret, ok := parseToken(token)
 	if !ok {
-		return Record{}, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
+		return Record{}, false, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
 	}
 	for _, k := range file.Keys {
 		if k.ID != id {
 			continue
 		}
-		if verifyHash(k.Hash, []byte(secret)) {
-			return k, nil
+		if match, old := verifyHash(k.Hash, []byte(secret)); match {
+			return k, old, nil
 		}
-		return Record{}, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
+		break
 	}
-	return Record{}, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
+	return Record{}, false, derrors.New(derrors.CodeUnauthorized, "keys.Verify", "invalid token")
+}
+
+// readCached returns the parsed key file, parsing it again only when the file was
+// replaced (every write renames a new file into place) or its mtime or size
+// changed. A missing file is an empty store and is not cached.
+func (s *Store) readCached() (filePayload, error) {
+	info, err := os.Stat(s.path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return filePayload{Version: 1}, nil
+		}
+		return filePayload{}, derrors.Wrap(err, derrors.CodeInternal, "keys.read", "stat")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.cache; c != nil && sameFileState(c.info, info) {
+		return c.file, nil
+	}
+	// The stat came first, so a change after it makes the next call parse again.
+	file, err := s.read()
+	if err != nil {
+		return filePayload{}, err
+	}
+	s.cache = &cachedFile{info: info, file: file}
+	return file, nil
+}
+
+// sameFileState reports whether a and b describe the same file with the same
+// mtime and size.
+func sameFileState(a, b fs.FileInfo) bool {
+	return os.SameFile(a, b) && a.ModTime().Equal(b.ModTime()) && a.Size() == b.Size()
 }
 
 func (s *Store) read() (filePayload, error) {
@@ -268,6 +341,7 @@ func (s *Store) read() (filePayload, error) {
 	if err := json.Unmarshal(raw, &file); err != nil {
 		return filePayload{}, derrors.Wrap(err, derrors.CodeInternal, "keys.read", "parse")
 	}
+	s.parses.Add(1)
 	if file.Version == 0 {
 		file.Version = 1
 	}
@@ -280,7 +354,15 @@ func (s *Store) write(file filePayload) error {
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, "keys.write", "marshal")
 	}
-	return statefile.WriteAtomic(s.path, raw, 0o600)
+	if err := statefile.WriteAtomic(s.path, raw, 0o600); err != nil {
+		return err
+	}
+	// Drop the cache so this process never serves the old file, even when the
+	// filesystem's mtime is too coarse to tell the two apart.
+	s.mu.Lock()
+	s.cache = nil
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Store) newToken() (id string, secret string, token string, err error) {

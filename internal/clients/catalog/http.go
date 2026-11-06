@@ -44,6 +44,7 @@ func GetJSON(ctx context.Context, h HTTP, op, target string, hdr http.Header, ma
 	}
 	resp, err := h.Policies.Do(ctx, h.Dep, h.Client, req)
 	if err != nil {
+		outbound.CloseResponse(resp)
 		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "fetch")
 	}
 	defer func() { _ = resp.Body.Close() }()

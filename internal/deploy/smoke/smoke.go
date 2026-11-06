@@ -12,9 +12,6 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
-
-	"github.com/behaviorengineering/polypus/pkg/polypus"
-
 	"github.com/behaviorengineering/polypus/internal/deploy/gatewayconfig"
 	"github.com/behaviorengineering/polypus/internal/deploy/progress"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
@@ -22,7 +19,7 @@ import (
 	internalsmoke "github.com/behaviorengineering/polypus/internal/smoke"
 )
 
-const defaultChatModel = polypus.DefaultChatModel
+const defaultChatModel = internalsmoke.DefaultChatModel
 
 // Options configures post-deploy smoke against a running gateway.
 type Options struct {
@@ -30,9 +27,12 @@ type Options struct {
 	BaseURL   string
 	ChatModel string
 	// WithRouter smokes every chat router in GatewayConfig.
-	WithRouter     bool
-	WithSystemOne  bool
-	SystemOneModel string
+	WithRouter    bool
+	WithSystemOne bool
+	// SystemOneRequested is set when the operator passed --with-systemone, so a run
+	// that skipped every SystemOne backend says so instead of passing quietly.
+	SystemOneRequested bool
+	SystemOneModel     string
 	// WithProviders runs chat probes per backend from GatewayConfig (secrets gated via EnvDeploy).
 	WithProviders bool
 	GatewayConfig string
@@ -102,13 +102,13 @@ func (o Options) withDefaults() Options {
 		out.ChatModel = config.EnvOr("POLYPUS_CHAT_SMOKE_MODEL", defaultChatModel)
 	}
 	if strings.TrimSpace(out.SystemOneModel) == "" {
-		out.SystemOneModel = config.EnvOr("POLYPUS_SYSTEMONE_SMOKE_MODEL", polypus.DefaultSystemOneModel)
+		out.SystemOneModel = config.EnvOr("POLYPUS_SYSTEMONE_SMOKE_MODEL", internalsmoke.DefaultSystemOneModel)
 	}
 	return out
 }
 
 func runChat(ctx context.Context, ep endpoint, model string, requireSelected bool, allowed []string) error {
-	return runProbe(ctx, ep, model, polypus.SmokeOptions{
+	return runProbe(ctx, ep, model, internalsmoke.Options{
 		Channels:              []string{internalsmoke.ChannelChat},
 		ChatModel:             model,
 		MaxTokens:             64,
@@ -119,7 +119,7 @@ func runChat(ctx context.Context, ep endpoint, model string, requireSelected boo
 }
 
 func runSystemOne(ctx context.Context, ep endpoint, model string) error {
-	return runProbe(ctx, ep, model, polypus.SmokeOptions{
+	return runProbe(ctx, ep, model, internalsmoke.Options{
 		Channels:       []string{internalsmoke.ChannelSystemOne},
 		SystemOneModel: model,
 	})
@@ -127,10 +127,10 @@ func runSystemOne(ctx context.Context, ep endpoint, model string) error {
 
 // runProbe runs one smoke probe for model against ep and prints each result. A
 // failed result fails the probe.
-func runProbe(ctx context.Context, ep endpoint, model string, popts polypus.SmokeOptions) error {
+func runProbe(ctx context.Context, ep endpoint, model string, popts internalsmoke.Options) error {
 	popts.BaseURL = ep.url
 	popts.APIKey = ep.key
-	results, err := polypus.Smoke(ctx, popts)
+	results, err := internalsmoke.Run(ctx, popts)
 	for _, r := range results {
 		ep.out.Printf("smoke: channel=%s probe=%s model=%s selected=%s status=%s ms=%d detail=%s\n",
 			r.Channel, r.Probe, r.Model, r.SelectedModel, r.Status, r.Ms, r.Detail)
@@ -188,16 +188,22 @@ func runSystemOneProbes(ctx context.Context, ep endpoint, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("smoke: dotenv: %w", err)
 	}
+	// A backend without its secrets is skipped, as the provider probes do: the
+	// deploy has no key for it, so a probe could only fail.
+	var ran int
 	for _, t := range targets {
 		if !gatewayconfig.SecretsReady(t, present) {
 			miss := gatewayconfig.MissingSecrets(t, present)
-			return fmt.Errorf("smoke: systemone backend=%s model=%s missing %s in %s", t.BackendID, t.Model, strings.Join(miss, ","), opts.EnvDeploy)
+			ep.out.Printf("smoke: skip systemone backend=%s model=%s (missing %s)\n", t.BackendID, t.Model, strings.Join(miss, ","))
+			continue
 		}
-	}
-	for _, t := range targets {
 		if err := runSystemOne(ctx, ep, t.Model); err != nil {
 			return err
 		}
+		ran++
+	}
+	if ran == 0 && opts.SystemOneRequested {
+		ep.out.Printf("smoke: systemone not run: --with-systemone was set but every SystemOne backend is missing a secret in %s\n", opts.EnvDeploy)
 	}
 	return nil
 }

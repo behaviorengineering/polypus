@@ -32,6 +32,7 @@ func TestAdminAllowSuccessWithoutAuth(t *testing.T) {
 	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
 	body := []byte(`{"backend":"cf","model":"@cf/b"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/models/allow", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -68,6 +69,7 @@ func TestAdminAllowInventoryMiss(t *testing.T) {
 	dir := t.TempDir()
 	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/models/allow", bytes.NewReader([]byte(`{"backend":"cf","model":"@cf/missing"}`)))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {

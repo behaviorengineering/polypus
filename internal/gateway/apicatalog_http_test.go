@@ -43,6 +43,7 @@ proxy_backend:
   default: cf_local
 backends:
   cf_local:
+    extension: typesafe
     base_url: %s
     capabilities: [chat, systemone, tts, stt, voices]
     models:

@@ -29,7 +29,7 @@ func Export(app string, names []string, outPath string) error {
 
 // ExportWithKeyring resolves names from the environment, then keyring service app
 // in kr (nil uses the OS keyring), and writes them to outPath as dotenv. Each is
-// required, and each is checked for shape. It also writes GatewayEnvFileName beside
+// required, and each is checked for shape before anything is written. It also writes GatewayEnvFileName beside
 // outPath with the gateway's share of names.
 func ExportWithKeyring(kr operatorconfig.Keyring, app string, names []string, outPath string) error {
 	const op = "secrets.Export"
@@ -48,13 +48,8 @@ func ExportWithKeyring(kr operatorconfig.Keyring, app string, names []string, ou
 		return derrors.Wrap(err, derrors.CodeFailedPrecondition, op, "resolve secrets (store each with: polypus deploy secret set <ENV>)").
 			With("keyring_service", app)
 	}
-	if err := operatorconfig.WriteDotenv(outPath, secrets); err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, op, "write "+outPath)
-	}
-	gatewayPath := filepath.Join(filepath.Dir(outPath), GatewayEnvFileName)
-	if err := operatorconfig.WriteDotenv(gatewayPath, gatewaySecrets(secrets)); err != nil {
-		return derrors.Wrap(err, derrors.CodeInternal, op, "write "+gatewayPath)
-	}
+	// Check every value before writing either file, so a bad key leaves no
+	// dotenv behind for compose to pick up.
 	if slices.Contains(names, cloudflareAccountID) {
 		if err := validateCloudflareAccountIDFromEnv(app); err != nil {
 			return derrors.Wrap(err, derrors.CodeFailedPrecondition, op, "check "+cloudflareAccountID).With("keyring_service", app)
@@ -62,6 +57,13 @@ func ExportWithKeyring(kr operatorconfig.Keyring, app string, names []string, ou
 	}
 	if err := validateAPIKeysFromEnv(app, names); err != nil {
 		return derrors.Wrap(err, derrors.CodeFailedPrecondition, op, "check API keys").With("keyring_service", app)
+	}
+	if err := operatorconfig.WriteDotenv(outPath, secrets); err != nil {
+		return derrors.Wrap(err, derrors.CodeInternal, op, "write "+outPath)
+	}
+	gatewayPath := filepath.Join(filepath.Dir(outPath), GatewayEnvFileName)
+	if err := operatorconfig.WriteDotenv(gatewayPath, gatewaySecrets(secrets)); err != nil {
+		return derrors.Wrap(err, derrors.CodeInternal, op, "write "+gatewayPath)
 	}
 	return nil
 }

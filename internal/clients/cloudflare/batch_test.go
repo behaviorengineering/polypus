@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 func TestSubmitAndPollBatch(t *testing.T) {
@@ -189,5 +191,58 @@ func TestPostBatchRunMapsUpstream4xx(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no such model") {
 		t.Fatalf("want Cloudflare's message, got %v", err)
+	}
+}
+
+// batchTestClient is a client for srv with policies of its own, so its breaker
+// counts only this test's calls.
+func batchTestClient(t *testing.T, srv *httptest.Server) *Client {
+	t.Helper()
+	c, err := newClient(srv.URL+"/accounts/acct/ai", "token", time.Now, SpeechDefaults{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.backendID = "cf_batch"
+	c.policies = outbound.NewPolicies()
+	return c
+}
+
+func TestPollBatchRetriesTransient5xx(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), "cf-req-1") {
+			t.Errorf("every attempt must carry the request id, got %s", body)
+		}
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"result":{"status":"running"}}`))
+	}))
+	defer srv.Close()
+	poll, err := batchTestClient(t, srv).PollBatch(hopCtx(t), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", "cf-req-1")
+	if err != nil {
+		t.Fatalf("a transient 503 on a poll must be retried: %v", err)
+	}
+	if poll.State != BatchPollRunning || calls.Load() != 2 {
+		t.Fatalf("poll %+v after %d calls; want running after 2", poll, calls.Load())
+	}
+}
+
+func TestSubmitBatchIsNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	lines := []batch.InputLine{{CustomID: "c1", Body: []byte(`{"messages":[{"role":"user","content":"hi"}]}`)}}
+	_, err := batchTestClient(t, srv).SubmitBatch(hopCtx(t), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", batch.EndpointChatCompletions, lines)
+	if derrors.CodeOf(err) != derrors.CodeUnavailable {
+		t.Fatalf("want the 503 as unavailable: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("a submit is paid and goes once; got %d calls", calls.Load())
 	}
 }

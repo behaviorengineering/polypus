@@ -12,8 +12,9 @@ import (
 
 const opGet = "cloudflare.Clients.Get"
 
-// Clients caches one Workers AI client per backend id, resolved bearer token and API
-// base, so a rotated token gets a fresh client. A gateway owns one, shared with its
+// Clients caches one Workers AI client per backend id. A changed bearer token or API
+// base replaces it, so a rotated token gets a fresh client and the old one is dropped.
+// A gateway owns one, shared with its
 // router's speech plugin; its clients share the gateway's outbound policies and clock.
 type Clients struct {
 	Policies *outbound.Policies
@@ -42,7 +43,7 @@ func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, opGet, "base url").With("backend", b.ID)
 	}
-	return cs.reg.Get(b.ID+"\x00"+token+"\x00"+apiBase, func() (*Client, error) {
+	return cs.reg.Get(b.ID, token+"\x00"+apiBase, func() (*Client, error) {
 		c, err := newClient(apiBase, token, cs.Now, cs.Speech)
 		if err != nil {
 			return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "build client").With("backend", b.ID)

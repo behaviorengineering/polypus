@@ -7,6 +7,7 @@ import (
 )
 
 func main() {
-	// Thin wiring: CLI stays in internal/cli; public Serve/Smoke live in pkg/polypus.
+	// Thin wiring: the CLI lives in internal/cli. Outside hosts embed the gateway
+	// through pkg/polypus, which nothing under internal/ imports.
 	os.Exit(cli.Run(os.Args[1:]))
 }

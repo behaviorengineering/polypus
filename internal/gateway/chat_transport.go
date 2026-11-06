@@ -27,10 +27,14 @@ func (h chatHandler) dialChat(w http.ResponseWriter, r *http.Request, req chatRe
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", observability.LLMSpanAttrs{
 		Model: req.model, BackendID: t.id, BackendURL: t.url, Downstream: t.downstream,
 	})
-	defer func() { observability.EndDialSpan(span, err, t.id) }()
+	defer func() { endDialSpan(span, err, t.id) }()
 	r = r.WithContext(ctx)
 	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), t.id, config.ChatKindOf(req.vision, req.thinking))
-	if err = h.proxyOrBifrostChat(w, r, chatCall{target: t, body: body, stream: req.stream, hop: hop}); err != nil {
+	c := chatCall{target: t, body: body, stream: req.stream, hop: hop}
+	if err = h.requireBifrost("gateway.dialChat", t.id); err == nil {
+		err = h.upstreams.Execute(t.id, func() error { return h.bifrostChat(w, r, c) })
+	}
+	if err != nil {
 		h.writeUpstreamDialError(w, dialFailure{err: err, upstream: t.id})
 	}
 }
@@ -41,34 +45,50 @@ type chatCall struct {
 	body   []byte
 	stream bool
 	hop    time.Duration
+	// recordRouterSelectedModel tags the span with the model a composed router
+	// picked and passes its selected-model headers to the caller.
+	recordRouterSelectedModel bool
 }
 
-// proxyOrBifrostChat sends leaf chat via Bifrost when the backend is registered;
-// otherwise falls back to the OpenAI HTTP proxy.
-func (h chatHandler) proxyOrBifrostChat(w http.ResponseWriter, r *http.Request, c chatCall) error {
-	t := c.target
-	return h.upstreams.Execute(t.id, func() error {
-		if !h.chat.UsesBifrost(t.id) {
-			return proxyChat(w, r, c.body, chatDial{
-				backendURL:  t.url,
-				transport:   h.transport,
-				hop:         c.hop,
-				streamIdle:  h.timeouts.ResolveStreamIdle(t.id),
-				stream:      c.stream,
-				backendAuth: t.auth,
-				log:         h.log,
-				chunkDumps:  h.chunkDumps(),
-			})
-		}
-		if c.stream {
-			return h.bifrostChatStream(w, r, c)
-		}
-		return h.bifrostChatResponse(w, r, c)
-	})
+// requireBifrost fails closed when backendID is not registered with the router:
+// chat and embeddings go through Bifrost only, with no HTTP fallback.
+func (s *shared) requireBifrost(op, backendID string) error {
+	if s.chat.UsesBifrost(backendID) {
+		return nil
+	}
+	return derrors.New(derrors.CodeFailedPrecondition, op, "backend not registered with the router").
+		With("backend", backendID)
 }
 
-// bifrostChatStream dials a chat stream through Bifrost. Like the HTTP proxy path,
-// the hop bounds the wait for the first chunk and the idle limit each gap after it.
+// bifrostChat sends one chat call through Bifrost, streamed or not. The caller has
+// checked the backend is registered and runs it under the backend's breaker.
+func (h chatHandler) bifrostChat(w http.ResponseWriter, r *http.Request, c chatCall) error {
+	if c.stream {
+		return h.bifrostChatStream(w, r, c)
+	}
+	return h.bifrostChatResponse(w, r, c)
+}
+
+// routerCall is the router call for c. A composed router's pick is recorded from
+// the provider's response headers through sel (nil records nothing).
+func (c chatCall) routerCall(w http.ResponseWriter, sel *selectedModel, timeout time.Duration) router.Call {
+	call := router.Call{BackendID: c.target.id, Model: c.target.downstream, Body: c.body, Timeout: timeout}
+	if sel != nil {
+		call.OnResponseHeader = func(h http.Header) { sel.fromHeader(w, h) }
+	}
+	return call
+}
+
+// selection returns the recorder of a composed router's pick, or nil for a leaf call.
+func (c chatCall) selection(ctx context.Context) *selectedModel {
+	if !c.recordRouterSelectedModel {
+		return nil
+	}
+	return &selectedModel{ctx: ctx}
+}
+
+// bifrostChatStream dials a chat stream through Bifrost: the hop bounds the wait for
+// the first chunk and the idle limit each gap after it.
 func (h chatHandler) bifrostChatStream(w http.ResponseWriter, r *http.Request, c chatCall) error {
 	const op = "gateway.bifrostChatStream"
 	backendID := c.target.id
@@ -77,7 +97,8 @@ func (h chatHandler) bifrostChatStream(w http.ResponseWriter, r *http.Request, c
 	hop := hopBudget(c.hop, config.DefaultTimeouts().Chat)
 	wd := startStreamWatchdog(hop, h.timeouts.ResolveStreamIdle(backendID), cancel)
 	defer wd.stop()
-	chunks, errCh, err := h.chat.ChatCompletionStreamRaw(streamCtx, router.Call{BackendID: backendID, Model: c.target.downstream, Body: c.body})
+	sel := c.selection(r.Context())
+	chunks, errCh, err := h.chat.ChatCompletionStreamRaw(streamCtx, c.routerCall(w, sel, 0))
 	if err != nil {
 		if wd.timedOut() {
 			return derrors.Wrap(err, derrors.CodeTimeout, op, "no stream within the hop budget").
@@ -86,17 +107,21 @@ func (h chatHandler) bifrostChatStream(w http.ResponseWriter, r *http.Request, c
 		return gatewayErr(err, op, "stream").With("backend", backendID)
 	}
 	ctx := withStreamChunkCounter(streamCtx, h.chunkDumps())
-	return writeBifrostChatSSE(ctx, w, bifrostStream{chunks: chunks, errs: errCh, watchdog: wd})
+	return writeBifrostChatSSE(ctx, w, bifrostStream{chunks: chunks, errs: errCh, watchdog: wd, selected: sel})
 }
 
-// bifrostChatResponse dials a non-stream chat through Bifrost.
+// bifrostChatResponse dials a non-stream chat through Bifrost. The hop bounds the
+// whole call.
 func (h chatHandler) bifrostChatResponse(w http.ResponseWriter, r *http.Request, c chatCall) error {
 	backendID := c.target.id
-	raw, err := h.chat.ChatCompletionRaw(r.Context(), router.Call{BackendID: backendID, Model: c.target.downstream, Body: c.body, Timeout: c.hop})
+	sel := c.selection(r.Context())
+	hop := hopBudget(c.hop, config.DefaultTimeouts().Chat)
+	raw, err := h.chat.ChatCompletionRaw(r.Context(), c.routerCall(w, sel, hop))
 	if err != nil {
 		return gatewayErr(err, "gateway.bifrostChatResponse", "chat").With("backend", backendID)
 	}
 	raw = normalizeChatCompletion(r.Context(), w, raw)
+	sel.fromBody(raw)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 	w.WriteHeader(http.StatusOK)
@@ -147,12 +172,14 @@ func (wd *streamWatchdog) stop() {
 	}
 }
 
-// bifrostStream is one Bifrost chat stream: its chunks, its terminal error and the
-// watchdog bounding it (nil for no bound).
+// bifrostStream is one Bifrost chat stream: its chunks, its terminal error, the
+// watchdog bounding it (nil for no bound) and the recorder of a composed router's
+// pick (nil for a leaf stream).
 type bifrostStream struct {
 	chunks   <-chan router.ChatStreamChunk
 	errs     <-chan error
 	watchdog *streamWatchdog
+	selected *selectedModel
 }
 
 // writeBifrostChatSSE frames Bifrost chat chunks as OpenAI SSE.
@@ -190,6 +217,7 @@ func writeBifrostChatSSE(ctx context.Context, w http.ResponseWriter, stream bifr
 			break
 		}
 		stream.watchdog.chunk()
+		stream.selected.fromBody(chunk.OpenAIJSON)
 		res := sanitizeOpenAIStreamChunk(chunk.OpenAIJSON, san, true)
 		if res.alias {
 			setIntervention(ctx, w, observability.InterventionReasoningAlias)

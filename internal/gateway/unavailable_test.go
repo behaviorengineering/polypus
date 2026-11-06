@@ -12,11 +12,10 @@ import (
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/ratelimit"
-	"github.com/sony/gobreaker"
 )
 
 func TestWriteUnavailableErrorBreakerOpen(t *testing.T) {
-	err := upstream.UnavailableError("cf_local", gobreaker.ErrOpenState)
+	err := upstream.UnavailableError("cf_local", upstream.ErrOpen)
 	rec := httptest.NewRecorder()
 	testShared.writeUnavailableError(rec, err, err.Error(), "cf_local")
 	if rec.Code != http.StatusServiceUnavailable {
@@ -41,7 +40,7 @@ func TestWriteUnavailableErrorBreakerOpen(t *testing.T) {
 }
 
 func TestWriteUnavailableErrorHalfOpen(t *testing.T) {
-	err := upstream.UnavailableError("leaf", gobreaker.ErrTooManyRequests)
+	err := upstream.UnavailableError("leaf", upstream.ErrHalfOpen)
 	rec := httptest.NewRecorder()
 	testShared.writeUnavailableError(rec, err, err.Error(), "leaf")
 	var body openaiErrorBody
@@ -130,7 +129,7 @@ func TestWriteUpstreamDialErrorResponseWrittenNoOp(t *testing.T) {
 }
 
 func TestWriteHandlerErrorBreakerResolvesUpstream(t *testing.T) {
-	err := upstream.UnavailableError("cf_local", gobreaker.ErrOpenState)
+	err := upstream.UnavailableError("cf_local", upstream.ErrOpen)
 	rec := httptest.NewRecorder()
 	testShared.writeHandlerError(rec, err)
 	if rec.Code != http.StatusServiceUnavailable {

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,6 +32,9 @@ type backendYAML struct {
 	Auth         backendAuthYAML `yaml:"auth"`
 	Capabilities []string        `yaml:"capabilities"`
 	Models       modelsYAML      `yaml:"models"`
+	// Smoke shares the gateway's own type, so the two readers of the YAML agree on
+	// the block's shape.
+	Smoke config.BackendSmoke `yaml:"smoke"`
 }
 
 type modelsYAML struct {
@@ -52,6 +56,21 @@ func SystemOneBackendEnabled(path string) (bool, error) {
 		return false, nil
 	}
 	return *cfg.SystemOneBackend.Enabled, nil
+}
+
+// RequireBackends refuses a gateway YAML with no backends, the rule the gateway
+// applies when it loads the file, so a deploy stops before it starts containers.
+func RequireBackends(path string) error {
+	cfg, err := loadGatewayYAML(path)
+	if err != nil {
+		return err
+	}
+	for id := range cfg.Backends {
+		if strings.TrimSpace(id) != "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("gatewayconfig: config file %s has no backends", path)
 }
 
 // SecretEnvNames returns deploy keyring env vars required for backends in gateway YAML

@@ -75,6 +75,7 @@ func TestAdminAllowDeepInfraFromLiveInventory(t *testing.T) {
 	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
 	body := []byte(`{"backend":"deepinfra","model":"deepseek-ai/DeepSeek-V4-Flash-0731"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/models/allow", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -109,6 +110,7 @@ func TestAdminAllowDeepInfraInventoryMiss(t *testing.T) {
 	dir := t.TempDir()
 	h := newTestGateway(t, config.ServeOptions{}, fr, WithAdminStateDir(dir))
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/models/allow", bytes.NewReader([]byte(`{"backend":"deepinfra","model":"not-on-deepinfra"}`)))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {

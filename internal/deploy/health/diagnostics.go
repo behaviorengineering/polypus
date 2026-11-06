@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/deploy/compose"
-	"github.com/behaviorengineering/polypus/internal/deploy/execx"
 	"github.com/behaviorengineering/polypus/internal/deploy/progress"
 	"github.com/behaviorengineering/polypus/internal/deploy/stack"
 )
@@ -22,16 +21,15 @@ func DumpGateway(ctx context.Context, w io.Writer, cc compose.Client) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dumpBudget)
 	defer cancel()
 	out := progress.New(w)
-	env := cc.Environ()
 	for _, service := range []string{stack.ServiceGateway, stack.ServiceSwitchyard} {
 		out.Printf("polypus deploy: %s diagnostics (last 120 log lines):\n", service)
-		logs, err := execx.OutputContext(ctx, "docker", cc.Args("logs", "--no-color", "--tail", "120", service), env)
+		logs, err := cc.CombinedOutput(ctx, cc.Args("logs", "--no-color", "--tail", "120", service))
 		out.Printf("%s\n", logs)
 		if err != nil {
 			out.Printf("docker compose logs %s: %v\n", service, err)
 		}
 	}
-	state, err := execx.OutputContext(ctx, "docker", cc.Args("ps", "--all", stack.ServiceGateway, stack.ServiceSwitchyard), env)
+	state, err := cc.CombinedOutput(ctx, cc.Args("ps", "--all", stack.ServiceGateway, stack.ServiceSwitchyard))
 	if err != nil {
 		out.Printf("docker compose ps: %v\n", err)
 		return out.Err()

@@ -51,6 +51,9 @@ type Config struct {
 	GitHubToken string
 	// BasicUser is the username for the ghcr.io token exchange; empty uses "token".
 	BasicUser string
+	// Policies holds the retry and per-host breaker state; nil uses the process
+	// default, which every client in one CLI process shares.
+	Policies *outbound.Policies
 }
 
 // Client checks manifests in OCI registries.
@@ -58,6 +61,7 @@ type Client struct {
 	http        *http.Client
 	githubToken string
 	basicUser   string
+	policies    *outbound.Policies
 }
 
 // CreateClient returns a Client for cfg.
@@ -70,7 +74,7 @@ func (cfg Config) CreateClient() *Client {
 	if user == "" {
 		user = defaultBasicUser
 	}
-	return &Client{http: hc, githubToken: strings.TrimSpace(cfg.GitHubToken), basicUser: user}
+	return &Client{http: hc, githubToken: strings.TrimSpace(cfg.GitHubToken), basicUser: user, policies: cfg.Policies}
 }
 
 // Ref is an image reference with a tag: <registry>/<repository>:<tag>.
@@ -197,8 +201,9 @@ func (c *Client) manifestGet(ctx context.Context, ref Ref, manifestURL, bearer s
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	resp, err := outbound.Do(ctx, depName(ref), c.http, req)
+	resp, err := c.policies.Do(ctx, depName(ref), c.http, req)
 	if err != nil {
+		outbound.CloseResponse(resp)
 		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -227,8 +232,9 @@ func (c *Client) pullToken(ctx context.Context, ref Ref) (string, error) {
 	if pat := c.credential(ref); pat != "" {
 		req.SetBasicAuth(c.basicUser, pat)
 	}
-	resp, err := outbound.Do(ctx, depName(ref), c.http, req)
+	resp, err := c.policies.Do(ctx, depName(ref), c.http, req)
 	if err != nil {
+		outbound.CloseResponse(resp)
 		return "", fmt.Errorf("GET %s: %w", redactQuery(tokenURL), err)
 	}
 	defer func() { _ = resp.Body.Close() }()

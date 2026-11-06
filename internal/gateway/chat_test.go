@@ -2,14 +2,10 @@ package gateway
 
 import (
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 func chatJSONField(t *testing.T, body []byte, path ...string) any {
@@ -25,25 +21,6 @@ func chatJSONField(t *testing.T, body []byte, path ...string) any {
 		cur = cur[key].(map[string]any)
 	}
 	return nil
-}
-
-func TestChatCompletionsURL(t *testing.T) {
-	cases := []struct {
-		base string
-		want string
-	}{
-		{base: "https://openrouter.ai/api/v1", want: "https://openrouter.ai/api/v1/chat/completions"},
-		{base: "https://openrouter.ai/api/v1/", want: "https://openrouter.ai/api/v1/chat/completions"},
-		{base: "http://127.0.0.1:1234", want: "http://127.0.0.1:1234/v1/chat/completions"},
-		{base: "https://api.deepinfra.com/v1/openai", want: "https://api.deepinfra.com/v1/openai/chat/completions"},
-		{base: "https://api.deepinfra.com/v1/openai/", want: "https://api.deepinfra.com/v1/openai/chat/completions"},
-	}
-	for _, tc := range cases {
-		got := chatCompletionsURL(tc.base)
-		if got != tc.want {
-			t.Fatalf("base %q: got %q want %q", tc.base, got, tc.want)
-		}
-	}
 }
 
 func TestApplyChatThinkingCloudflareGLMOff(t *testing.T) {
@@ -102,29 +79,6 @@ func TestChatBodyWantsThinkingOpenAIOnly(t *testing.T) {
 	}
 	if chatBodyWantsThinking([]byte(`{"chat_template_kwargs":{"enable_thinking":true}}`)) {
 		t.Fatal("kwargs off")
-	}
-}
-
-func TestProxyTransportStreamClientHasNoTimeout(t *testing.T) {
-	tr := newProxyTransport(30*time.Second, outbound.NewPolicies())
-	if tr.streamClient.Timeout != 0 {
-		t.Fatal("a stream client must not have a Client.Timeout")
-	}
-	if tr.client.Timeout != 30*time.Second {
-		t.Fatalf("non-stream client timeout = %s", tr.client.Timeout)
-	}
-}
-
-func TestProxyChatCompletionsStream(t *testing.T) {
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(up.Close)
-	rec := httptest.NewRecorder()
-	body := []byte(`{"model":"test","messages":[],"stream":true}`)
-	if err := proxyChat(rec, httptest.NewRequest(http.MethodPost, "/", nil), body,
-		chatDial{backendURL: up.URL, transport: testShared.transport, stream: true, log: testShared.log}); err != nil {
-		t.Fatal(err)
 	}
 }
 

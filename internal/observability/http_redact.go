@@ -123,6 +123,7 @@ func redactSpanRequestURL(span trace.Span, req *http.Request) {
 	}
 	span.SetAttributes(
 		attribute.String("url.full", redactURLString(req.URL.String())),
+		attribute.String("url.path", sanitizeAttrValue("url.path", req.URL.Path)),
 	)
 	if req.URL.RawQuery != "" {
 		span.SetAttributes(attribute.String("url.query", redactQueryString(req.URL.RawQuery)))

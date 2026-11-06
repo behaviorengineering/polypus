@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
-	"github.com/behaviorengineering/polypus/internal/batch/service"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/batches"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
@@ -126,15 +126,15 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		Model: publicModel, BackendID: backendID, BackendURL: backend.BaseURL, Downstream: downstream,
 	})
 	var createErr error
-	defer func() { observability.EndDialSpan(span, createErr, backendID) }()
+	defer func() { endDialSpan(span, createErr, backendID) }()
 	ctx, cancel := h.batchHopContext(ctx, r.Header.Get(config.TimeoutHeader), backendID)
 	defer cancel()
-	meta, createErr := h.batches.Create(ctx, service.CreateRequest{
+	meta, createErr := h.batches.Create(ctx, batches.CreateRequest{
 		Backend:          backend,
 		PublicModel:      publicModel,
 		InputFileID:      inputID,
 		CompletionWindow: req.CompletionWindow,
-		Job:              service.Job{Downstream: downstream, Endpoint: req.Endpoint, Lines: parsed.Lines},
+		Job:              batches.Job{Downstream: downstream, Endpoint: req.Endpoint, Lines: parsed.Lines},
 	})
 	if createErr != nil {
 		h.writeUpstreamDialError(w, dialFailure{err: createErr, upstream: backendID})

@@ -16,7 +16,6 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/admin/keys"
 	"github.com/behaviorengineering/polypus/internal/batch"
-	"github.com/behaviorengineering/polypus/internal/batch/service"
 	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/clients/gemini"
@@ -24,6 +23,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/batches"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
@@ -37,15 +37,14 @@ type shared struct {
 	proxy         http.Handler
 	invCache      *modelsInventoryCache
 	timeouts      config.Timeouts
-	transport     proxyTransport
 	upstreams     *upstream.Board
 	cfGet         cloudflareClientGet
 	geminiGet     geminiClientGet
 	anthropicGet  anthropicClientGet
 	openRouterGet func(config.BackendDef) (*openrouter.Client, error)
 	batchStore    *batch.DiskStore
-	batches       *service.Service
-	claudeBatches service.ClaudeBatches
+	batches       *batches.Service
+	claudeBatches batches.ClaudeBatches
 	// clock is the gateway's job clock: batch stamps, cache entries, dump names.
 	clock       func() time.Time
 	overlayPath string
@@ -92,7 +91,15 @@ func (s *shared) chunkDumps() chunkDumpSink {
 // NewHandler returns the public Polypus HTTP handler (*Gateway).
 // It does not write Switchyard TOML; ListenAndServe (process startup) does.
 // Tests pass withRouter to inject a fake and skip bifrost.Init.
+//
+// NewHandler is a process entry for hosts that only want the handler, so it starts
+// the router with a fresh context; ListenAndServe passes its own startup context.
 func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handler, error) {
+	return newHandler(context.Background(), opts, options...)
+}
+
+// newHandler is NewHandler with the startup context the router's Bifrost runs under.
+func newHandler(ctx context.Context, opts config.ServeOptions, options ...HandlerOption) (http.Handler, error) {
 	const op = "gateway.NewHandler"
 	var ho handlerOptions
 	for _, opt := range options {
@@ -107,7 +114,7 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), op, "admin keys")
 	}
-	parts, rcfg, err := openRouter(opts, ho)
+	parts, rcfg, err := openRouter(ctx, opts, ho)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +136,7 @@ func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handle
 
 // openRouter returns the injected router, or loads the router config, applies the
 // allow overlay and builds a Bifrost client that the gateway then owns.
-func openRouter(opts config.ServeOptions, ho handlerOptions) (routerParts, config.RouterConfig, error) {
+func openRouter(ctx context.Context, opts config.ServeOptions, ho handlerOptions) (routerParts, config.RouterConfig, error) {
 	const op = "gateway.openRouter"
 	if ho.router != nil {
 		parts := splitRouter(ho.router)
@@ -151,7 +158,7 @@ func openRouter(opts config.ServeOptions, ho handlerOptions) (routerParts, confi
 	if ho.cfGet != nil {
 		clientOpts = append(clientOpts, router.WithCloudflareClientGet(router.CloudflareClientGet(ho.cfGet)))
 	}
-	client, err := router.NewClient(loaded, clientOpts...)
+	client, err := router.NewClient(ctx, loaded, clientOpts...)
 	if err != nil {
 		return routerParts{}, config.RouterConfig{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), op, "bifrost client")
 	}
@@ -200,7 +207,6 @@ func (c sharedConfig) createShared() (*shared, error) {
 		opts:           c.serve,
 		invCache:       newModelsInventoryCache(ho.logger, models.CacheTTL, ho.clock),
 		timeouts:       timeouts,
-		transport:      newProxyTransport(timeouts.Max, ho.policies),
 		upstreams:      upstream.NewBoard(),
 		cfGet:          ho.cfGet,
 		geminiGet:      ho.geminiGet,
@@ -225,11 +231,12 @@ func (c sharedConfig) createShared() (*shared, error) {
 	if c.router.bifrost != nil && sh.claudeBatches == nil {
 		sh.claudeBatches = router.NewClaudeBatches(c.router.bifrost)
 	}
-	sh.batches, err = service.Config{
+	sh.batches, err = batches.Config{
 		Store:     batchStore,
 		Breakers:  sh.upstreams,
 		Now:       ho.clock,
 		Submitter: sh.batchSubmitter,
+		Logger:    ho.logger,
 	}.CreateService()
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), op, "batch service")
@@ -238,18 +245,18 @@ func (c sharedConfig) createShared() (*shared, error) {
 }
 
 // batchSubmitter picks the batch submitter for a backend.
-func (s *shared) batchSubmitter(b config.BackendDef) (service.Submitter, error) {
+func (s *shared) batchSubmitter(b config.BackendDef) (batches.Submitter, error) {
 	switch {
 	case b.IsAnthropicExtension():
 		if s.claudeBatches == nil {
 			return nil, derrors.New(derrors.CodeNotReady, "gateway.batchSubmitter", "claude batches need the bifrost router").
 				With("backend", b.ID)
 		}
-		return service.NewClaudeSubmitter(s.claudeBatches, b), nil
+		return batches.NewClaudeSubmitter(s.claudeBatches, b), nil
 	case b.IsOpenRouter():
-		return service.NewOpenRouterSubmitter(func() (*openrouter.Client, error) { return s.openRouterGet(b) }), nil
+		return batches.NewOpenRouterSubmitter(func() (*openrouter.Client, error) { return s.openRouterGet(b) }), nil
 	case b.IsCloudflareExtension():
-		return service.NewCloudflareSubmitter(func() (*cloudflare.Client, error) { return s.cloudflareClient(b) }, s.clock), nil
+		return batches.NewCloudflareSubmitter(func() (*cloudflare.Client, error) { return s.cloudflareClient(b) }, s.clock), nil
 	default:
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "gateway.batchSubmitter",
 			"batch only supported for cloudflare, openrouter and anthropic backends").With("backend", b.ID)
@@ -523,25 +530,29 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 		Model: model, BackendURL: switchyardURL, Router: routerName,
 	})
 	dialUpstream := upstream.NameSwitchyard
-	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
+	defer func() { endDialSpan(span, err, dialUpstream) }()
 	r = r.WithContext(ctx)
-	hop := hopBudget(h.timeouts.Max, config.DefaultTimeouts().Max)
-	err = h.upstreams.Execute(upstream.NameSwitchyard, func() error {
-		return proxyChat(w, r, req.raw, chatDial{
-			backendURL:                switchyardURL,
-			transport:                 h.transport,
-			hop:                       hop,
-			streamIdle:                h.timeouts.ResolveStreamIdle(upstream.NameSwitchyard),
-			stream:                    req.stream,
-			recordRouterSelectedModel: true,
-			log:                       h.log,
-			chunkDumps:                h.chunkDumps(),
-		})
-	})
+	// Switchyard is a Bifrost provider like any leaf, so the hop goes through it with
+	// the body as the client sent it; the model names the composed router.
+	c := chatCall{
+		target:                    backendTarget{id: router.ProviderSwitchyard, downstream: routerName, url: switchyardURL},
+		body:                      req.raw,
+		stream:                    req.stream,
+		hop:                       hopBudget(h.timeouts.Max, config.DefaultTimeouts().Max),
+		recordRouterSelectedModel: true,
+	}
+	if err = h.requireBifrost("gateway.serveSwitchyardRouterChat", router.ProviderSwitchyard); err == nil {
+		err = h.upstreams.Execute(upstream.NameSwitchyard, func() error { return h.bifrostChat(w, r, c) })
+	}
 	if err != nil {
+		// A 4xx is Switchyard's answer about the request, not an outage.
+		prefix := "polypus: switchyard unavailable: "
+		if derrors.HTTPStatus(err) < http.StatusInternalServerError {
+			prefix = ""
+		}
 		h.writeUpstreamDialError(w, dialFailure{
 			err:         err,
-			prefix:      "polypus: switchyard unavailable: ",
+			prefix:      prefix,
 			upstream:    upstream.NameSwitchyard,
 			unreachable: isSwitchyardUnreachable,
 		})
@@ -659,7 +670,7 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", observability.LLMSpanAttrs{
 		Model: model,
 	})
-	defer func() { observability.EndDialSpan(span, err, dialUpstream) }()
+	defer func() { endDialSpan(span, err, dialUpstream) }()
 	r = r.WithContext(ctx)
 
 	reg := h.registry
@@ -698,9 +709,9 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dialUpstream = backendID
-	hop := h.timeouts.ResolveEmbed(r.Header.Get(config.TimeoutHeader))
-	err = h.upstreams.Execute(backendID, func() error {
-		if h.chat.UsesBifrost(backendID) {
+	hop := hopBudget(h.timeouts.ResolveEmbed(r.Header.Get(config.TimeoutHeader)), config.DefaultTimeouts().Embed)
+	if err = h.requireBifrost("gateway.serveEmbeddings", backendID); err == nil {
+		err = h.upstreams.Execute(backendID, func() error {
 			raw, bifrostErr := h.chat.EmbeddingRaw(r.Context(), router.Call{BackendID: backendID, Model: downstream, Body: rewritten, Timeout: hop})
 			if bifrostErr != nil {
 				return bifrostErr
@@ -712,9 +723,8 @@ func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
 				return afterHeaders(r.Context(), writeErr, true, "gateway.serveEmbeddings", "write response")
 			}
 			return nil
-		}
-		return h.proxyEmbeddings(w, r, embedCall{target: t, body: rewritten, hop: hop})
-	})
+		})
+	}
 	if err != nil {
 		h.writeUpstreamDialError(w, dialFailure{err: err, upstream: string(backendID)})
 		return
@@ -844,7 +854,7 @@ func (h speechHandler) speechDial(w http.ResponseWriter, r *http.Request, hop sp
 	ctx, span := observability.StartLLMSpan(r.Context(), hop.span, observability.LLMSpanAttrs{
 		Model: hop.model, BackendID: hop.backendID, BackendURL: backendURL, Downstream: hop.downstream,
 	})
-	defer func() { observability.EndDialSpan(span, err, hop.backendID) }()
+	defer func() { endDialSpan(span, err, hop.backendID) }()
 	budget := hopBudget(h.timeouts.ResolveSpeech(r.Header.Get(config.TimeoutHeader)), config.DefaultTimeouts().Speech)
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()

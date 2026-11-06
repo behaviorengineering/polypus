@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"context"
 	"errors"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -23,7 +24,9 @@ func statusAllowsFinalize(st Status) bool {
 
 // TryFinalizeBatch atomically writes output files and terminal metadata when the batch is still open.
 // Returns applied=false when another caller already finalized or the batch is terminal/cancelled.
-func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (Meta, bool, error) {
+// It holds the store's write lock, so callers in other processes sharing the root
+// finalise a batch at most once between them.
+func (s *DiskStore) TryFinalizeBatch(ctx context.Context, id string, patch FinalizePatch) (Meta, bool, error) {
 	const op = "batch.TryFinalizeBatch"
 	if s == nil {
 		return Meta{}, false, derrors.New(derrors.CodeFailedPrecondition, op, "not configured")
@@ -33,9 +36,20 @@ func (s *DiskStore) TryFinalizeBatch(id string, patch FinalizePatch) (Meta, bool
 	if err != nil {
 		return Meta{}, false, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var (
+		out     Meta
+		applied bool
+	)
+	err = s.withWriteLock(ctx, op, func() error {
+		var ferr error
+		out, applied, ferr = s.finalizeLocked(op, id, patch)
+		return ferr
+	})
+	return out, applied, err
+}
 
+// finalizeLocked is TryFinalizeBatch under the write lock.
+func (s *DiskStore) finalizeLocked(op, id string, patch FinalizePatch) (Meta, bool, error) {
 	meta, err := s.getBatchUnlocked(op, id)
 	if err != nil {
 		return Meta{}, false, err

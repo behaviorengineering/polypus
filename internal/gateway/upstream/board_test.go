@@ -3,9 +3,9 @@ package upstream
 import (
 	"errors"
 	"testing"
+	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
-	"github.com/sony/gobreaker"
 )
 
 func TestBoardNilPassthrough(t *testing.T) {
@@ -23,10 +23,14 @@ func TestBoardNilPassthrough(t *testing.T) {
 func TestBoardTripsAfterConsecutiveFailures(t *testing.T) {
 	b := NewBoard()
 	fail := errors.New("dial failed")
-	for i := 0; i < 3; i++ {
-		err := b.Execute("leaf", func() error { return fail })
-		if !errors.Is(err, fail) {
-			t.Fatalf("attempt %d: %v", i, err)
+	for i := uint(0); i < ConsecutiveFailuresTrip; i++ {
+		called := false
+		err := b.Execute("leaf", func() error {
+			called = true
+			return fail
+		})
+		if !called || !errors.Is(err, fail) {
+			t.Fatalf("attempt %d must still dial before the trip: called=%v err=%v", i, called, err)
 		}
 	}
 	err := b.Execute("leaf", func() error {
@@ -36,8 +40,50 @@ func TestBoardTripsAfterConsecutiveFailures(t *testing.T) {
 	if !Unavailable(err) {
 		t.Fatalf("want open, got %v", err)
 	}
-	if !errors.Is(err, gobreaker.ErrOpenState) {
-		t.Fatalf("want ErrOpenState, got %v", err)
+	if !errors.Is(err, ErrOpen) || errors.Is(err, ErrHalfOpen) {
+		t.Fatalf("want ErrOpen, got %v", err)
+	}
+	if derrors.CodeOf(err) != derrors.CodeUnavailable || derrors.Field(err, FieldUpstream) != "leaf" {
+		t.Fatalf("refusal must be CodeUnavailable naming the upstream: %v", err)
+	}
+}
+
+func TestBoardHalfOpenRefusalIsLabelledHalfOpen(t *testing.T) {
+	const delay = 20 * time.Millisecond
+	b := &Board{openDelay: delay}
+	fail := errors.New("dial failed")
+	for i := uint(0); i < ConsecutiveFailuresTrip; i++ {
+		_ = b.Execute("leaf", func() error { return fail })
+	}
+	time.Sleep(2 * delay)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	trial := make(chan error, 1)
+	go func() {
+		trial <- b.Execute("leaf", func() error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+	err := b.Execute("leaf", func() error {
+		t.Error("must not dial while the trial call is in flight")
+		return nil
+	})
+	close(release)
+	if trialErr := <-trial; trialErr != nil {
+		t.Fatalf("trial call: %v", trialErr)
+	}
+	if !Unavailable(err) || !errors.Is(err, ErrHalfOpen) {
+		t.Fatalf("want a half-open refusal, got %v", err)
+	}
+	if cls := ClassifyDialFailure(err, ""); cls.BreakerState != stateHalfOpen || cls.Upstream != "leaf" {
+		t.Fatalf("classification %+v", cls)
+	}
+	if err := b.Execute("leaf", func() error { return nil }); err != nil {
+		t.Fatalf("a successful trial must close the breaker: %v", err)
 	}
 }
 
@@ -91,11 +137,11 @@ func TestStatusFailure(t *testing.T) {
 	}
 }
 
-func TestBoardCallerErrorsDoNotTrip(t *testing.T) {
+func TestBoardCallerVisibleErrorsDoNotTrip(t *testing.T) {
 	b := NewBoard()
-	for _, code := range []derrors.Code{derrors.CodeInvalid, derrors.CodeUnauthorized, derrors.CodeNotFound, derrors.CodeConflict} {
+	for _, code := range []derrors.Code{derrors.CodeRateLimited, derrors.CodeCanceled, derrors.CodeInvalid, derrors.CodeUnauthorized, derrors.CodeNotFound, derrors.CodeConflict} {
 		fail := derrors.New(code, "router.anthropic", "caller error")
-		for i := uint32(0); i < ConsecutiveFailuresTrip+1; i++ {
+		for i := uint(0); i < ConsecutiveFailuresTrip+1; i++ {
 			_ = b.Execute("claude_team", func() error { return fail })
 		}
 	}
@@ -111,7 +157,7 @@ func TestBoardCallerErrorsDoNotTrip(t *testing.T) {
 func TestBoardNotReadyTrips(t *testing.T) {
 	b := NewBoard()
 	fail := derrors.New(derrors.CodeNotReady, "router.anthropic", "out of credit")
-	for i := uint32(0); i < ConsecutiveFailuresTrip; i++ {
+	for i := uint(0); i < ConsecutiveFailuresTrip; i++ {
 		_ = b.Execute("claude_team", func() error { return fail })
 	}
 	err := b.Execute("claude_team", func() error { return nil })

@@ -20,6 +20,7 @@ func TestSystemOneSmokeTargetsOpenRouterDecider(t *testing.T) {
       allow:
         - typesafe/jev
   openrouter:
+    base_url: https://openrouter.ai/api/v1
     auth:
       bearer_env: OPENROUTER_API_KEY
     capabilities: [chat, systemone]

@@ -52,14 +52,15 @@ func runModelsRefreshLoop(ctx context.Context, interval time.Duration, newTicker
 	}
 }
 
-// warmInventory prefetches model catalogs (the GET /v1/models path): the enabled
-// models at startup, or the full inventory view on refresh.
+// warmInventory refreshes every backend's model catalog live into the cache that
+// GET /v1/models serves: the enabled models at startup, or the full inventory view
+// on refresh.
 func (h modelsHandler) warmInventory(ctx context.Context, asInventory bool) {
 	if h.shared == nil || h.registry == nil {
 		return
 	}
 	// Warmup has no caller, so no inbound credential reaches local backends.
-	models := h.collectModels(ctx, "", asInventory)
+	models := h.collectModelsWith(ctx, "", asInventory, h.refreshBackend)
 	h.log.Info("polypus: models inventory warmed", "inventory_view", asInventory, "count", len(models))
 }
 

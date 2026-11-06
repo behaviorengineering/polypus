@@ -20,6 +20,7 @@ func TestChatSmokeTargetsHomelabShape(t *testing.T) {
       allow:
         - "@cf/ibm-granite/granite-4.0-h-micro"
   openrouter:
+    base_url: https://openrouter.ai/api/v1
     auth:
       bearer_env: OPENROUTER_API_KEY
     capabilities: [chat]
@@ -33,6 +34,8 @@ func TestChatSmokeTargetsHomelabShape(t *testing.T) {
     auth:
       bearer_env: GEMINI_API_KEY_FREE
     capabilities: [chat]
+    smoke:
+      skip: true
     models:
       allow:
         - gemma-4-26b-a4b-it
@@ -45,6 +48,7 @@ func TestChatSmokeTargetsHomelabShape(t *testing.T) {
       allow:
         - gemini-2.5-flash
   deepinfra:
+    base_url: https://api.deepinfra.com/v1/openai
     auth:
       bearer_env: DEEPINFRA_API_KEY
     capabilities: [chat]
@@ -74,7 +78,7 @@ func TestChatSmokeTargetsHomelabShape(t *testing.T) {
 		t.Fatalf("cf_local secrets: %v", cf.SecretEnv)
 	}
 	if models["gemini_free/gemma-4-26b-a4b-it"].BackendID != "" {
-		t.Fatal("gemini_free must be skipped in deploy smoke")
+		t.Fatal("gemini_free has smoke.skip and must get no deploy smoke target")
 	}
 	gp := models["gemini_paid/gemini-2.5-flash"]
 	if gp.ReasoningEffort != "minimal" {
@@ -142,14 +146,16 @@ func TestSecretsReady(t *testing.T) {
 }
 
 func TestDeepInfraChatTargetsSkipsUltraTurboAndGemma3(t *testing.T) {
-	got := deepInfraChatTargets("deepinfra", []string{
+	b := backendYAML{BaseURL: "https://api.deepinfra.com/v1/openai"}
+	b.Models.Allow = []string{
 		"google/gemma-3-27b-it",
 		"google/gemma-4-31B-it-turbo",
 		"google/gemma-4-31B-it-Ultra",
 		"google/gemma-4-31B-it",
 		"google/gemma-4-26B-A4B-it",
 		"deepseek-ai/DeepSeek-V4-Flash-0731",
-	})
+	}
+	got := chatTargetsForBackend("deepinfra", b)
 	if len(got) != 3 {
 		t.Fatalf("len=%d %+v", len(got), got)
 	}

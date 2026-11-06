@@ -103,14 +103,15 @@ func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string,
 	if len(payload) > batchMaxPayload {
 		return "", derrors.New(derrors.CodeInvalid, opSubmitBatch, "batch payload exceeds 10MB limit")
 	}
-	raw, err := c.postBatchRun(ctx, model, payload)
+	raw, err := c.postBatchRun(ctx, model, payload, false)
 	if err != nil {
 		return "", err
 	}
 	return parseSubmitRequestID(raw)
 }
 
-// PollBatch checks status or fetches completed responses for a queued batch.
+// PollBatch checks status or fetches completed responses for a queued batch. A poll
+// is idempotent, so a transient failure is retried within ctx's deadline.
 func (c *Client) PollBatch(ctx context.Context, model, cfRequestID string) (BatchPollResult, error) {
 	if ctx == nil {
 		return BatchPollResult{}, derrors.New(derrors.CodeInvalid, opPollBatch, "context required")
@@ -129,14 +130,17 @@ func (c *Client) PollBatch(ctx context.Context, model, cfRequestID string) (Batc
 	if err != nil {
 		return BatchPollResult{}, derrors.Wrap(err, derrors.CodeInternal, opPollBatch, "marshal")
 	}
-	raw, err := c.postBatchRun(ctx, model, payload)
+	raw, err := c.postBatchRun(ctx, model, payload, true)
 	if err != nil {
 		return BatchPollResult{}, err
 	}
 	return parsePollResult(raw)
 }
 
-func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte) ([]byte, error) {
+// postBatchRun posts payload to the async batch /run endpoint. A submit (retry false)
+// goes once, so it can never queue the same paid batch twice; a poll (retry true)
+// goes under the retry policy.
+func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte, retry bool) ([]byte, error) {
 	target := batchRunURL(c.apiBase, model)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
@@ -146,7 +150,7 @@ func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 
-	resp, err := c.runOnce(ctx, opPostBatchRun, httpReq)
+	resp, err := c.run(ctx, opPostBatchRun, httpReq, retry)
 	if err != nil {
 		return nil, err
 	}

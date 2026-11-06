@@ -67,7 +67,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := router.NewClient(rcfg, router.WithLogger(testShared.log))
+	client, err := router.NewClient(t.Context(), rcfg, router.WithLogger(testShared.log))
 	if err != nil {
 		t.Fatal(err)
 	}

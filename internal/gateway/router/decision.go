@@ -9,12 +9,16 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
-// SystemOneDecisionRaw sends a TypeSafe-shaped SystemOne body via Bifrost Decision.
-// The backend must be registered as native OpenRouter (CustomProviderConfig nil).
+// SystemOneDecisionRaw sends a Typesafe-shaped SystemOne body via Bifrost Decision.
+// The backend must be one whose Bifrost provider implements the decision operation:
+// native OpenRouter (CustomProviderConfig nil) or a typesafe extension backend.
 func (c *Client) SystemOneDecisionRaw(ctx context.Context, call Call) ([]byte, error) {
 	backendID, downstream, body, timeout := call.BackendID, call.Model, call.Body, call.Timeout
 	if c == nil || c.bf == nil {
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.SystemOneDecisionRaw", "bifrost not configured")
+	}
+	if err := requireCallBound(ctx, timeout, "router.SystemOneDecisionRaw"); err != nil {
+		return nil, err
 	}
 	var native typesafe.TypesafeDecisionRequest
 	if err := json.Unmarshal(body, &native); err != nil {

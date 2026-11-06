@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -167,6 +168,32 @@ func TestSecretEnvNamesStableOrder(t *testing.T) {
 		}
 		if !slices.Equal(got, want) {
 			t.Fatalf("names %v want %v", got, want)
+		}
+	}
+}
+
+// TestRequireBackends checks deploy refuses a gateway YAML the gateway would refuse:
+// one with no backends.
+func TestRequireBackends(t *testing.T) {
+	dir := t.TempDir()
+	for name, tc := range map[string]struct {
+		yaml string
+		ok   bool
+	}{
+		"one backend": {"backends:\n  openrouter:\n    capabilities: [chat]\n", true},
+		"empty map":   {"backends: {}\n", false},
+		"no key":      {"routers:\n  fast:\n    capability: chat\n", false},
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".yaml")
+		if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := RequireBackends(path)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err %v, want ok=%v", name, err, tc.ok)
+		}
+		if err != nil && !strings.Contains(err.Error(), path) {
+			t.Errorf("%s: error should name the file: %v", name, err)
 		}
 	}
 }

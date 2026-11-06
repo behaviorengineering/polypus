@@ -6,6 +6,7 @@ package catalog
 
 import (
 	"context"
+	"crypto/sha256"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -125,27 +126,40 @@ func ListStrict(ctx context.Context, src Source) (ModelList, error) {
 	return ModelList{Object: ObjectList, Data: models}, nil
 }
 
-// Registry keeps one client per key for the life of the process.
+// Registry keeps one client per key (a backend id) for the life of the process. Each
+// entry remembers a fingerprint of what the client was built from (its token and API
+// base); when that changes, Get builds a new client and drops the old one, so a rotated
+// token neither keeps the old client alive nor grows the map.
 type Registry[T any] struct {
 	mu      sync.Mutex
-	clients map[string]*T
+	clients map[string]registryEntry[T]
 }
 
-// Get returns the client for key, creating it once with create.
-func (r *Registry[T]) Get(key string, create func() (*T, error)) (*T, error) {
+// registryEntry is one cached client and the fingerprint it was built from. The
+// fingerprint is a hash, so the registry holds no token of its own.
+type registryEntry[T any] struct {
+	fingerprint [sha256.Size]byte
+	client      *T
+}
+
+// Get returns the client for key when it was built from the same fingerprint, else
+// builds one with create and replaces the entry. fingerprint carries every input
+// that makes a client stale, such as token + "\x00" + base.
+func (r *Registry[T]) Get(key, fingerprint string, create func() (*T, error)) (*T, error) {
+	fp := sha256.Sum256([]byte(fingerprint))
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if c, ok := r.clients[key]; ok {
-		return c, nil
+	if e, ok := r.clients[key]; ok && e.fingerprint == fp {
+		return e.client, nil
 	}
 	c, err := create()
 	if err != nil {
 		return nil, err
 	}
 	if r.clients == nil {
-		r.clients = map[string]*T{}
+		r.clients = map[string]registryEntry[T]{}
 	}
-	r.clients[key] = c
+	r.clients[key] = registryEntry[T]{fingerprint: fp, client: c}
 	return c, nil
 }
 

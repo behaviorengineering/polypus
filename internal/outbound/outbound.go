@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -140,7 +141,7 @@ func NewPolicies() *Policies {
 	return &Policies{breakers: map[string]failsafe.Policy[any]{}}
 }
 
-// defaultPolicies serves the package-level Run, Do, DoOnce and DoStreamOnce.
+// defaultPolicies serves the package-level Run, Do and DoOnce.
 var defaultPolicies = NewPolicies()
 
 // Scoped names one instance of a dependency, such as one backend of a provider kind,
@@ -249,12 +250,6 @@ func DoOnce(ctx context.Context, name string, client *http.Client, req *http.Req
 	return defaultPolicies.DoOnce(ctx, name, client, req)
 }
 
-// DoStreamOnce opens a stream once under the process default policies; see
-// Policies.DoStreamOnce.
-func DoStreamOnce(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
-	return defaultPolicies.DoStreamOnce(ctx, name, client, req)
-}
-
 // Run executes fn under retry and the breaker for name.
 func (p *Policies) Run(ctx context.Context, name string, fn func() error) error {
 	if err := validateCtx(ctx); err != nil {
@@ -268,7 +263,10 @@ func (p *Policies) Run(ctx context.Context, name string, fn func() error) error 
 // Do performs one HTTP request under retry and the breaker for name. req is cloned
 // per attempt. When every attempt ends in an HTTP status (permanent, or retryable
 // with retries spent), Do returns the last response with a nil error for the caller
-// to map.
+// to map. When ctx ends while Do waits between retries, Do returns the last
+// response together with a CodeTimeout (deadline) or CodeCanceled error, so the
+// cause is the deadline and not the upstream status. The caller closes resp.Body
+// whenever resp is not nil, error or not; CloseResponse does that.
 func (p *Policies) Do(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
 	p = p.orDefault()
 	if err := validateCtx(ctx); err != nil {
@@ -321,11 +319,35 @@ func (p *Policies) Do(ctx context.Context, name string, client *http.Client, req
 		})
 	if err != nil {
 		if resp != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				// The deadline ended the retries: keep the last upstream answer for
+				// the caller, and say why it stopped.
+				return resp, derrors.Wrap(ctxErr, contextCode(ctxErr), "outbound."+name, "deadline during retries").
+					With("dependency", name).With("last_status", strconv.Itoa(resp.StatusCode))
+			}
 			return resp, nil
 		}
 		return nil, dialError(name, err)
 	}
 	return resp, nil
+}
+
+// CloseResponse closes resp's body when there is one. Do can return a response with
+// an error; a caller that returns on the error closes the response here. A failed
+// close of a body nobody reads has nothing left to report.
+func CloseResponse(resp *http.Response) {
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+}
+
+// contextCode maps a context error to its domain code: a deadline is CodeTimeout,
+// a cancel is CodeCanceled.
+func contextCode(err error) derrors.Code {
+	if errors.Is(err, context.Canceled) {
+		return derrors.CodeCanceled
+	}
+	return derrors.CodeTimeout
 }
 
 // DoOnce sends req exactly once under the breaker for name, with no retry. Use it
@@ -340,20 +362,8 @@ func (p *Policies) DoOnce(ctx context.Context, name string, client *http.Client,
 	return p.orDefault().once(ctx, name, client, req)
 }
 
-// DoStreamOnce opens a streaming response exactly once under the breaker for name,
-// with no retry. It needs a non-nil ctx but no deadline: the caller bounds a stream
-// with its own first-byte timer and the idle limit on the body, and a deadline would
-// cut a healthy long stream short. An HTTP 5xx counts as a breaker failure, and the
-// response still goes back to the caller with a nil error; the caller closes its body.
-func (p *Policies) DoStreamOnce(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
-	if err := requireCtx(ctx); err != nil {
-		return nil, err
-	}
-	return p.orDefault().once(ctx, name, client, req)
-}
-
-// once is one attempt under the breaker for name, shared by DoOnce and DoStreamOnce.
-// ctx is already validated.
+// once is one attempt under the breaker for name, for DoOnce. ctx is already
+// validated.
 func (p *Policies) once(ctx context.Context, name string, client *http.Client, req *http.Request) (*http.Response, error) {
 	if client == nil {
 		return nil, derrors.New(derrors.CodeInvalid, "outbound", "http client is required")

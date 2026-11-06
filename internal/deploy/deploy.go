@@ -116,6 +116,9 @@ func resolvePlan(opts Options) (plan, error) {
 		return p, err
 	}
 	p.gatewayPath = gatewayPath
+	if err := gatewayconfig.RequireBackends(gatewayPath); err != nil {
+		return p, derrors.Wrap(err, derrors.CodeInvalid, "deploy.resolvePlan", "gateway config")
+	}
 	if p.services, err = Services(opts); err != nil {
 		return p, err
 	}
@@ -263,11 +266,12 @@ func apply(ctx context.Context, opts Options, p plan, out *progress.Printer) (er
 	if err = phase(ctx, opts, "health.poll", func(ctx context.Context) error {
 		pollCtx, cancel := context.WithTimeout(ctx, opts.HealthTimeout)
 		defer cancel()
-		return health.Poll(pollCtx, &http.Client{Timeout: healthProbeTimeout}, opts.HealthURL)
+		return health.Poll(pollCtx, &http.Client{Timeout: healthProbeTimeout}, opts.HealthURL, opts.HealthPollInterval)
 	}); err != nil {
 		err = withDiagnostics(ctx, opts, cc, err)
 		return err
 	}
+	hintIfKeyless(ctx, opts, out)
 	if opts.SkipSmoke {
 		out.Println("deploy: skip smoke (--skip-smoke)")
 		out.Printf("deploy ok: %s/health\n", opts.HealthURL)
@@ -302,6 +306,7 @@ func prepare(ctx context.Context, opts Options, p plan, out *progress.Printer) (
 		}
 		ensure.Services = p.services
 		ensure.Out = opts.Out
+		ensure.Probe = opts.ImageProbe
 		return images.EnsurePresent(ctx, p.imagesEnv, ensure)
 	}); err != nil {
 		return compose.Client{}, err
@@ -326,7 +331,30 @@ func prepare(ctx context.Context, opts Options, p plan, out *progress.Printer) (
 		ComposeFile: composeFile,
 		EnvFiles:    []string{p.imagesEnv, opts.EnvDeployPath()},
 		Env:         composeEnv(opts, p, serveDir),
+		Run:         opts.DockerRun,
+		Output:      opts.DockerOutput,
+		LookPath:    opts.DockerLookPath,
 	}, nil
+}
+
+// keylessHint tells the operator how to lock a gateway that answers without a key.
+const keylessHint = "deploy: the gateway has no access keys; anyone who can reach it (every member of the tailnet) can use it, including admin routes. Lock it: polypus deploy client-key"
+
+// hintIfKeyless prints keylessHint when the deployed gateway answers its admin
+// allow list without a key. The CLI cannot read the container's key store, so it
+// asks the gateway. The check is advice only: when it cannot run, the deploy says
+// so and carries on.
+func hintIfKeyless(ctx context.Context, opts Options, out *progress.Printer) {
+	ctx, cancel := context.WithTimeout(ctx, healthProbeTimeout)
+	defer cancel()
+	open, err := health.Keyless(ctx, &http.Client{Timeout: healthProbeTimeout}, opts.HealthURL)
+	if err != nil {
+		out.Printf("deploy: access key check skipped: %v\n", err)
+		return
+	}
+	if open {
+		out.Println(keylessHint)
+	}
 }
 
 // withDiagnostics dumps the gateway's logs and state after a failure and returns
@@ -436,7 +464,11 @@ func runSmoke(ctx context.Context, opts Options, p plan, out *progress.Printer) 
 	if p.checks.Providers {
 		out.Println("deploy: provider chat smoke enabled (POLYPUS_SMOKE_PROVIDERS=0 to disable)")
 	}
-	return smoke.Run(smokeCtx, smoke.Options{
+	run := opts.Smoke
+	if run == nil {
+		run = smoke.Run
+	}
+	return run(smokeCtx, smoke.Options{
 		BaseURL:       opts.HealthURL,
 		ChatModel:     opts.SmokeChatModel,
 		WithRouter:    p.checks.Routers,

@@ -43,6 +43,9 @@ type Config struct {
 	BaseURL string
 	// OwnerRepo is owner/name of the repository every call reads. Required.
 	OwnerRepo string
+	// Policies holds the retry and breaker state for GitHub calls; nil uses the
+	// process default, which every client in one CLI process shares.
+	Policies *outbound.Policies
 }
 
 // Client reads one repository's tags, workflow runs and jobs.
@@ -51,6 +54,7 @@ type Client struct {
 	token     string
 	base      string
 	ownerRepo string
+	policies  *outbound.Policies
 }
 
 // CreateClient returns a Client for cfg, or an error when the token or repository
@@ -73,7 +77,7 @@ func (cfg Config) CreateClient() (*Client, error) {
 	if hc == nil {
 		hc = &http.Client{Transport: observability.WrapTransport(nil)}
 	}
-	return &Client{http: hc, token: token, base: base, ownerRepo: ownerRepo}, nil
+	return &Client{http: hc, token: token, base: base, ownerRepo: ownerRepo, policies: cfg.Policies}, nil
 }
 
 // WorkflowRun is one GitHub Actions run.
@@ -209,8 +213,9 @@ func (c *Client) get(ctx context.Context, op, url string, into any) error {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("X-GitHub-Api-Version", apiVersion)
-	resp, err := outbound.Do(ctx, outbound.DepGitHub, c.http, req)
+	resp, err := c.policies.Do(ctx, outbound.DepGitHub, c.http, req) // nil uses the process default.
 	if err != nil {
+		outbound.CloseResponse(resp)
 		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "GET "+url)
 	}
 	defer func() { _ = resp.Body.Close() }()

@@ -136,8 +136,8 @@ func apiBase(base string) string {
 	return base
 }
 
-// Clients caches one batch client per backend, credential and URL. A gateway owns
-// one; its clients share the gateway's outbound policies.
+// Clients caches one batch client per backend; a changed credential or URL replaces
+// it. A gateway owns one; its clients share the gateway's outbound policies.
 type Clients struct {
 	Policies *outbound.Policies
 	reg      catalog.Registry[Client]
@@ -154,7 +154,7 @@ func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "resolve token").With("backend", b.ID)
 	}
 	base := apiBase(b.BaseURL)
-	return cs.reg.Get(b.ID+"\x00"+token+"\x00"+base, func() (*Client, error) {
+	return cs.reg.Get(b.ID, token+"\x00"+base, func() (*Client, error) {
 		c, err := newClient(base, token)
 		if err != nil {
 			return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "build client").With("backend", b.ID)

@@ -12,8 +12,10 @@ import (
 
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 
+	"github.com/behaviorengineering/polypus/internal/deploy/compose"
 	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
 	"github.com/behaviorengineering/polypus/internal/deploy/images"
+	"github.com/behaviorengineering/polypus/internal/deploy/smoke"
 	"github.com/behaviorengineering/polypus/internal/deploy/tailnet"
 )
 
@@ -47,6 +49,9 @@ type Options struct {
 	TailnetStatus tailnet.StatusFunc
 	// HealthTimeout is the health poll budget. Required (DefaultOptions sets it).
 	HealthTimeout time.Duration
+	// HealthPollInterval is the pause between health rounds; zero uses
+	// health.DefaultPollInterval.
+	HealthPollInterval time.Duration
 	// ImageWaitTimeout bounds the wait for a release's image build when a pinned
 	// tag is not in the registry yet. The caller's context budget must cover it.
 	ImageWaitTimeout time.Duration
@@ -55,6 +60,17 @@ type Options struct {
 	SmokeChatModel   string
 	SkipOverlayPrune bool
 	PruneFunc        func(ctx context.Context, gatewayPath string) error
+	// DockerRun runs each docker compose command; nil runs the real docker CLI.
+	DockerRun compose.Runner
+	// DockerOutput runs the docker commands whose output the failure diagnostics
+	// print; nil runs the real docker CLI.
+	DockerOutput compose.OutputRunner
+	// DockerLookPath finds docker before a pull; nil searches PATH.
+	DockerLookPath func(file string) (string, error)
+	// ImageProbe checks one pinned image ref in its registry; nil asks the registry.
+	ImageProbe func(ctx context.Context, ref, token string) error
+	// Smoke runs the post-health smoke; nil uses smoke.Run.
+	Smoke func(ctx context.Context, opts smoke.Options) error
 	// Out receives the plan and progress lines; nil writes to os.Stdout.
 	Out io.Writer
 	// Logger receives one structured error record per failed phase, with the
