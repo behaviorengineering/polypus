@@ -142,7 +142,7 @@ func TestChatStreamDumpsADroppedChunk(t *testing.T) {
 		t.Fatalf("a chunk after finish_reason must be dropped: %d %q", rec.Code, rec.Body.String())
 	}
 	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "stream-chunk-") {
+	if err != nil || len(entries) != 1 || !strings.Contains(entries[0].Name(), chunkDumpInfix) {
 		t.Fatalf("the dropped chunk must be dumped: %v %v", entries, err)
 	}
 }
@@ -200,6 +200,16 @@ func postEmbeddings(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 
 // rateLimited is the error the router returns for a provider 429 with Retry-After.
 func rateLimited(retryAfter string) error {
-	rl := ratelimit.ClassifyStatus("router.bifrost", http.StatusTooManyRequests, http.Header{"Retry-After": {retryAfter}}, nil)
+	rl, _ := ratelimit.ClassifyStatus("router.bifrost", http.StatusTooManyRequests, http.Header{"Retry-After": {retryAfter}}, nil)
 	return derrors.Wrap(rl, derrors.CodeRateLimited, "router.bifrost", "provider rate limited")
+}
+
+func TestChatDefaultBackendMissingIsNotReady(t *testing.T) {
+	cfg := scriptedRouterConfig()
+	cfg.Chat.Default = "ghost"
+	h := newScriptedGateway(t, &scriptedRouter{}, cfg)
+	rec := postChat(t, h, "m", false)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), string(derrors.CodeNotReady)) {
+		t.Fatalf("a default backend missing from config is the gateway's fault (503), not the caller's: %d %s", rec.Code, rec.Body.String())
+	}
 }

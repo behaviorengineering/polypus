@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 )
 
 func runTTS(ctx context.Context, opts Options) ([]Result, error) {
@@ -52,7 +54,7 @@ func runSTT(ctx context.Context, opts Options) ([]Result, error) {
 		if len(strings.TrimSpace(text)) < 8 {
 			return "", fmt.Errorf("transcript too short: %q", text)
 		}
-		return truncate(text, 80), nil
+		return httpx.Truncate(text, 80), nil
 	})
 	out := []Result{prep, transcribe}
 	if transcribe.Status == StatusFail {
@@ -69,13 +71,13 @@ func synthesize(ctx context.Context, opts Options) ([]byte, error) {
 		ResponseFormat string `json:"response_format"`
 	}{opts.TTSModel, opts.TTSText, opts.TTSVoice, "mp3"})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("speech: encode: %w", err)
 	}
 	req, err := httpNewPost(ctx, opts.BaseURL+"/v1/audio/speech", string(raw))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("speech: request: %w", err)
 	}
-	body, err := call(req, "speech", audioBodyMax)
+	body, _, err := call(req, "speech", audioBodyMax)
 	if err != nil {
 		return nil, err
 	}
@@ -91,24 +93,24 @@ func transcribeAudio(ctx context.Context, opts Options, audio []byte) (string, e
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	if err := w.WriteField("model", opts.STTModel); err != nil {
-		return "", err
+		return "", fmt.Errorf("transcription: multipart: %w", err)
 	}
 	part, err := w.CreateFormFile("file", "smoke.mp3")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("transcription: multipart: %w", err)
 	}
 	if _, err := part.Write(audio); err != nil {
-		return "", err
+		return "", fmt.Errorf("transcription: multipart: %w", err)
 	}
 	if err := w.Close(); err != nil {
-		return "", err
+		return "", fmt.Errorf("transcription: multipart: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, opts.BaseURL+"/v1/audio/transcriptions", &buf)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("transcription: request: %w", err)
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	raw, err := call(req, "transcription", probeBodyMax)
+	raw, _, err := call(req, "transcription", probeBodyMax)
 	if err != nil {
 		return "", err
 	}
@@ -116,18 +118,7 @@ func transcribeAudio(ctx context.Context, opts Options, audio []byte) (string, e
 		Text string `json:"text"`
 	}
 	if err := json.Unmarshal(raw, &flat); err != nil {
-		return "", err
+		return "", fmt.Errorf("transcription: decode: %w", err)
 	}
 	return flat.Text, nil
-}
-
-// truncate trims s and caps it at n runes, ending a cut string with "...". It cuts on
-// rune boundaries, so model output in any script stays valid text.
-func truncate(s string, n int) string {
-	s = strings.TrimSpace(s)
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:max(0, n-3)]) + "..."
 }

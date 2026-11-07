@@ -21,7 +21,7 @@ import (
 func (h chatHandler) dialChat(w http.ResponseWriter, r *http.Request, req chatRequest, t backendTarget) {
 	body, err := req.outbound(t.downstream, t.backend.Extension)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.chat", observability.LLMSpanAttrs{
@@ -29,13 +29,15 @@ func (h chatHandler) dialChat(w http.ResponseWriter, r *http.Request, req chatRe
 	})
 	defer func() { endDialSpan(span, err, t.id) }()
 	r = r.WithContext(ctx)
-	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), t.id, config.ChatKindOf(req.vision, req.thinking))
+	kind := config.ChatKindOf(req.vision, req.thinking)
+	hop := h.timeouts.ResolveChat(r.Header.Get(config.TimeoutHeader), t.id, kind)
+	r = r.WithContext(callerBudget(r.Context(), hop, h.timeouts.ResolveChat("", t.id, kind)))
 	c := chatCall{target: t, body: body, stream: req.stream, hop: hop}
 	if err = h.requireBifrost("gateway.dialChat", t.id); err == nil {
-		err = h.upstreams.Execute(t.id, func() error { return h.bifrostChat(w, r, c) })
+		err = h.upstreams.Execute(r.Context(), t.id, func() error { return h.bifrostChat(w, r, c) })
 	}
 	if err != nil {
-		h.writeUpstreamDialError(w, dialFailure{err: err, upstream: t.id})
+		h.writeUpstreamDialError(w, r, dialFailure{err: err, upstream: t.id})
 	}
 }
 
@@ -52,8 +54,8 @@ type chatCall struct {
 
 // requireBifrost fails closed when backendID is not registered with the router:
 // chat and embeddings go through Bifrost only, with no HTTP fallback.
-func (s *shared) requireBifrost(op, backendID string) error {
-	if s.chat.UsesBifrost(backendID) {
+func (h chatHandler) requireBifrost(op, backendID string) error {
+	if h.chat.UsesBifrost(backendID) {
 		return nil
 	}
 	return derrors.New(derrors.CodeFailedPrecondition, op, "backend not registered with the router").
@@ -106,7 +108,7 @@ func (h chatHandler) bifrostChatStream(w http.ResponseWriter, r *http.Request, c
 		}
 		return gatewayErr(err, op, "stream").With("backend", backendID)
 	}
-	ctx := withStreamChunkCounter(streamCtx, h.chunkDumps())
+	ctx := withStreamChunkCounter(streamCtx, h.dumps)
 	return writeBifrostChatSSE(ctx, w, bifrostStream{chunks: chunks, errs: errCh, watchdog: wd, selected: sel})
 }
 

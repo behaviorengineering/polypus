@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 )
 
 const (
@@ -56,7 +57,7 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 		Body     pingRequest `json:"body"`
 	}{batchSmokeCustomID, http.MethodPost, batch.EndpointChatCompletions, newPingRequest(model, opts)})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("batch line: encode: %w", err)
 	}
 	fileID, err := uploadBatchJSONL(ctx, opts.BaseURL, string(line)+"\n")
 	if err != nil {
@@ -91,7 +92,7 @@ func batchLifecycle(ctx context.Context, opts Options) (string, error) {
 		return "", err
 	}
 	if !strings.Contains(string(raw), batchSmokeCustomID) {
-		return "", fmt.Errorf("output missing custom_id %q: %s", batchSmokeCustomID, truncate(string(raw), 80))
+		return "", fmt.Errorf("output missing custom_id %q: %s", batchSmokeCustomID, httpx.Truncate(string(raw), 80))
 	}
 	return fmt.Sprintf("batch %s completed", batchID), nil
 }
@@ -100,25 +101,25 @@ func uploadBatchJSONL(ctx context.Context, baseURL, content string) (string, err
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	if err := w.WriteField("purpose", "batch"); err != nil {
-		return "", err
+		return "", fmt.Errorf("files upload: multipart: %w", err)
 	}
 	fw, err := w.CreateFormFile("file", "smoke-batch.jsonl")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("files upload: multipart: %w", err)
 	}
 	if _, err := fw.Write([]byte(content)); err != nil {
-		return "", err
+		return "", fmt.Errorf("files upload: multipart: %w", err)
 	}
 	if err := w.Close(); err != nil {
-		return "", err
+		return "", fmt.Errorf("files upload: multipart: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v1/files", &buf)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("files upload: request: %w", err)
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	raw, err := call(req, "files upload", probeBodyMax)
+	raw, _, err := call(req, "files upload", probeBodyMax)
 	if err != nil {
 		return "", err
 	}
@@ -126,7 +127,7 @@ func uploadBatchJSONL(ctx context.Context, baseURL, content string) (string, err
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return "", err
+		return "", fmt.Errorf("files upload: decode: %w", err)
 	}
 	if strings.TrimSpace(parsed.ID) == "" {
 		return "", fmt.Errorf("files upload: empty id")
@@ -134,20 +135,27 @@ func uploadBatchJSONL(ctx context.Context, baseURL, content string) (string, err
 	return parsed.ID, nil
 }
 
+// batchCreateRequest is the OpenAI batch create body.
+type batchCreateRequest struct {
+	InputFileID      string `json:"input_file_id"`
+	Endpoint         string `json:"endpoint"`
+	CompletionWindow string `json:"completion_window"`
+}
+
 func createBatch(ctx context.Context, baseURL, inputFileID string) (string, error) {
-	body, err := json.Marshal(map[string]string{
-		"input_file_id":     inputFileID,
-		"endpoint":          batch.EndpointChatCompletions,
-		"completion_window": batchCompletionWindow,
+	body, err := json.Marshal(batchCreateRequest{
+		InputFileID:      inputFileID,
+		Endpoint:         batch.EndpointChatCompletions,
+		CompletionWindow: batchCompletionWindow,
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("batches create: encode: %w", err)
 	}
 	req, err := httpNewPost(ctx, baseURL+"/v1/batches", string(body))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("batches create: request: %w", err)
 	}
-	raw, err := call(req, "batches create", probeBodyMax)
+	raw, _, err := call(req, "batches create", probeBodyMax)
 	if err != nil {
 		return "", err
 	}
@@ -156,7 +164,7 @@ func createBatch(ctx context.Context, baseURL, inputFileID string) (string, erro
 		Status batch.Status `json:"status"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return "", err
+		return "", fmt.Errorf("batches create: decode: %w", err)
 	}
 	if strings.TrimSpace(parsed.ID) == "" {
 		return "", fmt.Errorf("batches create: empty id")
@@ -210,15 +218,15 @@ func getBatch(ctx context.Context, baseURL, batchID string) (batchMetaSmoke, err
 	var zero batchMetaSmoke
 	req, err := httpNewGet(ctx, baseURL+"/v1/batches/"+batchID)
 	if err != nil {
-		return zero, err
+		return zero, fmt.Errorf("batches get: request: %w", err)
 	}
-	raw, err := call(req, "batches get", probeBodyMax)
+	raw, _, err := call(req, "batches get", probeBodyMax)
 	if err != nil {
 		return zero, err
 	}
 	var meta batchMetaSmoke
 	if err := json.Unmarshal(raw, &meta); err != nil {
-		return zero, err
+		return zero, fmt.Errorf("batches get: decode: %w", err)
 	}
 	return meta, nil
 }
@@ -226,7 +234,8 @@ func getBatch(ctx context.Context, baseURL, batchID string) (batchMetaSmoke, err
 func downloadFileContent(ctx context.Context, baseURL, fileID string) ([]byte, error) {
 	req, err := httpNewGet(ctx, baseURL+"/v1/files/"+fileID+"/content")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("files content: request: %w", err)
 	}
-	return call(req, "files content", probeBodyMax)
+	raw, _, err := call(req, "files content", probeBodyMax)
+	return raw, err
 }

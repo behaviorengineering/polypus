@@ -171,3 +171,16 @@ func TestSameOriginComparesSchemeHostAndPort(t *testing.T) {
 		})
 	}
 }
+
+func TestSameOriginReadsTheSchemeLikeTheLandingPage(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, pathAdminModelsAllow, nil)
+	r.Host = "gw.example"
+	r.Header.Set("X-Forwarded-Proto", "ftp")
+	if !sameOrigin("http://gw.example", r) {
+		t.Fatal("a forwarded scheme other than http or https must be ignored, as requestScheme does")
+	}
+	r.Header.Set("X-Forwarded-Proto", "HTTPS, http")
+	if !sameOrigin("https://gw.example", r) || sameOrigin("http://gw.example", r) {
+		t.Fatal("the first forwarded value names the scheme")
+	}
+}

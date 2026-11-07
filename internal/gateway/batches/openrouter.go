@@ -6,12 +6,11 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
-	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
-const opOpenRouter = "batch.openrouter"
+const opOpenRouter = "batches.openrouter"
 
 type openRouterSubmitter struct {
 	client func() (*openrouter.Client, error)
@@ -21,7 +20,7 @@ type openRouterSubmitter struct {
 // fetches) the backend's client. Panics if client is nil.
 func NewOpenRouterSubmitter(client func() (*openrouter.Client, error)) Submitter {
 	if client == nil {
-		panic("service.NewOpenRouterSubmitter: nil client getter")
+		panic("batches.NewOpenRouterSubmitter: nil client getter")
 	}
 	return openRouterSubmitter{client: client}
 }
@@ -118,10 +117,10 @@ func openRouterLines(results []openrouter.BatchResult, publicModel string) []bat
 		line := batch.LineResult{CustomID: r.CustomID}
 		switch {
 		case r.Error != nil:
-			line.ErrCode = catalog.FirstNonEmpty(r.Error.Type, "batch_failed")
-			line.ErrMessage = catalog.FirstNonEmpty(r.Error.Message, "openrouter batch line failed")
+			line.ErrCode = orDefault(r.Error.Type, batch.LineErrFailed)
+			line.ErrMessage = orDefault(r.Error.Message, "openrouter batch line failed")
 		case r.Response == nil || r.Response.StatusCode < 200 || r.Response.StatusCode >= 300:
-			line.ErrCode = "batch_failed"
+			line.ErrCode = batch.LineErrFailed
 			line.ErrMessage = "openrouter batch line returned no successful response"
 		default:
 			line.Body = relabelModel(r.Response.Body, publicModel)

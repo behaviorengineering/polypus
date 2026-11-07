@@ -4,15 +4,21 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
-// keyModel is the OpenAI "model" key: a request and response field, an error
-// param, and the object type of a model entry.
+// keyModel is the OpenAI "model" key: a request and response field and an error
+// param.
 const keyModel = "model"
+
+// objectModel is the OpenAI "object" value of a model entry, one name for every
+// models surface.
+const objectModel = catalog.ObjectModel
 
 // OpenAI and provider chat body keys.
 const (
@@ -40,25 +46,31 @@ func isJSONNull(raw []byte) bool {
 	return len(t) == 0 || string(t) == jsonNull
 }
 
+// responder writes every response a route sends: JSON bodies, OpenAI errors and
+// failure logs. Each handler has one; it is the only dependency they all share.
+type responder struct {
+	log *slog.Logger
+}
+
 // writeJSON is the gateway's one JSON response writer. It marshals before writing,
 // so a value that cannot be encoded still gets a 500, and it logs a failed write.
-func (s *shared) writeJSON(w http.ResponseWriter, status int, v any) {
+func (rs responder) writeJSON(w http.ResponseWriter, status int, v any) {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		s.log.Warn("polypus: json response encode failed", "type", fmt.Sprintf("%T", v), "status", status, "err", err)
+		rs.log.Warn("polypus: json response encode failed", "type", fmt.Sprintf("%T", v), "status", status, "err", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if _, err := w.Write(append(raw, '\n')); err != nil {
-		s.log.Warn("polypus: json response write failed", "type", fmt.Sprintf("%T", v), "status", status, "err", err)
+		rs.log.Warn("polypus: json response write failed", "type", fmt.Sprintf("%T", v), "status", status, "err", err)
 	}
 }
 
 // writeOpenAIError answers with an OpenAI error body.
-func (s *shared) writeOpenAIError(w http.ResponseWriter, status int, e openaiError) {
-	s.writeJSON(w, status, openaiErrorBody{Error: e})
+func (rs responder) writeOpenAIError(w http.ResponseWriter, status int, e openaiError) {
+	rs.writeJSON(w, status, openaiErrorBody{Error: e})
 }
 
 // Wire-only OpenAI error codes with no derrors counterpart.
@@ -74,9 +86,9 @@ const (
 var allowRead = []string{http.MethodGet, http.MethodHead}
 
 // writeMethodNotAllowed answers 405 with the Allow header RFC 9110 requires.
-func (s *shared) writeMethodNotAllowed(w http.ResponseWriter, allow ...string) {
+func (rs responder) writeMethodNotAllowed(w http.ResponseWriter, allow ...string) {
 	w.Header().Set("Allow", strings.Join(allow, ", "))
-	s.writeOpenAIError(w, http.StatusMethodNotAllowed, openaiError{
+	rs.writeOpenAIError(w, http.StatusMethodNotAllowed, openaiError{
 		Message: strings.ToLower(http.StatusText(http.StatusMethodNotAllowed)),
 		Type:    errTypeInvalidRequest,
 		Code:    codeMethodNotAllowed,
@@ -84,8 +96,8 @@ func (s *shared) writeMethodNotAllowed(w http.ResponseWriter, allow ...string) {
 }
 
 // writeNotFound answers 404 with an OpenAI error body.
-func (s *shared) writeNotFound(w http.ResponseWriter) {
-	s.writeOpenAIError(w, http.StatusNotFound, openaiError{
+func (rs responder) writeNotFound(w http.ResponseWriter) {
+	rs.writeOpenAIError(w, http.StatusNotFound, openaiError{
 		Message: strings.ToLower(http.StatusText(http.StatusNotFound)),
 		Type:    errTypeNotFound,
 		Code:    string(derrors.CodeNotFound),

@@ -80,62 +80,50 @@ func (s *selectedModel) record(model string) {
 }
 
 // applyChatThinkingRoot maps inbound OpenAI reasoning to the backend's own fields in
-// root, and reports whether it changed anything.
-func applyChatThinkingRoot(root map[string]any, extension string, model string) bool {
+// root.
+func applyChatThinkingRoot(root map[string]any, extension string, model string) {
 	wants := chatMapWantsThinking(root)
 	model = strings.ToLower(strings.TrimSpace(model))
 	if model == "" {
 		bodyModel, _ := root[keyModel].(string)
 		model = strings.ToLower(strings.TrimSpace(bodyModel))
 	}
-	ext := strings.ToLower(strings.TrimSpace(extension))
-	var changed bool
-	switch ext {
+	switch strings.ToLower(strings.TrimSpace(extension)) {
 	case config.ExtensionGemini:
-		changed = stripCloudflareThinkingFields(root)
-		changed = applyGeminiThinkingEmit(root, model, wants) || changed
+		stripCloudflareThinkingFields(root)
+		applyGeminiThinkingEmit(root, model, wants)
 	case config.ExtensionCloudflare:
-		changed = applyCloudflareThinkingEmit(root, model, wants)
+		applyCloudflareThinkingEmit(root, model, wants)
 	default:
-		changed = stripCloudflareThinkingFields(root)
+		stripCloudflareThinkingFields(root)
 	}
-	return changed
 }
 
-func stripCloudflareThinkingFields(root map[string]any) bool {
-	changed := false
-	if _, ok := root[keyChatTemplateKwargs]; ok {
-		delete(root, keyChatTemplateKwargs)
-		changed = true
-	}
-	if _, ok := root[keyEnableThinking]; ok {
-		delete(root, keyEnableThinking)
-		changed = true
-	}
-	return changed
+func stripCloudflareThinkingFields(root map[string]any) {
+	delete(root, keyChatTemplateKwargs)
+	delete(root, keyEnableThinking)
 }
 
 // reasoningEffortMinimal is the lowest OpenAI reasoning effort; Polypus treats it as
 // thinking off.
 const reasoningEffortMinimal = "minimal"
 
-func applyGeminiThinkingEmit(root map[string]any, model string, wants bool) bool {
-	changed := false
+func applyGeminiThinkingEmit(root map[string]any, model string, wants bool) {
 	switch {
 	case strings.Contains(model, "gemma-4"):
 		effort := reasoningEffortMinimal
 		if wants {
 			effort = "high"
 		}
-		changed = setNestedReasoningEffort(root, effort) || changed
-		changed = deleteNestedReasoningField(root, keyMaxTokens) || changed
+		setNestedReasoningEffort(root, effort)
+		deleteNestedReasoningField(root, keyMaxTokens)
 	case strings.Contains(model, "gemini-2.5"):
 		tokens := 0
 		if wants {
 			tokens = -1
 		}
-		changed = setNestedReasoningMaxTokens(root, tokens) || changed
-		changed = deleteNestedReasoningField(root, keyEffort) || changed
+		setNestedReasoningMaxTokens(root, tokens)
+		deleteNestedReasoningField(root, keyEffort)
 	case strings.Contains(model, "gemini-3"):
 		effort := reasoningEffortMinimal
 		if wants {
@@ -144,45 +132,30 @@ func applyGeminiThinkingEmit(root map[string]any, model string, wants bool) bool
 				effort = "high"
 			}
 		}
-		changed = setNestedReasoningEffort(root, effort) || changed
-	default:
-		if wants {
-			return false
-		}
+		setNestedReasoningEffort(root, effort)
 	}
-	return changed
 }
 
-func applyCloudflareThinkingEmit(root map[string]any, model string, wants bool) bool {
+func applyCloudflareThinkingEmit(root map[string]any, model string, wants bool) {
 	if strings.Contains(model, "deepseek") {
 		if wants {
-			return false
+			return
 		}
-		if _, ok := root[keyReasoningEffort]; ok {
-			return false
+		if _, ok := root[keyReasoningEffort]; !ok {
+			root[keyReasoningEffort] = "none"
 		}
-		root[keyReasoningEffort] = "none"
-		return true
+		return
 	}
 	if !strings.Contains(model, "gemma") && !strings.Contains(model, "glm") && !strings.Contains(model, "zai-org") {
-		return false
+		return
 	}
-	changed := false
 	kwargs, ok := root[keyChatTemplateKwargs].(map[string]any)
 	if !ok {
 		kwargs = map[string]any{}
 		root[keyChatTemplateKwargs] = kwargs
-		changed = true
 	}
-	if v, exists := kwargs[keyEnableThinking]; !exists || v != wants {
-		kwargs[keyEnableThinking] = wants
-		changed = true
-	}
-	if v, exists := root[keyEnableThinking]; !exists || v != wants {
-		root[keyEnableThinking] = wants
-		changed = true
-	}
-	return changed
+	kwargs[keyEnableThinking] = wants
+	root[keyEnableThinking] = wants
 }
 
 // reasoningObject returns root["reasoning"], creating it when absent. ok is false
@@ -198,43 +171,44 @@ func reasoningObject(root map[string]any) (map[string]any, bool) {
 	return reasoning, ok
 }
 
-func setNestedReasoningEffort(root map[string]any, effort string) bool {
+// setNestedReasoningEffort sets reasoning.effort, keeping the caller's spelling of
+// an equal effort.
+func setNestedReasoningEffort(root map[string]any, effort string) {
 	reasoning, ok := reasoningObject(root)
 	if !ok {
-		return false
+		return
 	}
 	if cur, ok := reasoning[keyEffort].(string); ok && strings.EqualFold(strings.TrimSpace(cur), effort) {
-		return false
+		return
 	}
 	reasoning[keyEffort] = effort
-	return true
 }
 
-func setNestedReasoningMaxTokens(root map[string]any, tokens int) bool {
+// setNestedReasoningMaxTokens sets reasoning.max_tokens, keeping the caller's own
+// encoding of an equal number.
+func setNestedReasoningMaxTokens(root map[string]any, tokens int) {
 	reasoning, ok := reasoningObject(root)
 	if !ok {
-		return false
+		return
 	}
 	if cur, ok := reasoning[keyMaxTokens]; ok && jsonIntEquals(cur, tokens) {
-		return false
+		return
 	}
 	reasoning[keyMaxTokens] = tokens
-	return true
 }
 
-func deleteNestedReasoningField(root map[string]any, field string) bool {
+func deleteNestedReasoningField(root map[string]any, field string) {
 	reasoning, ok := root[keyReasoning].(map[string]any)
 	if !ok {
-		return false
+		return
 	}
 	if _, exists := reasoning[field]; !exists {
-		return false
+		return
 	}
 	delete(reasoning, field)
 	if len(reasoning) == 0 {
 		delete(root, keyReasoning)
 	}
-	return true
 }
 
 // jsonIntEquals reports whether a decoded JSON number equals n. A request decoded

@@ -22,18 +22,27 @@ type probeAnswer struct {
 
 func (a probeAnswer) ok() bool { return a.status >= 200 && a.status < 300 }
 
-// fetch sends req through the outbound seam and reads at most probeBodyMax bytes of
-// the answer, closing the body before it returns.
-func fetch(ctx context.Context, req *http.Request) (probeAnswer, error) {
-	resp, err := outbound.Do(ctx, outbound.DepHealth, http.DefaultClient, req)
+// fetch sends req through the outbound seam, with o's client and policies, and reads the answer, closing the body
+// before it returns. A body over probeBodyMax is an error, not a silent cut that
+// fails later as a parse error.
+func (o CollectorOptions) fetch(ctx context.Context, req *http.Request) (probeAnswer, error) {
+	client := o.HTTP
+	if client == nil {
+		client = http.DefaultClient
+	}
+	// A nil Policies is the process default set.
+	resp, err := o.Policies.Do(ctx, outbound.DepHealth, client, req)
 	if err != nil {
 		outbound.CloseResponse(resp)
 		return probeAnswer{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, probeBodyMax))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, probeBodyMax+1))
 	if err != nil {
 		return probeAnswer{}, fmt.Errorf("collector smoke: read body: %w", err)
+	}
+	if len(body) > probeBodyMax {
+		return probeAnswer{}, fmt.Errorf("collector smoke: %s answered over %d bytes", req.URL.Redacted(), probeBodyMax)
 	}
 	return probeAnswer{status: resp.StatusCode, line: resp.Status, body: body}, nil
 }

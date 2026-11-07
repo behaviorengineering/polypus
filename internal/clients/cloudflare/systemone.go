@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/behaviorengineering/polypus/internal/clients/catalog"
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
@@ -28,7 +28,7 @@ func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]by
 		return nil, derrors.New(derrors.CodeInvalid, opSystemOne, "context required")
 	}
 	if c == nil {
-		return nil, derrors.New(derrors.CodeFailedPrecondition, opSystemOne, "not configured")
+		return nil, derrors.New(derrors.CodeNotReady, opSystemOne, "not configured")
 	}
 	model = NormalizeModel(strings.TrimSpace(model))
 	if model == "" {
@@ -61,7 +61,7 @@ func (c *Client) SystemOne(ctx context.Context, model string, body []byte) ([]by
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := catalog.ReadCapped(resp.Body, runMaxBody, opSystemOne)
+	raw, err := httpx.ReadCapped(resp.Body, runMaxBody, opSystemOne)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 		}
 		if envelope.Success != nil {
 			if !*envelope.Success {
-				if rl := ratelimit.Classify(opUnwrapRunResult, 0, nil, cur); rl != nil {
+				if rl, ok := ratelimit.Classify(opUnwrapRunResult, 0, nil, cur); ok {
 					return nil, rl
 				}
 				return nil, derrors.New(derrors.CodeUnavailable, opUnwrapRunResult, firstErrorMessage(envelope.Errors, "cloudflare workers ai error"))
@@ -132,6 +132,12 @@ func unwrapRunResult(raw []byte) ([]byte, error) {
 			continue
 		}
 		break
+	}
+	// Only a TypeSafe payload is an answer: after three peels, or an object with
+	// neither success nor result, what is left ({} or a nested envelope) is not one.
+	if !looksLikeTypeSafeResult(cur) {
+		return nil, derrors.New(derrors.CodeUnavailable, opUnwrapRunResult, "no answers in response").
+			With("body", httpx.Truncate(string(cur), errorBodyMax))
 	}
 	return cur, nil
 }

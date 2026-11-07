@@ -1,3 +1,6 @@
+// Package batch is the provider-neutral core of the OpenAI Batch and Files APIs:
+// the stored file and batch records, the on-disk store, JSONL input parsing,
+// completion windows, and the output and error files built from finished lines.
 package batch
 
 import "strings"

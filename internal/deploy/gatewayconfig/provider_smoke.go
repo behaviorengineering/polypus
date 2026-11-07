@@ -1,9 +1,9 @@
 package gatewayconfig
 
 import (
-	"fmt"
+	"maps"
 	"net/url"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -79,14 +79,8 @@ func ChatSmokeTargets(path string) ([]ChatSmokeTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(cfg.Backends))
-	for id := range cfg.Backends {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-
 	var out []ChatSmokeTarget
-	for _, id := range ids {
+	for _, id := range slices.Sorted(maps.Keys(cfg.Backends)) {
 		b := cfg.Backends[id]
 		if b.Smoke.Skip || !backendHasCapability(b, "chat") {
 			continue
@@ -101,7 +95,6 @@ func ChatSmokeTargets(path string) ([]ChatSmokeTarget, error) {
 }
 
 func backendHasCapability(b backendYAML, name string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
 	for _, c := range b.Capabilities {
 		if strings.EqualFold(strings.TrimSpace(c), name) {
 			return true
@@ -249,9 +242,6 @@ func dedupeStrings(in []string) []string {
 
 // SecretsReady reports whether every required env name has a non-empty value in present.
 func SecretsReady(target ChatSmokeTarget, present map[string]bool) bool {
-	if len(target.SecretEnv) == 0 {
-		return true
-	}
 	for _, env := range target.SecretEnv {
 		if !present[env] {
 			return false
@@ -269,14 +259,4 @@ func MissingSecrets(target ChatSmokeTarget, present map[string]bool) []string {
 		}
 	}
 	return miss
-}
-
-// ValidateChatSmokeTargets ensures models are non-empty when targets exist.
-func ValidateChatSmokeTargets(targets []ChatSmokeTarget) error {
-	for _, t := range targets {
-		if strings.TrimSpace(t.Model) == "" {
-			return fmt.Errorf("gatewayconfig: empty smoke model for backend %q", t.BackendID)
-		}
-	}
-	return nil
 }

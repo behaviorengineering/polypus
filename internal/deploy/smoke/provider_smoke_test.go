@@ -49,6 +49,10 @@ func TestRunWithProviders(t *testing.T) {
 
 	var models []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
 		if r.URL.Path != "/v1/chat/completions" {
 			http.NotFound(w, r)
 			return
@@ -118,6 +122,10 @@ func TestRunWithDeepInfraGemmaReasoning(t *testing.T) {
 	var models []string
 	var efforts []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
 		body, _ := readBody(r)
 		var raw map[string]any
 		_ = json.Unmarshal([]byte(body), &raw)

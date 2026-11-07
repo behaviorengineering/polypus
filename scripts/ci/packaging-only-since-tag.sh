@@ -3,19 +3,16 @@
 # rebuild path). It writes skip=false when they are and skip=true otherwise to
 # $GITHUB_OUTPUT (stdout outside Actions), and exits 0 either way: a code change is
 # not an error, it just means the auto patch release builds the images instead.
+#
+# The path predicates are shared with auto-patch-decide.sh, so set the same
+# AUTO_PATCH_EXTRA_HARNESS_PATHS and AUTO_PATCH_EXTRA_PACKAGING_PATHS as the release
+# workflow. Harness paths are neutral: packaging plus harness still rebuilds, which is
+# the case auto-patch-decide.sh skips.
 set -euo pipefail
 
-is_packaging_only_path() {
-  local path="$1"
-  case "${path}" in
-    Dockerfile|Dockerfile.*|docker-bake.hcl) return 0 ;;
-    scripts/docker-*) return 0 ;;
-    scripts/ci/docker-*) return 0 ;;
-    scripts/ci/switchyard-smoke-routes.toml) return 0 ;;
-    .github/workflows/docker-release.yml|.github/workflows/packaging-rebuild.yml) return 0 ;;
-  esac
-  return 1
-}
+_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=auto-patch-path-predicates.sh
+source "${_script_dir}/auto-patch-path-predicates.sh"
 
 decide() {
   local skip="$1" reason="$2"
@@ -34,11 +31,17 @@ if [[ -z "${files}" ]]; then
   decide true "no files since ${last_tag}"
 fi
 
+packaging="false"
 while IFS= read -r f; do
   [[ -z "${f}" ]] && continue
-  if ! is_packaging_only_path "${f}"; then
+  if is_packaging_only_path "${f}"; then
+    packaging="true"
+  elif ! is_harness_only_path "${f}"; then
     decide true "not packaging path: ${f}"
   fi
 done <<< "${files}"
 
-decide false "all paths since ${last_tag} are packaging-only"
+if [[ "${packaging}" != "true" ]]; then
+  decide true "only harness paths since ${last_tag}"
+fi
+decide false "all paths since ${last_tag} are packaging or harness"

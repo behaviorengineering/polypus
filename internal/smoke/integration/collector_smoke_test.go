@@ -41,8 +41,10 @@ func TestSmokeOtelFanout(t *testing.T) {
 	smokeCtx, smokeCancel := context.WithTimeout(ctx, otelcol.DefaultCollectorSmokeTimeout)
 	defer smokeCancel()
 	if err := otelcol.RunCollector(smokeCtx, otelcol.CollectorOptions{
-		OTLPEndpoint: "http://127.0.0.1:4317",
-		Logger:       slog.New(slog.NewTextHandler(t.Output(), nil)),
+		OTLPEndpoint:   "http://127.0.0.1:4317",
+		PhoenixBaseURL: "http://127.0.0.1:6006",
+		HyperDXBaseURL: "http://127.0.0.1:8080",
+		Logger:         slog.New(slog.NewTextHandler(t.Output(), nil)),
 	}); err != nil {
 		t.Fatal(err)
 	}

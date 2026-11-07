@@ -53,7 +53,7 @@ func phoenixSpanCountGraphQL(ctx context.Context, opts CollectorOptions, traceID
 	if opts.PhoenixAPIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+opts.PhoenixAPIKey)
 	}
-	ans, err := fetch(ctx, req)
+	ans, err := opts.fetch(ctx, req)
 	if err != nil {
 		return 0, fmt.Errorf("collector smoke: phoenix graphql: %w", err)
 	}

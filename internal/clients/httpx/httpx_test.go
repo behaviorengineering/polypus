@@ -1,4 +1,4 @@
-package catalog
+package httpx
 
 import (
 	"context"
@@ -20,6 +20,12 @@ func getJSONCtx(t *testing.T) context.Context {
 	return ctx
 }
 
+type modelList struct {
+	Data []struct {
+		ID string `json:"id"`
+	} `json:"data"`
+}
+
 func TestGetJSONDecodesAndSendsHeaders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Key") != "k" {
@@ -29,9 +35,9 @@ func TestGetJSONDecodesAndSendsHeaders(t *testing.T) {
 		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"m"}]}`))
 	}))
 	t.Cleanup(srv.Close)
-	var list ModelList
 	h := HTTP{Client: srv.Client(), Policies: outbound.NewPolicies(), Dep: "test"}
-	if err := GetJSON(getJSONCtx(t), h, "test.get", srv.URL, http.Header{"X-Key": {"k"}}, 1<<10, &list); err != nil {
+	list, err := GetJSON[modelList](getJSONCtx(t), h, JSONGet{Op: "test.get", URL: srv.URL, Header: http.Header{"X-Key": {"k"}}, MaxBody: 1 << 10})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(list.Data) != 1 || list.Data[0].ID != "m" {
@@ -53,9 +59,8 @@ func TestGetJSONMapsUpstreamStatus(t *testing.T) {
 			w.WriteHeader(tc.status)
 			_, _ = w.Write([]byte("nope"))
 		}))
-		var list ModelList
 		h := HTTP{Client: srv.Client(), Policies: outbound.NewPolicies(), Dep: "test"}
-		err := GetJSON(getJSONCtx(t), h, "test.get", srv.URL, nil, 1<<10, &list)
+		_, err := GetJSON[modelList](getJSONCtx(t), h, JSONGet{Op: "test.get", URL: srv.URL, MaxBody: 1 << 10})
 		srv.Close()
 		if got := derrors.CodeOf(err); got != tc.want {
 			t.Fatalf("status %d: code %q, want %q (err %v)", tc.status, got, tc.want, err)
@@ -63,22 +68,24 @@ func TestGetJSONMapsUpstreamStatus(t *testing.T) {
 	}
 }
 
-func TestStatusErrorRetryableStatuses(t *testing.T) {
-	if err := StatusError("op", http.StatusOK, nil); err != nil {
+func TestStatusErrorCodesWithoutARetryMark(t *testing.T) {
+	if err := statusError("op", http.StatusOK, nil); err != nil {
 		t.Fatalf("2xx must map to nil, got %v", err)
 	}
-	if got := derrors.CodeOf(StatusError("op", http.StatusTooManyRequests, nil)); got != derrors.CodeRateLimited {
+	if got := derrors.CodeOf(statusError("op", http.StatusTooManyRequests, nil)); got != derrors.CodeRateLimited {
 		t.Fatalf("429 code = %q", got)
 	}
-	err := StatusError("op", http.StatusBadGateway, []byte("down"))
-	if got := derrors.CodeOf(err); got != derrors.CodeUnavailable {
+	if got := derrors.CodeOf(statusError("op", http.StatusBadGateway, []byte("down"))); got != derrors.CodeUnavailable {
 		t.Fatalf("502 code = %q", got)
 	}
-	if errors.Is(err, outbound.ErrAbort) {
-		t.Fatal("a 5xx must stay retryable")
+	// The policies have already finished when statusError runs, so it marks nothing
+	// for them: the text stays the upstream status alone.
+	err := statusError("op", http.StatusNotFound, []byte("gone"))
+	if errors.Is(err, outbound.ErrAbort) || strings.Contains(err.Error(), "non-retryable") {
+		t.Fatalf("a 4xx must not carry an outbound abort mark, got %v", err)
 	}
-	if !errors.Is(StatusError("op", http.StatusNotFound, nil), outbound.ErrAbort) {
-		t.Fatal("a permanent 4xx must be marked non-retryable")
+	if err.Error() != "op: status 404: gone" {
+		t.Fatalf("err text = %q", err)
 	}
 }
 
@@ -87,9 +94,8 @@ func TestGetJSONRejectsOversizedBody(t *testing.T) {
 		_, _ = w.Write([]byte(`{"data":[` + strings.Repeat(" ", 64) + `]}`))
 	}))
 	t.Cleanup(srv.Close)
-	var list ModelList
 	h := HTTP{Client: srv.Client(), Policies: outbound.NewPolicies(), Dep: "test"}
-	err := GetJSON(getJSONCtx(t), h, "test.get", srv.URL, nil, 16, &list)
+	_, err := GetJSON[modelList](getJSONCtx(t), h, JSONGet{Op: "test.get", URL: srv.URL, MaxBody: 16})
 	if err == nil || !strings.Contains(err.Error(), "too large") {
 		t.Fatalf("want a too-large error, got %v", err)
 	}
@@ -105,5 +111,17 @@ func TestReadCappedRejectsOversizedBodies(t *testing.T) {
 	}
 	if !errors.Is(err, derrors.ErrUnavailable) {
 		t.Fatalf("a too-large body is CodeUnavailable, got %v", err)
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	if got := Truncate("abcdef", 3); got != "abc..." {
+		t.Fatalf("Truncate cut = %q", got)
+	}
+	if got := Truncate("  ab  ", 3); got != "ab" {
+		t.Fatalf("Truncate short = %q", got)
+	}
+	if got := Truncate("héllo wörld", 2); got != "hé..." {
+		t.Fatalf("Truncate must cut on runes, got %q", got)
 	}
 }

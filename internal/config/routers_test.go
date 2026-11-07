@@ -139,7 +139,7 @@ routers:
 		t.Fatalf("routers: %d", len(cfg.Routers))
 	}
 	inv := cfg.Routers["investigator"]
-	if !inv.IsComposed() || inv.Route.Picker != PickerEfficientFirst {
+	if !inv.isComposed() || inv.Route.Picker != PickerEfficientFirst {
 		t.Fatalf("investigator: %+v", inv)
 	}
 	if !cfg.HasComposedRouters() {
@@ -292,26 +292,34 @@ routers:
 }
 
 func TestGatewayBaseURLUsesLoopbackForWildcardBind(t *testing.T) {
-	t.Setenv("POLYPUS_BASE_URL", "")
+	t.Parallel()
 	opts := ServeOptions{Host: "0.0.0.0", Port: 1320}
 	if got := opts.GatewayBaseURL(); got != "http://127.0.0.1:1320" {
 		t.Fatalf("gateway base url: %q", got)
 	}
 }
 
-func TestGatewayBaseURLHonorsPolypusBaseURLEnv(t *testing.T) {
-	t.Setenv("POLYPUS_BASE_URL", "http://gateway:1320")
-	opts := ServeOptions{Host: "0.0.0.0", Port: 1320}
-	if got := opts.GatewayBaseURL(); got != "http://gateway:1320" {
-		t.Fatalf("gateway base url: %q", got)
+func TestGatewayBaseURLHonorsBaseURL(t *testing.T) {
+	t.Parallel()
+	for _, base := range []string{"http://gateway:1320", "http://gateway:1320/"} {
+		opts := ServeOptions{Host: "0.0.0.0", Port: 1320, BaseURL: base}
+		if got := opts.GatewayBaseURL(); got != "http://gateway:1320" {
+			t.Fatalf("BaseURL %q: gateway base url %q", base, got)
+		}
 	}
 }
 
-func TestGatewayBaseURLStripsTrailingSlashFromEnv(t *testing.T) {
+// TestLoadServeOptionsReadsBaseURLOnce reads POLYPUS_BASE_URL into the options, so
+// a later change to the environment does not move the URL.
+func TestLoadServeOptionsReadsBaseURLOnce(t *testing.T) {
 	t.Setenv("POLYPUS_BASE_URL", "http://gateway:1320/")
-	opts := ServeOptions{Host: "0.0.0.0", Port: 1320}
+	opts, err := LoadServeOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_BASE_URL", "http://elsewhere:1")
 	if got := opts.GatewayBaseURL(); got != "http://gateway:1320" {
-		t.Fatalf("gateway base url: %q", got)
+		t.Fatalf("gateway base url %q, want the value read at load", got)
 	}
 }
 
@@ -477,7 +485,7 @@ routers:
 		t.Fatal(err)
 	}
 	smart := cfg.Routers["smart"]
-	if !smart.IsComposed() || smart.Route.Type != RouteLLMClassifier {
+	if !smart.isComposed() || smart.Route.Type != RouteLLMClassifier {
 		t.Fatalf("smart: %+v", smart)
 	}
 	if smart.Route.Mode != ClassifierModeCustom {
@@ -1018,7 +1026,7 @@ routers:
 }
 
 func TestListenAddrAndGatewayBaseURLBracketIPv6(t *testing.T) {
-	t.Setenv("POLYPUS_BASE_URL", "")
+	t.Parallel()
 	cases := []struct {
 		host       string
 		wantListen string

@@ -1,3 +1,6 @@
+// Package switchyard renders the routes.toml that Switchyard, Polypus's own router
+// process, reads: one route per composed router in the gateway's router config, with
+// every leaf hop pointed back at the Polypus gateway.
 package switchyard
 
 import (

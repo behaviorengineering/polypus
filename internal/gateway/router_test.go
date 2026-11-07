@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -17,6 +18,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 // fakeRouter satisfies Router without bifrost.Init. UsesBifrost is always false, so
@@ -130,20 +132,22 @@ func newFakeRouter(t *testing.T, opts config.ServeOptions) *fakeRouter {
 	return &fakeRouter{reg: reg}
 }
 
-// newTestGateway builds a handler with an injected Router (skips bifrost.Init).
+// fastTestPolicies retries on a millisecond backoff, so a test against a backend
+// that refuses or fails never waits out the production backoff.
+func fastTestPolicies() *outbound.Policies {
+	return outbound.NewPoliciesWith(outbound.Backoff{Min: time.Millisecond, Max: time.Millisecond})
+}
+
+// newTestGateway builds a handler with an injected Router (skips bifrost.Init) and
+// fast outbound policies; extra options can replace either.
 func newTestGateway(t *testing.T, opts config.ServeOptions, r registryProvider, extra ...HandlerOption) http.Handler {
 	t.Helper()
-	options := append([]HandlerOption{withRouter(r)}, extra...)
+	options := append([]HandlerOption{withRouter(r), withPolicies(fastTestPolicies())}, extra...)
 	handler, err := NewHandler(opts, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	switch h := handler.(type) {
-	case *accessProtector:
-		t.Cleanup(h.Close)
-	case *gatewayHandler:
-		t.Cleanup(h.Close)
-	}
+	t.Cleanup(func() { _ = handler.Close() })
 	return handler
 }
 
@@ -407,9 +411,7 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gw, ok := gatewayFromHandler(inner); ok {
-		t.Cleanup(gw.Close)
-	}
+	t.Cleanup(func() { _ = inner.Close() })
 	handler := observability.WrapHandler(inner, nil)
 
 	ctx, root := tp.Tracer("client").Start(context.Background(), "test.client")

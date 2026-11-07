@@ -15,6 +15,8 @@ import (
 
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 	"gopkg.in/yaml.v3"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 const (
@@ -100,7 +102,7 @@ func Resolve(flagPath string) (string, error) {
 		if uerr != nil {
 			return "", uerr
 		}
-		return "", fmt.Errorf("%w: none at %s (run polypus deploy init, or pass --config)", ErrNotFound, user)
+		return "", derrors.Wrap(ErrNotFound, derrors.CodeNotFound, "envconfig.Resolve", "none at "+user+" (run polypus deploy init, or pass --config)")
 	}
 	return p, nil
 }
@@ -117,37 +119,42 @@ func Discover(flagPath string) (Environment, error) {
 // Load reads and validates the environment config at path. Relative paths in it
 // resolve from path's folder.
 func Load(path string) (Environment, error) {
+	const op = "envconfig.Load"
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return Environment{}, fmt.Errorf("envconfig: %q: %w", path, err)
+		return Environment{}, derrors.Wrap(err, derrors.CodeInvalid, op, path)
 	}
 	data, err := os.ReadFile(abs) //nolint:gosec // G304: the operator's own environment config
 	if err != nil {
-		return Environment{}, fmt.Errorf("envconfig: read %q: %w", abs, err)
+		return Environment{}, derrors.Wrap(err, derrors.CodeInvalid, op, "read "+abs)
 	}
 	var fc fileConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&fc); err != nil {
-		return Environment{}, fmt.Errorf("envconfig: parse %q: %w", abs, err)
+		return Environment{}, derrors.Wrap(err, derrors.CodeInvalid, op, "parse "+abs)
 	}
-	return fc.environment(abs)
+	env, err := fc.environment(abs)
+	if err != nil {
+		return Environment{}, derrors.Wrap(err, derrors.CodeInvalid, op, abs)
+	}
+	return env, nil
 }
 
 func (fc fileConfig) environment(path string) (Environment, error) {
 	id := strings.TrimSpace(fc.Identifier)
 	if id == "" {
-		return Environment{}, fmt.Errorf("envconfig: %s: identifier is required", path)
+		return Environment{}, errors.New("identifier is required")
 	}
 	if !identifierPattern.MatchString(id) {
-		return Environment{}, fmt.Errorf("envconfig: %s: identifier %q must be lower-case letters, digits and hyphens", path, id)
+		return Environment{}, fmt.Errorf("identifier %q must be lower-case letters, digits and hyphens", id)
 	}
 	tailnet := strings.TrimSpace(fc.Tailnet)
 	if tailnet == "" {
-		return Environment{}, fmt.Errorf("envconfig: %s: tailnet is required", path)
+		return Environment{}, errors.New("tailnet is required")
 	}
 	if tailnet == placeholderTailnet {
-		return Environment{}, fmt.Errorf("envconfig: %s: tailnet is still the example %q; set your MagicDNS suffix", path, placeholderTailnet)
+		return Environment{}, fmt.Errorf("tailnet is still the example %q; set your MagicDNS suffix", placeholderTailnet)
 	}
 	gateway := strings.TrimSpace(fc.Gateway)
 	if gateway == "" {

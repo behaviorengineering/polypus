@@ -29,7 +29,7 @@ func statusAllowsFinalize(st Status) bool {
 func (s *DiskStore) TryFinalizeBatch(ctx context.Context, id string, patch FinalizePatch) (Meta, bool, error) {
 	const op = "batch.TryFinalizeBatch"
 	if s == nil {
-		return Meta{}, false, derrors.New(derrors.CodeFailedPrecondition, op, "not configured")
+		return Meta{}, false, derrors.New(derrors.CodeNotReady, op, "not configured")
 	}
 	// The id becomes a file name under the store root, so it goes through checkID.
 	id, err := checkID(op, id)

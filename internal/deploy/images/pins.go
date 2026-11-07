@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 const (
@@ -18,9 +20,10 @@ const (
 // embedded stack's images.env). A build without a release version ("dev") has no
 // images of its own, so the caller passes a pinned images file instead.
 func VersionPins(base []byte, version string) (string, error) {
-	tag, err := ParseImageTag(version)
+	tag, err := parseImageTag(version)
 	if err != nil {
-		return "", fmt.Errorf("images: build version %q has no release images; pass --images with pinned images: %w", version, err)
+		return "", derrors.Wrap(err, derrors.CodeInvalid, "images.VersionPins",
+			fmt.Sprintf("build version %q has no release images; pass --images with pinned images", version))
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Written by polypus deploy for release %s. Do not edit.\n", tag.App)
@@ -40,7 +43,7 @@ func VersionPins(base []byte, version string) (string, error) {
 // WritePins writes pins (from VersionPins) to path.
 func WritePins(path, pins string) error {
 	if err := os.WriteFile(path, []byte(pins), 0o600); err != nil {
-		return fmt.Errorf("images: write %q: %w", path, err)
+		return derrors.Wrap(err, derrors.CodeInternal, "images.WritePins", "write "+path)
 	}
 	return nil
 }

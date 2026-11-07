@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+// Error codes a batch user reads on a line of the error file. Every provider uses
+// these, so the vocabulary stays one.
+const (
+	// LineErrFailed is a line the provider did not complete.
+	LineErrFailed = "batch_failed"
+	// LineErrSynthesis is a line the provider completed whose answer Polypus could
+	// not turn into the OpenAI shape.
+	LineErrSynthesis = "synthesis_failed"
+	// lineErrEncode is a line whose output could not be encoded.
+	lineErrEncode = "output_encode_failed"
+)
+
 // LineResult is one finished batch line in the OpenAI shape, whatever the provider.
 type LineResult struct {
 	CustomID string
@@ -51,7 +63,7 @@ func BuildOutput(lines []LineResult) (okJSONL, errJSONL []byte, completed, faile
 		b, err := json.Marshal(line)
 		if err != nil {
 			line.Response = nil
-			line.Error = &outputError{Code: "output_encode_failed", Message: err.Error()}
+			line.Error = &outputError{Code: lineErrEncode, Message: err.Error()}
 			if b, err = json.Marshal(line); err != nil {
 				b = []byte(`{"error":{"code":"output_encode_failed","message":"line could not be encoded"}}`)
 			}

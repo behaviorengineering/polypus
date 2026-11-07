@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 )
 
+// backendProbeTimeout is the production budget for one round of backend probes.
 const backendProbeTimeout = 5 * time.Second
 
 // healthResponse is the keyless liveness body. It names no backend, URL or account:
@@ -60,7 +60,7 @@ func (h healthHandler) serveHealth(w http.ResponseWriter, _ *http.Request) {
 // Every probe runs at once under one shared budget, so a slow backend costs the
 // page that backend's wait, not the sum of all of them.
 func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), backendProbeTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), h.probeTimeout)
 	defer cancel()
 
 	cfg := h.registry.Config()
@@ -73,7 +73,7 @@ func (h healthHandler) serveBackendHealth(w http.ResponseWriter, r *http.Request
 			return backendProbeResult{ID: id, URL: b.BaseURL}, h.probeBackend(ctx, b)
 		})
 	}
-	if config.SwitchyardEnabled() {
+	if h.switchyardEnabled {
 		switchyardURL := cfg.EffectiveSwitchyardBaseURL()
 		probes = append(probes, func() (backendProbeResult, error) {
 			healthURL := strings.TrimRight(strings.TrimSpace(switchyardURL), "/") + "/health"
@@ -131,34 +131,35 @@ func probeRemoteCredentials(ctx context.Context, cfg config.RouterConfig, getCF 
 
 // probeBackend checks one backend for the health page: a remote one by its
 // credential (and a Cloudflare ping), a local one by a GET of its root.
-func (s *shared) probeBackend(ctx context.Context, b config.BackendDef) error {
+func (h healthHandler) probeBackend(ctx context.Context, b config.BackendDef) error {
 	if b.Remote {
-		return probeRemoteBackend(ctx, b, s.cloudflareClient)
+		return probeRemoteBackend(ctx, b, h.clients.cf)
 	}
-	if err := s.compat.Ping(ctx, strings.TrimRight(b.BaseURL, "/")+"/"); err != nil {
+	if err := h.compat.Ping(ctx, strings.TrimRight(b.BaseURL, "/")+"/"); err != nil {
 		return gatewayErr(err, "gateway.probeBackend", "ping").With("backend", b.ID)
 	}
 	return nil
 }
 
 // probeRemoteBackend checks a remote backend's credential; a Cloudflare backend is
-// also pinged.
+// also pinged through getCF, the gateway's own client getter.
 func probeRemoteBackend(ctx context.Context, b config.BackendDef, getCF cloudflareClientGet) error {
+	const op = "gateway.probeRemoteBackend"
 	if b.IsCloudflareExtension() {
 		if getCF == nil {
-			getCF = new(cloudflare.Clients).Get
+			return derrors.New(derrors.CodeInternal, op, "cloudflare client getter required").With("backend", b.ID)
 		}
 		cf, err := getCF(b)
 		if err != nil {
-			return gatewayErr(err, "gateway.probeBackend", "cloudflare client").With("backend", b.ID)
+			return gatewayErr(err, op, "cloudflare client").With("backend", b.ID)
 		}
 		if err := cf.Ping(ctx); err != nil {
-			return gatewayErr(err, "gateway.probeBackend", "ping").With("backend", b.ID)
+			return gatewayErr(err, op, "ping").With("backend", b.ID)
 		}
 		return nil
 	}
 	if _, err := b.Auth.ResolveBearerToken(); err != nil {
-		return derrors.Wrap(err, derrors.CodeNotReady, "gateway.probeBackend", "backend credential").With("backend", b.ID)
+		return derrors.Wrap(err, derrors.CodeNotReady, op, "backend credential").With("backend", b.ID)
 	}
 	return nil
 }

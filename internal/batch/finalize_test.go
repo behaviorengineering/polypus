@@ -56,7 +56,7 @@ func TestTryFinalizeBatchConcurrent(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected exactly one applied, got %d (%v)", count, applied)
 	}
-	final, err := store.GetBatch(meta.ID)
+	final, err := store.GetBatch(t.Context(), meta.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

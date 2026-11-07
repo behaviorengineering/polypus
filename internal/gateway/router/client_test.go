@@ -60,14 +60,14 @@ func TestNewClientKeepsTheRegistryCode(t *testing.T) {
 func TestSpeechTargetKeepsResolveCodes(t *testing.T) {
 	reg := testRegistry(t)
 	c := &Client{reg: reg}
-	provider, model, err := c.speechTarget("router.Synthesize", "tts", reg.ResolveTTS, "default-voice", "")
+	provider, model, err := c.speechTarget(speechKind{op: "router.Synthesize", what: "tts", resolve: reg.ResolveTTS, defaultModel: "default-voice"}, "")
 	if err != nil || provider != "mlx_local" || model != "default-voice" {
 		t.Fatalf("default route: %q %q %v", provider, model, err)
 	}
-	if _, _, err := c.speechTarget("router.Synthesize", "tts", reg.ResolveTTS, "", "mlx_local/"); derrors.CodeOf(err) != derrors.CodeInvalid {
+	if _, _, err := c.speechTarget(speechKind{op: "router.Synthesize", what: "tts", resolve: reg.ResolveTTS, defaultModel: ""}, "mlx_local/"); derrors.CodeOf(err) != derrors.CodeInvalid {
 		t.Fatalf("a bad request must stay CodeInvalid (400), got %v", err)
 	}
-	if _, _, err := c.speechTarget("router.Synthesize", "tts", reg.ResolveTTS, "", "alt_stt/whisper"); derrors.CodeOf(err) != derrors.CodeInvalid {
+	if _, _, err := c.speechTarget(speechKind{op: "router.Synthesize", what: "tts", resolve: reg.ResolveTTS, defaultModel: ""}, "alt_stt/whisper"); derrors.CodeOf(err) != derrors.CodeInvalid {
 		t.Fatalf("a backend without the capability must stay CodeInvalid (400), got %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestSpeechTargetKeepsResolveCodes(t *testing.T) {
 	noDefault := &Registry{}
 	noDefault.storeCfg(cfg)
 	c = &Client{reg: noDefault}
-	if _, _, err := c.speechTarget("router.Synthesize", "tts", noDefault.ResolveTTS, "", ""); derrors.CodeOf(err) != derrors.CodeNotReady {
+	if _, _, err := c.speechTarget(speechKind{op: "router.Synthesize", what: "tts", resolve: noDefault.ResolveTTS, defaultModel: ""}, ""); derrors.CodeOf(err) != derrors.CodeNotReady {
 		t.Fatalf("a missing default backend must stay CodeNotReady (503), got %v", err)
 	}
 }
@@ -138,8 +138,13 @@ func TestMapBifrostErrUsesTheKnownBackend(t *testing.T) {
 	}
 	c := &Client{reg: reg}
 	pluginErr := func() *schemas.BifrostError {
-		inner := derrors.New(derrors.CodeUnavailable, "cloudflare.speech", "error 3040: capacity exceeded")
-		return &schemas.BifrostError{Error: &schemas.ErrorField{Message: inner.Error(), Error: inner}}
+		inner := derrors.New(derrors.CodeUnavailable, "cloudflare.speech", "capacity exceeded")
+		return &schemas.BifrostError{
+			Error: &schemas.ErrorField{Message: inner.Error(), Error: inner},
+			ExtraFields: schemas.BifrostErrorExtraFields{
+				RawResponse: json.RawMessage(`{"success":false,"errors":[{"code":3040,"message":"capacity exceeded"}]}`),
+			},
+		}
 	}
 	if got := c.mapBifrostErr("", pluginErr(), nil); derrors.CodeOf(got) == derrors.CodeRateLimited {
 		t.Fatalf("without a backend id the throttle is not Cloudflare's: %v", got)
@@ -388,5 +393,61 @@ func TestSwitchyardRateLimitKeepsRetryAfter(t *testing.T) {
 	_, err := client.ChatCompletionRaw(t.Context(), Call{BackendID: ProviderSwitchyard, Model: "investigator", Body: []byte(chatTestBody), Timeout: 5 * time.Second})
 	if derrors.CodeOf(err) != derrors.CodeRateLimited || derrors.Field(err, ratelimit.FieldRetryAfter) != "9" {
 		t.Fatalf("a Switchyard 429 keeps its Retry-After, got %v", err)
+	}
+}
+
+func TestRegistryOnANilClientIsNil(t *testing.T) {
+	var c *Client
+	if c.Registry() != nil {
+		t.Fatal("a nil client has no registry")
+	}
+}
+
+func TestNewClientNeedsTheCloudflareGetterForACloudflareBackend(t *testing.T) {
+	cfg := config.RouterConfig{
+		Timeouts: config.DefaultTimeouts(),
+		Backends: map[string]config.BackendDef{
+			"cf_local": {
+				ID:           "cf_local",
+				Remote:       true,
+				Extension:    config.ExtensionCloudflare,
+				BaseURL:      "https://api.cloudflare.com/client/v4/accounts/x/ai/v1",
+				Auth:         config.BackendAuth{BearerEnv: "CF_AI_API_KEY"},
+				Capabilities: []config.Capability{config.CapTTS},
+			},
+		},
+	}
+	_, err := NewClient(t.Context(), cfg, WithLogger(testLogger()))
+	if derrors.CodeOf(err) != derrors.CodeInvalid || !strings.Contains(err.Error(), "WithCloudflareClientGet") {
+		t.Fatalf("a Cloudflare backend without a getter must fail closed, got %v", err)
+	}
+}
+
+func TestChatStreamWithoutAContextFailsClosed(t *testing.T) {
+	client, hits := countingLeaf(t)
+	var ctx context.Context // Nil on purpose.
+	_, _, err := client.ChatCompletionStreamRaw(ctx, Call{BackendID: "leaf", Model: "m", Body: []byte(chatTestBody)})
+	if derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("a stream with no context must fail closed, got %v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatal("nothing may be sent")
+	}
+}
+
+func TestContextCodeSplitsDeadlineFromCancel(t *testing.T) {
+	if got := contextCode(context.DeadlineExceeded); got != derrors.CodeTimeout {
+		t.Fatalf("deadline: %s", got)
+	}
+	if got := contextCode(context.Canceled); got != derrors.CodeCanceled {
+		t.Fatalf("cancel: %s", got)
+	}
+}
+
+func TestUsesBifrostKeepsTheSwitchyardItRegistered(t *testing.T) {
+	client := switchyardClient(t, func(http.ResponseWriter, *http.Request) {})
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	if !client.UsesBifrost(ProviderSwitchyard) {
+		t.Fatal("routing must follow what NewClient registered, not the environment now")
 	}
 }

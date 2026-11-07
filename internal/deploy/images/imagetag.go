@@ -1,33 +1,35 @@
 package images
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 var imageTagPattern = regexp.MustCompile(`^([0-9]+\.[0-9]+\.[0-9]+)(?:-r([1-9][0-9]*))?$`)
 
-// ParsedImageTag is a GHCR pin tag (app semver plus optional rebuild).
-type ParsedImageTag struct {
+// parsedImageTag is a GHCR pin tag (app semver plus optional rebuild).
+type parsedImageTag struct {
 	App     string
 	Rebuild int
 }
 
-// ParseImageTag parses X.Y.Z or X.Y.Z-rN image tags.
-func ParseImageTag(tag string) (ParsedImageTag, error) {
+// parseImageTag parses X.Y.Z or X.Y.Z-rN image tags.
+func parseImageTag(tag string) (parsedImageTag, error) {
+	const op = "images.parseImageTag"
 	tag = strings.TrimSpace(tag)
 	tag = strings.TrimPrefix(tag, "v")
 	m := imageTagPattern.FindStringSubmatch(tag)
 	if m == nil {
-		return ParsedImageTag{}, fmt.Errorf("images: invalid image tag %q", tag)
+		return parsedImageTag{}, derrors.New(derrors.CodeInvalid, op, "invalid image tag "+strconv.Quote(tag))
 	}
-	out := ParsedImageTag{App: m[1]}
+	out := parsedImageTag{App: m[1]}
 	if m[2] != "" {
 		n, err := strconv.Atoi(m[2])
 		if err != nil || n < 1 {
-			return ParsedImageTag{}, fmt.Errorf("images: invalid rebuild in tag %q", tag)
+			return parsedImageTag{}, derrors.New(derrors.CodeInvalid, op, "invalid rebuild in tag "+strconv.Quote(tag))
 		}
 		out.Rebuild = n
 	}

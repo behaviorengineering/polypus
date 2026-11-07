@@ -21,6 +21,11 @@ type Runner func(ctx context.Context, name string, args, env []string) error
 // for text a person reads; the default is execx.OutputContext.
 type OutputRunner func(ctx context.Context, name string, args, env []string) ([]byte, error)
 
+// StdoutRunner runs one docker command with env, feeds it stdin (nil for none) and
+// returns its stdout alone, for output a program reads; the default is
+// execx.StdoutInputContext.
+type StdoutRunner func(ctx context.Context, name string, args, env []string, stdin []byte) ([]byte, error)
+
 // Client runs docker compose for one environment's project.
 type Client struct {
 	// Project is the compose project name (-p), polypus-<identifier>. It prefixes
@@ -34,9 +39,12 @@ type Client struct {
 	Env []string
 	// Run runs each docker command; nil uses execx.RunContext.
 	Run Runner
-	// Output runs each docker command whose output is read; nil uses
+	// Output runs each docker command whose output a person reads; nil uses
 	// execx.OutputContext.
 	Output OutputRunner
+	// Stdout runs each docker command whose stdout a program reads, or that takes
+	// stdin (Exec); nil uses execx.StdoutInputContext.
+	Stdout StdoutRunner
 	// LookPath finds the docker binary before a pull; nil uses exec.LookPath.
 	LookPath func(file string) (string, error)
 	// Policies holds the retry and breaker state for docker and registry calls;
@@ -81,6 +89,38 @@ func (c Client) CombinedOutput(ctx context.Context, args []string) ([]byte, erro
 	return output(ctx, "docker", args, c.Environ())
 }
 
+// Exec runs cmd in service's running container (docker compose exec -T), feeding
+// it stdin when non-nil, and returns its stdout. A transient docker failure is
+// retried under the docker daemon policy, so cmd must be safe to run twice. A
+// failure names op and the service, and keeps the command's stderr in its chain.
+func (c Client) Exec(ctx context.Context, op string, stdin []byte, service string, cmd ...string) ([]byte, error) {
+	if ctx == nil {
+		return nil, derrors.New(derrors.CodeInvalid, op, "context required")
+	}
+	stdout := c.Stdout
+	if stdout == nil {
+		stdout = execx.StdoutInputContext
+	}
+	args := c.Args(append([]string{"exec", "-T", service}, cmd...)...)
+	var out []byte
+	err := c.Policies.Run(ctx, outbound.DepDockerDaemon, func() error {
+		raw, err := stdout(ctx, "docker", args, c.Environ(), stdin)
+		out = raw
+		if err == nil {
+			return nil
+		}
+		if DockerExecRetryable(err) {
+			return outbound.Retry(err)
+		}
+		return outbound.Abort(err)
+	})
+	if err != nil {
+		return out, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "docker compose exec "+service).
+			With("project", c.Project)
+	}
+	return out, nil
+}
+
 // lookDocker finds the docker binary through LookPath.
 func (c Client) lookDocker() error {
 	look := c.LookPath
@@ -100,7 +140,7 @@ func (c Client) runCompose(ctx context.Context, op string, args []string) error 
 		if err == nil {
 			return nil
 		}
-		if dockerExecRetryable(err) {
+		if DockerExecRetryable(err) {
 			return outbound.Retry(err)
 		}
 		return outbound.Abort(err)

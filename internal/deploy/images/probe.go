@@ -12,16 +12,10 @@ import (
 // ErrManifestNotFound means the registry has no manifest for the pinned tag.
 var ErrManifestNotFound = registry.ErrManifestNotFound
 
-// ErrRegistryUnauthorized means the registry rejected the request or its credentials.
-var ErrRegistryUnauthorized = registry.ErrUnauthorized
-
-// ProbeManifest checks that ref exists in its registry. token (else GHCR_TOKEN,
+// probeManifest checks that ref exists in its registry. token (else GHCR_TOKEN,
 // GITHUB_TOKEN or GH_TOKEN) is a GitHub token, sent to ghcr.io only.
-func ProbeManifest(ctx context.Context, ref string, token string) error {
-	if token == "" {
-		token = registryToken()
-	}
-	return probeWith(ctx, newRegistryClient(token), ref)
+func probeManifest(ctx context.Context, ref string, token string) error {
+	return probeWith(ctx, newRegistryClient(tokenOr(token)), ref)
 }
 
 // newRegistryClient is the registry client for a GitHub token from the operator's
@@ -31,7 +25,7 @@ func newRegistryClient(token string) *registry.Client {
 }
 
 func probeWith(ctx context.Context, reg *registry.Client, ref string) error {
-	const op = "images.ProbeManifest"
+	const op = "images.probeManifest"
 	if ctx == nil {
 		return derrors.New(derrors.CodeInvalid, op, "context required")
 	}
@@ -45,8 +39,12 @@ func probeWith(ctx context.Context, reg *registry.Client, ref string) error {
 	return nil
 }
 
-// registryToken is the operator's GitHub token from the environment.
-func registryToken() string {
+// tokenOr returns token, else the operator's GitHub token from GHCR_TOKEN,
+// GITHUB_TOKEN or GH_TOKEN.
+func tokenOr(token string) string {
+	if t := strings.TrimSpace(token); t != "" {
+		return t
+	}
 	for _, key := range []string{"GHCR_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"} {
 		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 			return v

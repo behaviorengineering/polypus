@@ -18,6 +18,13 @@ import (
 // caller passes zero.
 const DefaultPollInterval = 2 * time.Second
 
+// probeTimeout bounds one health GET, so a hung connection costs one round of the
+// poll, not the whole health budget.
+const probeTimeout = 5 * time.Second
+
+// bodyDrainMax caps how much of a health body is drained for connection reuse.
+const bodyDrainMax = 64 << 10
+
 // endpoints must all answer 200 for the gateway to count as up.
 var endpoints = []string{"/health", "/health/backends"}
 
@@ -56,19 +63,14 @@ func Poll(ctx context.Context, client *http.Client, baseURL string, interval tim
 	}
 }
 
-// checkOnce GETs each endpoint once and returns the first failure.
+// checkOnce GETs each endpoint once, each bounded by probeTimeout, and returns the
+// first failure.
 func checkOnce(ctx context.Context, client *http.Client, baseURL string) error {
 	for _, p := range endpoints {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+p, nil)
+		status, err := probeStatus(ctx, client, baseURL+p)
 		if err != nil {
 			return fmt.Errorf("GET %s: %w", p, err)
 		}
-		resp, err := outbound.DoOnce(ctx, outbound.DepHealth, client, req)
-		if err != nil {
-			return fmt.Errorf("GET %s: %w", p, err)
-		}
-		status := resp.StatusCode
-		discardAndClose(resp.Body)
 		if status != http.StatusOK {
 			return fmt.Errorf("GET %s: status %d", p, status)
 		}
@@ -76,15 +78,30 @@ func checkOnce(ctx context.Context, client *http.Client, baseURL string) error {
 	return nil
 }
 
-func discardAndClose(rc io.ReadCloser) {
-	if rc == nil {
-		return
+// probeStatus sends one GET of url, bounded by probeTimeout, and returns its status.
+func probeStatus(ctx context.Context, client *http.Client, url string) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, err
 	}
-	// Cleanup only: a drain error costs connection reuse, nothing else.
+	return getStatus(ctx, client, req)
+}
+
+// getStatus sends req once and returns its status. The body is drained (up to
+// bodyDrainMax) and closed by the deferred cleanup, which is where a discarded
+// error belongs: a drain error costs connection reuse, nothing else.
+func getStatus(ctx context.Context, client *http.Client, req *http.Request) (int, error) {
+	resp, err := outbound.DoOnce(ctx, outbound.DepHealth, client, req)
+	if err != nil {
+		return 0, err
+	}
 	defer func() {
-		_, _ = io.Copy(io.Discard, rc)
-		_ = rc.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, bodyDrainMax))
+		_ = resp.Body.Close()
 	}()
+	return resp.StatusCode, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

@@ -17,7 +17,6 @@ import (
 const (
 	attrURLFull             = "url.full"
 	geminiSyntheticSpanHint = "polypus.bifrost.gemini"
-	bifrostTracerActiveKey  = "polypus.bifrost.tracer.active"
 )
 
 // BifrostOTelTracer maps Bifrost schemas.Tracer hooks to OpenTelemetry spans. One
@@ -49,14 +48,9 @@ func (t *BifrostOTelTracer) CreateTrace(parentID string, _ ...string) string {
 
 // StartSpan creates an OTel child span and returns an updated Go context.
 func (t *BifrostOTelTracer) StartSpan(ctx context.Context, name string, kind schemas.SpanKind) (context.Context, schemas.SpanHandle) {
-	spanID, handle := t.StartSpanID(ctx, name, kind)
+	_, handle := t.StartSpanID(ctx, name, kind)
 	if handle == nil {
 		return ctx, nil
-	}
-	if bc, ok := ctx.(*schemas.BifrostContext); ok {
-		if spanID != "" {
-			bc.SetValue(bifrostTracerActiveKey, spanID)
-		}
 	}
 	if bridge, ok := handle.(*otelSpanBridge); ok && bridge.goCtx != nil {
 		return bridge.goCtx, handle
@@ -105,10 +99,13 @@ func (t *BifrostOTelTracer) EndSpan(handle schemas.SpanHandle, status schemas.Sp
 	switch status {
 	case schemas.SpanStatusError:
 		bridge.otel.SetStatus(codes.Error, statusMsg)
-	case schemas.SpanStatusOk, schemas.SpanStatusUnset:
+	case schemas.SpanStatusOk:
 		bridge.otel.SetStatus(codes.Ok, "")
+	case schemas.SpanStatusUnset:
+		// Bifrost did not decide (a cancelled stream, an early return); OTel treats
+		// Ok as final, so the status stays unset rather than green.
 	default:
-		bridge.otel.SetStatus(codes.Ok, "")
+		// An unknown status is no verdict either.
 	}
 	bridge.otel.End()
 	if t != nil {
@@ -145,17 +142,27 @@ func (t *BifrostOTelTracer) PopulateLLMResponseAttributes(_ *schemas.BifrostCont
 	flushBifrostSpanAttributes(bridge)
 }
 
+// flushBifrostSpanAttributes copies the Bifrost span's attributes onto the OTel span.
+// Bifrost writes them through SpanFromHandle under the span's own (unexported) lock,
+// and late writers (streaming finalisation, redaction) may still be writing, so the
+// map is read only through Bifrost's locked export snapshot, never ranged directly.
 func flushBifrostSpanAttributes(bridge *otelSpanBridge) {
 	if bridge == nil || bridge.otel == nil || bridge.schema == nil {
 		return
 	}
-	for k, v := range bridge.schema.Attributes {
+	snap := (&schemas.Trace{Spans: []*schemas.Span{bridge.schema}}).SnapshotForExport()
+	defer snap.ReleaseSnapshot()
+	if len(snap.Spans) == 0 || snap.Spans[0] == nil {
+		return
+	}
+	attrs := snap.Spans[0].Attributes
+	for k, v := range attrs {
 		if v == nil {
 			continue
 		}
 		bridge.otel.SetAttributes(bifrostAttrToOTel(k, v))
 	}
-	if prov, ok := bridge.schema.Attributes[schemas.AttrBifrostProviderName]; ok && strings.EqualFold(fmt.Sprint(prov), string(schemas.Gemini)) {
+	if prov, ok := attrs[schemas.AttrBifrostProviderName]; ok && strings.EqualFold(fmt.Sprint(prov), string(schemas.Gemini)) {
 		bridge.otel.SetAttributes(
 			attribute.String(attrURLFull, geminiSyntheticURLFull()),
 			attribute.String("polypus.bifrost.synthetic_provider", geminiSyntheticSpanHint),
@@ -193,7 +200,7 @@ func (t *BifrostOTelTracer) AddEvent(handle schemas.SpanHandle, name string, att
 	}
 	otelAttrs := make([]attribute.KeyValue, 0, len(attrs))
 	for k, v := range attrs {
-		otelAttrs = append(otelAttrs, attribute.String(k, fmt.Sprint(v)))
+		otelAttrs = append(otelAttrs, bifrostAttrToOTel(k, v))
 	}
 	bridge.otel.AddEvent(name, trace.WithAttributes(otelAttrs...))
 }

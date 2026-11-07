@@ -8,6 +8,7 @@ package polypus
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -18,7 +19,10 @@ import (
 	"github.com/behaviorengineering/polypus/internal/smoke"
 )
 
-// ServeOptions is the gateway listen configuration.
+// ServeOptions is the gateway listen configuration. It aliases the internal
+// options, so its exported fields are this package's contract:
+// TestFacadeFieldSetsArePinned fails when one is added, removed or retyped, and
+// that change is reviewed here.
 type ServeOptions = config.ServeOptions
 
 // HandlerOption configures Serve and NewHandler. Build one with the With* functions
@@ -100,10 +104,12 @@ const (
 // no *Error.
 func CodeOf(err error) Code { return derrors.CodeOf(err) }
 
-// SmokeOptions configures multi-channel L1 smoke against a running gateway.
+// SmokeOptions configures multi-channel L1 smoke against a running gateway. Like
+// ServeOptions, its exported fields are pinned by TestFacadeFieldSetsArePinned.
 type SmokeOptions = smoke.Options
 
-// SmokeResult is one channel probe outcome.
+// SmokeResult is one channel probe outcome. Its exported fields are pinned by
+// TestFacadeFieldSetsArePinned.
 type SmokeResult = smoke.Result
 
 // Default cheap Cloudflare models (re-exported for hosts/CI).
@@ -115,8 +121,10 @@ const (
 	DefaultBatchModel     = smoke.DefaultBatchModel
 )
 
-// LoadServeOptions resolves host/port/backend from the environment. A set but
-// invalid POLYPUS_PORT or POLYPUS_MLX_PORT is an error.
+// LoadServeOptions resolves host, port, the callback base URL and the MLX backend
+// from the environment. BackendURL stays empty unless an MLX variable is set, so
+// the config's mlx_local base_url stands. A set but invalid POLYPUS_PORT or
+// POLYPUS_MLX_PORT is an error.
 func LoadServeOptions() (ServeOptions, error) {
 	return config.LoadServeOptions()
 }
@@ -132,13 +140,28 @@ func Serve(ctx context.Context, opts ServeOptions, options ...HandlerOption) err
 	return gateway.ListenAndServe(ctx, opts, gopts...)
 }
 
-// NewHandler builds the public HTTP handler without listening.
-func NewHandler(opts ServeOptions, options ...HandlerOption) (http.Handler, error) {
+// Handler is the Polypus HTTP handler NewHandler builds. It owns a router with
+// worker goroutines and pooled upstream connections, which Close releases. Call
+// Close once the server that serves the handler has shut down, or when the host
+// replaces the handler (for example on a config reload); requests still in flight
+// when Close runs may fail. Close is safe to call more than once.
+type Handler interface {
+	http.Handler
+	io.Closer
+}
+
+// NewHandler builds the public HTTP handler without listening. The host serves it
+// on its own server and calls Close when done; Serve manages that itself.
+func NewHandler(opts ServeOptions, options ...HandlerOption) (Handler, error) {
 	gopts, err := gatewayOptions("polypus.NewHandler", options)
 	if err != nil {
 		return nil, err
 	}
-	return gateway.NewHandler(opts, gopts...)
+	h, err := gateway.NewHandler(opts, gopts...)
+	if err != nil {
+		return nil, err
+	}
+	return h, nil
 }
 
 // Smoke runs chat, TTS, STT, systemone, and/or batch probes against a gateway.

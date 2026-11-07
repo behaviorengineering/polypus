@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"unicode/utf8"
 )
 
 func TestParseUIProxiesOK(t *testing.T) {
@@ -60,5 +61,19 @@ func TestParseUIProxiesDuplicatePath(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestDefaultUIProxyTitleUpperCasesTheFirstRune(t *testing.T) {
+	t.Parallel()
+	for path, want := range map[string]string{
+		"/phoenix": "Phoenix",
+		"/éval":    "Éval",
+		"/":        "UI",
+	} {
+		got := defaultUIProxyTitle(path)
+		if got != want || !utf8.ValidString(got) {
+			t.Errorf("defaultUIProxyTitle(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

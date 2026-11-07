@@ -26,7 +26,7 @@ func TestSmokeOnlyProbesFromRun(t *testing.T) {
 	}{
 		{nil, 0, "ROLE & BOUNDARIES"},
 		{[]string{"version"}, 0, "polypus-smoke "},
-		{[]string{"models"}, 0, "chat="},
+		{[]string{"models"}, 0, "chat:"},
 		{[]string{"stray"}, 2, ""},
 		{[]string{"run", "extra"}, 2, ""},
 	} {

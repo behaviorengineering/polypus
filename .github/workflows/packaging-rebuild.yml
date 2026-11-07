@@ -48,6 +48,11 @@ jobs:
       - name: Packaging-only gate (workflow_run)
         id: gate
         if: github.event_name == 'workflow_run'
+        env:
+          # Same globs as the decide step in auto-patch-release.yml: keep both in sync,
+          # so a change is either released or rebuilt, never both and never neither.
+          AUTO_PATCH_EXTRA_HARNESS_PATHS: ".cursor/* ai-copilots/* docs/* site/* scripts/ci/auto-patch-*"
+          AUTO_PATCH_EXTRA_PACKAGING_PATHS: "docker-bake.hcl scripts/ci/switchyard-smoke-routes.toml"
         run: |
           set -euo pipefail
           chmod +x scripts/ci/packaging-only-since-tag.sh

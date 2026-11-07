@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/banner.webp" alt="Polypus. One face. Many arms. Stay local." width="100%" />
+  <img src="internal/gateway/assets/banner.webp" alt="Polypus. One face. Many arms. Stay local." width="100%" />
 </p>
 
 # Polypus: one OpenAI-compatible face for every model your apps call

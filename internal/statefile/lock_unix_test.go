@@ -83,3 +83,14 @@ func TestWithFileLockRejectsNilContext(t *testing.T) {
 		t.Fatalf("want CodeInvalid for a nil context, got %v", err)
 	}
 }
+
+func TestWithFileLockRejectsNilFn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	err := WithFileLock(context.Background(), path, nil)
+	if derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("want CodeInvalid for a nil fn, got %v", err)
+	}
+	if _, statErr := os.Stat(lockPath(path)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("a nil fn must be refused before the lock file is made: %v", statErr)
+	}
+}

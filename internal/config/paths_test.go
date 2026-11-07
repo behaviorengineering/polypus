@@ -43,7 +43,7 @@ func TestResolveConfigPathPrefersEnv(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("POLYPUS_CONFIG", explicit)
 	t.Setenv("POLYPUS_ROOT", "")
-	if got, err := ResolveConfigPathWithError(); err != nil || got != explicit {
+	if got, err := resolveConfigPath(); err != nil || got != explicit {
 		t.Fatalf("got %q want %q", got, explicit)
 	}
 }
@@ -67,7 +67,7 @@ func TestResolveConfigPathPrefersHomeOverRepo(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("POLYPUS_CONFIG", "")
 	t.Setenv("POLYPUS_ROOT", repo)
-	if got, err := ResolveConfigPathWithError(); err != nil || got != homeCfg {
+	if got, err := resolveConfigPath(); err != nil || got != homeCfg {
 		t.Fatalf("got %q want %q", got, homeCfg)
 	}
 }
@@ -83,7 +83,7 @@ func TestResolveConfigPathFallsBackToRepo(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("POLYPUS_CONFIG", "")
 	t.Setenv("POLYPUS_ROOT", repo)
-	if got, err := ResolveConfigPathWithError(); err != nil || got != repoCfg {
+	if got, err := resolveConfigPath(); err != nil || got != repoCfg {
 		t.Fatalf("got %q want %q", got, repoCfg)
 	}
 }
@@ -91,7 +91,7 @@ func TestResolveConfigPathFallsBackToRepo(t *testing.T) {
 func TestDefaultModelsInventoryCachePath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", dir)
-	got, err := DefaultModelsInventoryCachePath()
+	got, err := defaultModelsInventoryCachePath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,19 +129,6 @@ func TestResolveBatchDirPrefersEnv(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	if got, err := ResolveBatchDir(); err != nil || got != explicit {
 		t.Fatalf("got %q want %q", got, explicit)
-	}
-}
-
-func TestDefaultProcessComposeSockPath(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", dir)
-	got, err := DefaultProcessComposeSockPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(dir, "polypus", "process-compose.sock")
-	if got != want {
-		t.Fatalf("got %q want %q", got, want)
 	}
 }
 

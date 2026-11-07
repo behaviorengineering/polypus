@@ -2,21 +2,23 @@ package deploy
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
-
+	"github.com/behaviorengineering/polypus/internal/clients/github"
 	"github.com/behaviorengineering/polypus/internal/deploy/compose"
 	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
 	"github.com/behaviorengineering/polypus/internal/deploy/images"
+	"github.com/behaviorengineering/polypus/internal/deploy/overlay"
+	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
 	"github.com/behaviorengineering/polypus/internal/deploy/smoke"
 	"github.com/behaviorengineering/polypus/internal/deploy/tailnet"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // Options configures one deploy of an environment.
@@ -43,8 +45,10 @@ type Options struct {
 	// Tailnet, when set, is checked before the deploy changes anything: this
 	// machine must be on it to reach HealthURL.
 	Tailnet string
-	// Keyring holds the environment's secrets; nil uses the OS keyring.
-	Keyring operatorconfig.Keyring
+	// Secrets resolves the environment's secrets from the shell and its keyring
+	// service; nil reads both from the OS keyring and fails on a conflict. One run
+	// keeps the conflicts it settles.
+	Secrets *secrets.Resolver
 	// TailnetStatus reads `tailscale status --json`; nil runs the tailscale CLI.
 	TailnetStatus tailnet.StatusFunc
 	// HealthTimeout is the health poll budget. Required (DefaultOptions sets it).
@@ -53,22 +57,36 @@ type Options struct {
 	// health.DefaultPollInterval.
 	HealthPollInterval time.Duration
 	// ImageWaitTimeout bounds the wait for a release's image build when a pinned
-	// tag is not in the registry yet. The caller's context budget must cover it.
+	// tag is not in the registry yet. Required (DefaultOptions sets it); the
+	// caller's context budget must cover it.
 	ImageWaitTimeout time.Duration
 	SkipSmoke        bool
+	// SmokeTimeout is the smoke budget. Required unless SkipSmoke (DefaultOptions
+	// sets it).
 	SmokeTimeout     time.Duration
 	SmokeChatModel   string
 	SkipOverlayPrune bool
-	PruneFunc        func(ctx context.Context, gatewayPath string) error
+	// PruneFunc prunes the models allow overlay in the running gateway after
+	// compose up; nil prunes it through the environment's compose project.
+	PruneFunc func(ctx context.Context, gatewayPath string) error
 	// DockerRun runs each docker compose command; nil runs the real docker CLI.
 	DockerRun compose.Runner
 	// DockerOutput runs the docker commands whose output the failure diagnostics
 	// print; nil runs the real docker CLI.
 	DockerOutput compose.OutputRunner
+	// DockerStdout runs the docker commands whose stdout is read or that take
+	// stdin (the overlay prune); nil runs the real docker CLI.
+	DockerStdout compose.StdoutRunner
 	// DockerLookPath finds docker before a pull; nil searches PATH.
 	DockerLookPath func(file string) (string, error)
 	// ImageProbe checks one pinned image ref in its registry; nil asks the registry.
-	ImageProbe func(ctx context.Context, ref, token string) error
+	ImageProbe func(ctx context.Context, ref string) error
+	// GitHub reads the release's Actions runs (the image wait and the
+	// publish-complete check); nil builds one from the operator's token.
+	GitHub *github.Client
+	// HTTP sends the health and access key probes; nil uses http.DefaultClient.
+	// Each probe is bounded by its context, not by a client timeout.
+	HTTP *http.Client
 	// Smoke runs the post-health smoke; nil uses smoke.Run.
 	Smoke func(ctx context.Context, opts smoke.Options) error
 	// Out receives the plan and progress lines; nil writes to os.Stdout.
@@ -83,6 +101,32 @@ type Options struct {
 func (o Options) Budget() time.Duration {
 	const margin = 5 * time.Minute
 	return o.ImageWaitTimeout + o.HealthTimeout + o.SmokeTimeout + margin
+}
+
+func (o Options) httpClient() *http.Client {
+	if o.HTTP == nil {
+		return http.DefaultClient
+	}
+	return o.HTTP
+}
+
+// secretResolver is Secrets, or a resolver of the shell and the OS keyring that fails on
+// a conflict.
+func (o Options) secretResolver() *secrets.Resolver {
+	if o.Secrets == nil {
+		return &secrets.Resolver{}
+	}
+	return o.Secrets
+}
+
+// prune is PruneFunc, or a prune through cc, the environment's compose project.
+func (o Options) prune(cc compose.Client) func(context.Context, string) error {
+	if o.PruneFunc != nil {
+		return o.PruneFunc
+	}
+	return func(ctx context.Context, gatewayPath string) error {
+		return overlay.PruneContainer(ctx, gatewayPath, overlay.ContainerConfig{Compose: cc, Out: o.Out})
+	}
 }
 
 func (o Options) logger() *slog.Logger {
@@ -104,7 +148,7 @@ func DefaultStateDir() (string, error) {
 	}
 	cache, err := os.UserCacheDir()
 	if err != nil {
-		return "", fmt.Errorf("deploy: user cache folder: %w (set %s)", err, StateDirEnv)
+		return "", derrors.Wrap(err, derrors.CodeFailedPrecondition, "deploy.DefaultStateDir", "user cache folder (set "+StateDirEnv+")")
 	}
 	return filepath.Join(cache, "polypus", "deploy"), nil
 }
@@ -115,8 +159,8 @@ func DefaultOptions(stateDir string) Options {
 		StateDir:         filepath.Clean(stateDir),
 		Name:             "polypus",
 		HealthTimeout:    120 * time.Second,
-		ImageWaitTimeout: images.DefaultWaitOptions().Timeout,
-		SmokeTimeout:     300 * time.Second,
+		ImageWaitTimeout: images.DefaultWaitTimeout,
+		SmokeTimeout:     smoke.DefaultSmokeTimeout,
 	}
 }
 

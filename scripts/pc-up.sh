@@ -109,18 +109,25 @@ fi
 
 ENABLE_MLX="${POLYPUS_ENABLE_MLX:-}"
 if [[ -z "$ENABLE_MLX" ]]; then
-  # Config processes.mlx is source of truth when set; else cloud-case default.
+  # Config processes.mlx is the source of truth. Only an explicit "on" starts
+  # MLX: an unset key (exit 3) or a failed lookup leaves it off.
   _cfg_mlx=""
+  _cfg_mlx_err="$(mktemp)"
   set +e
-  _cfg_mlx="$("$POLYPUS_BIN" processes --print mlx 2>/dev/null)"
+  _cfg_mlx="$("$POLYPUS_BIN" processes --print mlx 2>"$_cfg_mlx_err")"
   _cfg_mlx_rc=$?
   set -e
   if [[ "$_cfg_mlx_rc" -eq 0 && ( "$_cfg_mlx" == "0" || "$_cfg_mlx" == "1" ) ]]; then
     ENABLE_MLX="$_cfg_mlx"
   else
-    ENABLE_MLX=1
+    ENABLE_MLX=0
+    if [[ "$_cfg_mlx_rc" -ne 3 ]]; then
+      echo "WARN: polypus processes --print mlx gave no 0/1 answer (exit ${_cfg_mlx_rc}); MLX stays off this run." >&2
+      cat "$_cfg_mlx_err" >&2
+    fi
   fi
-  unset _cfg_mlx _cfg_mlx_rc
+  rm -f "$_cfg_mlx_err"
+  unset _cfg_mlx _cfg_mlx_rc _cfg_mlx_err
 fi
 
 if [[ "$ENABLE_MLX" == "1" ]]; then

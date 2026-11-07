@@ -5,12 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 func TestPhoenixSpanCountREST(t *testing.T) {
@@ -172,17 +179,86 @@ func TestDockerExecRetryableReadsTheExitStatus(t *testing.T) {
 	}
 }
 
+// endpoints are the URLs a smoke needs, so withCollectorDefaults has nothing to fill.
+var endpoints = CollectorOptions{OTLPEndpoint: "http://otlp.test:4317", PhoenixBaseURL: "http://phoenix.test", HyperDXBaseURL: "http://hyperdx.test"}
+
 func TestCollectorDefaultsKeepTheCallersFallbackChoice(t *testing.T) {
 	t.Setenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", "")
-	if got := (CollectorOptions{DisableHyperDXCH: true}).withCollectorDefaults(); !got.DisableHyperDXCH {
-		t.Fatal("a caller's DisableHyperDXCH must survive the defaults")
+	withDisable := endpoints
+	withDisable.DisableHyperDXCH = true
+	if got, err := withDisable.withCollectorDefaults(); err != nil || !got.DisableHyperDXCH {
+		t.Fatalf("a caller's DisableHyperDXCH must survive the defaults (err %v)", err)
 	}
-	if got := (CollectorOptions{}).withCollectorDefaults(); got.DisableHyperDXCH {
-		t.Fatal("the zero value allows the fallback")
+	if got, err := endpoints.withCollectorDefaults(); err != nil || got.DisableHyperDXCH {
+		t.Fatalf("the zero value allows the fallback (err %v)", err)
 	}
-	t.Setenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", "0")
-	if got := (CollectorOptions{}).withCollectorDefaults(); !got.DisableHyperDXCH {
-		t.Fatal("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK=0 still turns the fallback off")
+	for _, off := range []string{"0", "off", "No"} {
+		t.Setenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", off)
+		if got, err := endpoints.withCollectorDefaults(); err != nil || !got.DisableHyperDXCH {
+			t.Fatalf("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK=%s must turn the fallback off (err %v)", off, err)
+		}
+	}
+	t.Setenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", "maybe")
+	if _, err := endpoints.withCollectorDefaults(); derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("an unknown word must be an error, got %v", err)
+	}
+}
+
+func TestCollectorDefaultsHaveNoBuiltInEndpoints(t *testing.T) {
+	for _, k := range []string{"POLYPUS_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT", "PHOENIX_BASE_URL", "HYPERDX_BASE_URL", "POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK"} {
+		t.Setenv(k, "")
+	}
+	_, err := CollectorOptions{}.withCollectorDefaults()
+	if derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("want CodeInvalid naming the unset endpoints, got %v", err)
+	}
+	for _, name := range []string{"POLYPUS_OTLP_ENDPOINT", "PHOENIX_BASE_URL", "HYPERDX_BASE_URL"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("err %v must name %s", err, name)
+		}
+	}
+	if _, err := (CollectorOptions{OTLPEndpoint: "x", PhoenixBaseURL: "y", SkipHyperDXVerify: true}).withCollectorDefaults(); err != nil {
+		t.Fatalf("HyperDX is not needed when its verify is skipped: %v", err)
+	}
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://std.test:4317")
+	t.Setenv("PHOENIX_BASE_URL", "http://phoenix.env")
+	t.Setenv("HYPERDX_BASE_URL", "http://hyperdx.env")
+	got, err := CollectorOptions{}.withCollectorDefaults()
+	if err != nil || got.OTLPEndpoint != "http://std.test:4317" || got.PhoenixBaseURL != "http://phoenix.env" || got.HyperDXBaseURL != "http://hyperdx.env" {
+		t.Fatalf("env endpoints: %+v err %v", got, err)
+	}
+}
+
+func TestRunCollectorErrorsAreTyped(t *testing.T) {
+	//nolint:staticcheck // SA1012: the nil context is the case under test.
+	if err := RunCollector(nil, endpoints); derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("nil ctx: %v", err)
+	}
+	if err := RunCollector(context.Background(), endpoints); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+		t.Fatalf("no deadline: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	bad := endpoints
+	bad.OTLPEndpoint = "grpc://"
+	if err := RunCollector(ctx, bad); derrors.CodeOf(err) != derrors.CodeUnavailable {
+		t.Fatalf("export failure: %v", err)
+	}
+}
+
+func TestFetchRejectsAnOversizedAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("a", probeBodyMax+1)))
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (CollectorOptions{}).fetch(ctx, req); err == nil || !strings.Contains(err.Error(), "over") {
+		t.Fatalf("err = %v, want an oversized answer refused", err)
 	}
 }
 
@@ -207,5 +283,48 @@ func TestDecodeListOrData(t *testing.T) {
 	}
 	if _, err := decodeListOrData[int]([]byte(`"nope"`)); err == nil {
 		t.Fatal("want an error for neither shape")
+	}
+}
+
+// refusingTransport refuses the first two connections, as a backend still starting
+// does, then sends on.
+type refusingTransport struct {
+	calls atomic.Int32
+	next  http.RoundTripper
+}
+
+func (c *refusingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if c.calls.Add(1) < 3 {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+	}
+	return c.next.RoundTrip(r)
+}
+
+func TestFetchUsesTheInjectedClientAndPolicies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(srv.Close)
+	transport := &refusingTransport{next: srv.Client().Transport}
+	opts := CollectorOptions{
+		HTTP:     &http.Client{Transport: transport},
+		Policies: outbound.NewPoliciesWith(outbound.Backoff{Min: time.Millisecond, Max: time.Millisecond}),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	ans, err := opts.fetch(ctx, req)
+	if err != nil || !ans.ok() || string(ans.body) != "ok" {
+		t.Fatalf("fetch: %+v, %v", ans, err)
+	}
+	if transport.calls.Load() != 3 {
+		t.Fatalf("the injected client sent %d requests, want 3", transport.calls.Load())
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("the injected policies should retry on their own backoff, took %s", time.Since(start))
 	}
 }

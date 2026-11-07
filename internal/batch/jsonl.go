@@ -29,7 +29,6 @@ type ParsedInput struct {
 	Endpoint string
 	Model    string
 	Lines    []InputLine
-	BodyByID map[string]json.RawMessage
 }
 
 const opParseBatchJSONL = "batch.ParseBatchJSONL"
@@ -45,53 +44,46 @@ func ParseBatchJSONL(raw []byte, endpoint string) (ParsedInput, error) {
 	if len(lines) == 0 {
 		return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "empty input")
 	}
-	out := ParsedInput{
-		Endpoint: endpoint,
-		BodyByID: make(map[string]json.RawMessage, len(lines)),
-	}
-	var model string
+	out := ParsedInput{Endpoint: endpoint}
+	// Results are matched back by custom_id, so it must be unique.
+	seen := make(map[string]struct{}, len(lines))
 	for i, line := range lines {
+		lineNo := strconv.Itoa(i + 1)
+		invalid := func(msg string, cause error) *derrors.Error {
+			return derrors.Wrap(cause, derrors.CodeInvalid, opParseBatchJSONL, msg).With("line", lineNo)
+		}
 		var req InputLine
 		if err := json.Unmarshal(line, &req); err != nil {
-			return ParsedInput{}, derrors.Wrap(err, derrors.CodeInvalid, opParseBatchJSONL, "parse line").
-				With("line", strconv.Itoa(i+1))
+			return ParsedInput{}, invalid("parse line", err)
 		}
 		req.CustomID = strings.TrimSpace(req.CustomID)
 		if req.CustomID == "" {
-			return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "custom_id required").
-				With("line", strconv.Itoa(i+1))
+			return ParsedInput{}, invalid("custom_id required", nil)
 		}
 		if strings.ToUpper(strings.TrimSpace(req.Method)) != "POST" {
-			return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "method must be POST").
-				With("line", strconv.Itoa(i+1))
+			return ParsedInput{}, invalid("method must be POST", nil)
 		}
 		if strings.TrimSpace(req.URL) != endpoint {
-			return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "line url must match batch endpoint").
-				With("line", strconv.Itoa(i+1))
+			return ParsedInput{}, invalid("line url must match batch endpoint", nil)
 		}
 		lineModel, err := extractModelFromBody(req.Body)
 		if err != nil {
-			return ParsedInput{}, derrors.Wrap(err, derrors.CodeInvalid, opParseBatchJSONL, "model in body").
-				With("line", strconv.Itoa(i+1))
+			return ParsedInput{}, invalid("model in body", err)
 		}
-		if model == "" {
-			model = lineModel
-		} else if model != lineModel {
-			return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "all lines must use the same model")
+		if out.Model == "" {
+			out.Model = lineModel
+		} else if out.Model != lineModel {
+			return ParsedInput{}, invalid("all lines must use the same model", nil).With("model", lineModel)
 		}
 		if err := validateBodyForEndpoint(endpoint, req.Body); err != nil {
-			return ParsedInput{}, derrors.Wrap(err, derrors.CodeInvalid, opParseBatchJSONL, "body").
-				With("line", strconv.Itoa(i+1))
+			return ParsedInput{}, invalid("body", err)
 		}
-		if _, dup := out.BodyByID[req.CustomID]; dup {
-			// Results are matched back by custom_id, so it must be unique.
-			return ParsedInput{}, derrors.New(derrors.CodeInvalid, opParseBatchJSONL, "duplicate custom_id").
-				With("line", strconv.Itoa(i+1)).With("custom_id", req.CustomID)
+		if _, dup := seen[req.CustomID]; dup {
+			return ParsedInput{}, invalid("duplicate custom_id", nil).With("custom_id", req.CustomID)
 		}
+		seen[req.CustomID] = struct{}{}
 		out.Lines = append(out.Lines, req)
-		out.BodyByID[req.CustomID] = req.Body
 	}
-	out.Model = model
 	return out, nil
 }
 

@@ -85,7 +85,7 @@ func listModelIDs(t *testing.T, h http.Handler, query string) []string {
 func TestModelsListServesFromCache(t *testing.T) {
 	m := newCountingModels(t, "@cf/a", "@cf/b")
 	h, gw := newCacheFirstGateway(t, m)
-	modelsHandler{gw.shared}.warmInventory(context.Background(), false)
+	gw.models.warmInventory(context.Background(), false)
 	warmed := m.calls.Load()
 	if warmed == 0 {
 		t.Fatal("warm-up must fetch the backend's list")
@@ -153,7 +153,7 @@ func TestPeriodicRefreshUpdatesCache(t *testing.T) {
 		runModelsRefreshLoop(ctx, time.Minute,
 			func(time.Duration) (<-chan time.Time, func()) { return tick, func() {} },
 			func(iterCtx context.Context) {
-				modelsHandler{gw.shared}.warmInventory(iterCtx, true)
+				gw.models.warmInventory(iterCtx, true)
 				refreshed <- struct{}{}
 			})
 	}()

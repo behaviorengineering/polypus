@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,9 +11,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/deploy"
 	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
+	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
 )
 
 // deployFixture lays out an isolated deploy state folder and an environment: the
@@ -192,7 +196,9 @@ func TestDeployRunHealthURLOverrideSkipsTailnet(t *testing.T) {
 // explicit --smoke-chat-model still sends that one chat.
 func TestDeploySmokeFollowsDeployChecks(t *testing.T) {
 	root, config, _ := deployFixture(t)
-	t.Setenv("POLYPUS_API_KEY", "client-key") // keeps the developer's keyring out of the test.
+	memKeyring(t) // keeps the developer's keyring out of the test.
+	t.Setenv("POLYPUS_API_KEY", "client-key")
+	t.Setenv(secrets.SourceEnvVar, "")
 	t.Setenv("POLYPUS_SMOKE_PROVIDERS", "")
 	t.Setenv("POLYPUS_SMOKE_SYSTEMONE", "")
 	writeFiles(t, filepath.Dir(config), map[string]string{
@@ -308,5 +314,87 @@ func TestDeployFlagWinsOverEnvWord(t *testing.T) {
 	}
 	if got, err := cmd.Flags().GetBool("skip-smoke"); err != nil || got {
 		t.Fatal("a passed --skip-smoke must not be replaced by POLYPUS_DEPLOY_SKIP_SMOKE")
+	}
+}
+
+func TestDeployRunFlagsApply(t *testing.T) {
+	opts := deploy.Options{HealthURL: "https://polypus-work.corp.ts.net", Tailnet: "corp.ts.net"}
+	deployRunFlags{
+		dryRun: true, skipPull: true, skipSmoke: true, skipOverlayPrune: true,
+		healthURL: "http://gw:1320/", smokeChatModel: "m",
+		healthTimeout: time.Minute, smokeTimeout: 2 * time.Minute,
+	}.apply(&opts)
+	want := deploy.Options{
+		DryRun: true, SkipPull: true, SkipSmoke: true, SkipOverlayPrune: true,
+		HealthURL: "http://gw:1320", SmokeChatModel: "m",
+		HealthTimeout: time.Minute, SmokeTimeout: 2 * time.Minute,
+	}
+	if opts.DryRun != want.DryRun || opts.SkipPull != want.SkipPull || opts.SkipSmoke != want.SkipSmoke ||
+		opts.SkipOverlayPrune != want.SkipOverlayPrune || opts.HealthURL != want.HealthURL || opts.Tailnet != "" ||
+		opts.SmokeChatModel != want.SmokeChatModel || opts.HealthTimeout != want.HealthTimeout || opts.SmokeTimeout != want.SmokeTimeout {
+		t.Fatalf("applied %+v", opts)
+	}
+	kept := deploy.Options{HealthURL: "https://polypus-work.corp.ts.net", Tailnet: "corp.ts.net"}
+	deployRunFlags{}.apply(&kept)
+	if kept.HealthURL != "https://polypus-work.corp.ts.net" || kept.Tailnet != "corp.ts.net" {
+		t.Fatalf("no --health-url must keep the environment's URL and tailnet check: %+v", kept)
+	}
+}
+
+func TestPromptSecretSource(t *testing.T) {
+	for in, want := range map[string]secrets.Source{"s\n": secrets.SourceEnv, "keyring\n": secrets.SourceKeyring, "K": secrets.SourceKeyring} {
+		var errOut strings.Builder
+		got, err := promptSecretSource(strings.NewReader(in), &errOut)(&secrets.Conflict{App: "polypus-work", Name: "CF_ACCOUNT_ID"})
+		if err != nil || got != want {
+			t.Fatalf("answer %q: %q, %v; want %q", in, got, err, want)
+		}
+		if !strings.Contains(errOut.String(), "CF_ACCOUNT_ID is set in this shell and differs from keyring service polypus-work") {
+			t.Fatalf("prompt %q", errOut.String())
+		}
+	}
+	if _, err := promptSecretSource(strings.NewReader("maybe\n"), io.Discard)(&secrets.Conflict{}); err == nil {
+		t.Fatal("expected an unknown answer refused")
+	}
+}
+
+// TestDeployExportEnvConflictExits2 checks a shell secret that differs from the
+// environment's keyring stops a headless run with exit 2, naming the flag and
+// neither value.
+func TestDeployExportEnvConflictExits2(t *testing.T) {
+	_, config, _ := deployFixture(t)
+	kr := memKeyring(t)
+	withStdin(t, "")
+	t.Setenv(secrets.SourceEnvVar, "")
+	t.Setenv("TS_AUTHKEY", "tskey-auth-shell")
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-shell-"+strings.Repeat("s", 20))
+	if err := kr.Set("polypus-work", "OPENROUTER_API_KEY", "sk-or-keyring-"+strings.Repeat("k", 20)); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := captureRun([]string{"deploy", "export-env", "--config", config})
+	if code != 2 || !strings.Contains(errOut, "--secrets-from env|keyring") {
+		t.Fatalf("exit %d, want 2 naming the flag\nstdout=%s\nstderr=%s", code, out, errOut)
+	}
+	if strings.Contains(out+errOut, "sk-or-") {
+		t.Fatalf("a secret value was printed:\nstdout=%s\nstderr=%s", out, errOut)
+	}
+	code, out, errOut = captureRun([]string{"deploy", "export-env", "--config", config, "--secrets-from", "env"})
+	if code != 0 || !strings.Contains(out, "OPENROUTER_API_KEY from shell (--secrets-from env)") {
+		t.Fatalf("--secrets-from env: exit %d\nstdout=%s\nstderr=%s", code, out, errOut)
+	}
+}
+
+func TestDeploySecretsFromRejectsUnknownSource(t *testing.T) {
+	_, config, _ := deployFixture(t)
+	t.Setenv(secrets.SourceEnvVar, "vault")
+	code, _, errOut := captureRun([]string{"deploy", "export-env", "--config", config})
+	if code != 2 || !strings.Contains(errOut, "want env or keyring") {
+		t.Fatalf("exit %d stderr=%s", code, errOut)
+	}
+}
+
+func TestSecretsConflictExitLeavesOtherErrors(t *testing.T) {
+	other := errors.New("boom")
+	if got := secretsConflictExit(newDeployRunCmd(), other); !errors.Is(got, other) {
+		t.Fatalf("got %v, want the error unchanged", got)
 	}
 }

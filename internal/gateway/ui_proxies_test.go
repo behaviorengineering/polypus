@@ -52,6 +52,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/phoenix/assets/app.js", nil)
 	rec := httptest.NewRecorder()
@@ -95,6 +96,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "127.0.0.1:1320"
@@ -118,7 +120,7 @@ func TestUIProxyPreservesPrefix(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	proxy := testShared.newUIReverseProxy("/hyperdx", mustParseURL(upstream.URL), false)
+	proxy := newUIReverseProxy(testResponder, "/hyperdx", mustParseURL(upstream.URL), false)
 	req := httptest.NewRequest(http.MethodGet, "/hyperdx/search", nil)
 	rec := httptest.NewRecorder()
 	proxy.ServeHTTP(rec, req)
@@ -135,7 +137,7 @@ func TestUIProxyForwardsUpgradeHeader(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	proxy := testShared.newUIReverseProxy("/phoenix", mustParseURL(upstream.URL), true)
+	proxy := newUIReverseProxy(testResponder, "/phoenix", mustParseURL(upstream.URL), true)
 	req := httptest.NewRequest(http.MethodGet, "/phoenix/ws", nil)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "websocket")

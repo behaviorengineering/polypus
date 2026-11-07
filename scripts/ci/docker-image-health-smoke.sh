@@ -23,6 +23,15 @@ docker run --rm --entrypoint switchyard-server "$SY_IMAGE" --help >/dev/null
 echo "docker-image-health-smoke: binary load (polypus --help)"
 docker run --rm --entrypoint polypus "$GW_IMAGE" --help >/dev/null
 
+echo "docker-image-health-smoke: non-root user (uid 10001)"
+for img in "$GW_IMAGE" "$SY_IMAGE"; do
+  uid="$(docker run --rm --entrypoint id "$img" -u)"
+  if [[ "$uid" != "10001" ]]; then
+    echo "docker-image-health-smoke: ${img} runs as uid ${uid}, want 10001" >&2
+    exit 1
+  fi
+done
+
 wait_container_health() {
   local cid="$1"
   local url="$2"

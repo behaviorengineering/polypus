@@ -7,8 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/behaviorengineering/polypus/internal/clients/catalog"
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
 
@@ -58,7 +59,7 @@ func (c *Client) runOnce(ctx context.Context, op string, req *http.Request) (*ht
 // transport error is tried again within the caller's deadline).
 func (c *Client) run(ctx context.Context, op string, req *http.Request, retry bool) (*http.Response, error) {
 	if c == nil || c.httpClient == nil {
-		return nil, derrors.New(derrors.CodeFailedPrecondition, op, "not configured")
+		return nil, derrors.New(derrors.CodeNotReady, op, "not configured")
 	}
 	send := c.policies.DoOnce
 	if retry {
@@ -66,6 +67,8 @@ func (c *Client) run(ctx context.Context, op string, req *http.Request, retry bo
 	}
 	resp, err := send(ctx, c.dep(), c.httpClient, req)
 	if err != nil {
+		// Do can hand back the last answer with a deadline error; close it here.
+		outbound.CloseResponse(resp)
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "post /run").
 			With("target", req.URL.String())
 	}
@@ -75,10 +78,10 @@ func (c *Client) run(ctx context.Context, op string, req *http.Request, retry bo
 // upstreamError maps a non-2xx /run answer: a throttle becomes a rate-limit error, any
 // other status its closest domain code (a 401 is not a 502), with Cloudflare's message.
 func upstreamError(op string, resp *http.Response, body []byte) error {
-	if rl := ratelimit.Classify(op, resp.StatusCode, resp.Header, body); rl != nil {
+	if rl, ok := ratelimit.Classify(op, resp.StatusCode, resp.Header, body); ok {
 		return rl
 	}
-	return derrors.New(catalog.StatusCode(resp.StatusCode), op, workersAIErrorMessage(body, "workers ai error")).
+	return derrors.New(httpx.StatusCode(resp.StatusCode), op, workersAIErrorMessage(body, "workers ai error")).
 		With("status", strconv.Itoa(resp.StatusCode)).
-		With("body", catalog.Truncate(string(body), errorBodyMax))
+		With("body", httpx.Truncate(string(body), errorBodyMax))
 }

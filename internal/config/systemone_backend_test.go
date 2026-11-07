@@ -50,7 +50,7 @@ func TestSystemOneTypesafeBackendLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := cfg.Backends["decider"]
-	if !b.IsTypesafeExtension() || !b.HasSystemOneRoute() {
+	if !b.IsTypesafeExtension() || !b.hasSystemOneRoute() {
 		t.Fatalf("backend: %+v", b)
 	}
 	if b.BaseURL != "" {
@@ -70,7 +70,7 @@ func TestHasSystemOneRoute(t *testing.T) {
 		{BackendDef{ID: "lm_studio"}, false},
 	}
 	for _, tc := range cases {
-		if got := tc.b.HasSystemOneRoute(); got != tc.want {
+		if got := tc.b.hasSystemOneRoute(); got != tc.want {
 			t.Fatalf("%s: got %v want %v", tc.b.ID, got, tc.want)
 		}
 	}

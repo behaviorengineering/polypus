@@ -3,7 +3,6 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -73,7 +72,7 @@ func TestWriteBifrostChatSSEDropsIllegalTrailingChunk(t *testing.T) {
 	}
 }
 
-func TestProxyChatStreamSanitizerDropsIllegalChunk(t *testing.T) {
+func TestChatStreamSanitizerDropsIllegalChunk(t *testing.T) {
 	upstream := strings.Join([]string{
 		"data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n",
 		"\n",
@@ -84,15 +83,7 @@ func TestProxyChatStreamSanitizerDropsIllegalChunk(t *testing.T) {
 		"data: [DONE]\n",
 		"\n",
 	}, "")
-	var buf bytes.Buffer
-	n, err := copyOpenAIChatStream(context.Background(), &buf, strings.NewReader(upstream), false)
-	if err != nil {
-		t.Fatalf("copy: %v", err)
-	}
-	if n == 0 {
-		t.Fatal("expected bytes written")
-	}
-	out := buf.String()
+	out := gatewaySSE(t, upstream)
 	if strings.Contains(out, `"content":"late"`) {
 		t.Fatalf("illegal proxy chunk forwarded: %s", out)
 	}
@@ -101,27 +92,16 @@ func TestProxyChatStreamSanitizerDropsIllegalChunk(t *testing.T) {
 	}
 }
 
-func TestProxyChatStreamLegalPassthrough(t *testing.T) {
+func TestChatStreamLegalPassthrough(t *testing.T) {
 	legal := "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n"
-	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(context.Background(), &buf, strings.NewReader(legal), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if buf.String() != legal {
-		t.Fatalf("expected unchanged legal frame\ngot: %q\nwant: %q", buf.String(), legal)
+	if got, want := gatewaySSE(t, legal), legal+"data: [DONE]\n\n"; got != want {
+		t.Fatalf("expected the legal frame unchanged, then DONE\ngot: %q\nwant: %q", got, want)
 	}
 }
 
-func TestCopyOpenAIChatStreamPreservesDone(t *testing.T) {
-	src := "data: [DONE]\n\n"
-	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(context.Background(), &buf, strings.NewReader(src), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(buf.String(), "data: [DONE]") {
-		t.Fatalf("got %q", buf.String())
+func TestChatStreamEmptyEndsWithDone(t *testing.T) {
+	if got := gatewaySSE(t, "data: [DONE]\n\n"); got != "data: [DONE]\n\n" {
+		t.Fatalf("got %q", got)
 	}
 }
 
@@ -141,18 +121,5 @@ func TestSanitizePerIndexFinish(t *testing.T) {
 	out, _, emit := splitSanitized(sanitizeOpenAIStreamChunk([]byte(`{"choices":[{"index":1,"delta":{"content":"ok"}}]}`), san, false))
 	if !emit || !strings.Contains(string(out), `"content":"ok"`) {
 		t.Fatalf("index 1 should forward: %q", out)
-	}
-}
-
-// Ensure io.EOF path in copyOpenAIChatStream.
-func TestCopyOpenAIChatStreamEOF(t *testing.T) {
-	src := "data: {\"choices\":[{\"index\":0,\"delta\":{}}]}\n"
-	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(context.Background(), &buf, io.MultiReader(strings.NewReader(src)), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if buf.Len() == 0 {
-		t.Fatal("expected flush on EOF")
 	}
 }

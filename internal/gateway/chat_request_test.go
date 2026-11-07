@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -27,6 +28,22 @@ func TestParseChatRequestRejectsBadBodies(t *testing.T) {
 	}
 }
 
+func TestParseChatRequestNamesAWrongFieldType(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"model":"m","stream":"true"}`: "stream must be a boolean",
+		`{"model":42}`:                  "model must be a string",
+	} {
+		_, err := parseChatRequest([]byte(body))
+		if derrors.CodeOf(err) != derrors.CodeInvalid || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: want %q, got %v", body, want, err)
+		}
+	}
+	req, err := parseChatRequest([]byte(`{"model":"m","stream":null}`))
+	if err != nil || req.stream {
+		t.Fatalf("a null stream is the default, non-streaming: %+v %v", req, err)
+	}
+}
+
 func TestOutboundSetsTheDownstreamModelAndMapsThinking(t *testing.T) {
 	req, err := parseChatRequest([]byte(`{"model":"cf/glm","reasoning":{"effort":"high"},"messages":[]}`))
 	if err != nil {
@@ -47,5 +64,20 @@ func TestOutboundSetsTheDownstreamModelAndMapsThinking(t *testing.T) {
 	}
 	if got[keyModel] != "glm-4.7-flash" || len(got) != len(wantMap) {
 		t.Fatalf("outbound = %s, want the same fields as %s", out, want)
+	}
+}
+
+func TestChatRequestKeepsLargeIntegersExact(t *testing.T) {
+	const seed = "9007199254740993" // 2^53 + 1: a float64 round trip changes it.
+	req, err := parseChatRequest([]byte(`{"model":"m","seed":` + seed + `,"messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := req.outbound("down", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"seed":`+seed) {
+		t.Fatalf("seed changed on re-encode: %s", out)
 	}
 }

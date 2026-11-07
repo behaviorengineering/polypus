@@ -14,11 +14,12 @@ Tag-triggered and auto-patch releases via GoReleaser (`.goreleaser.yaml`).
 
 - Release only from green `main` (CI passing).
 - Default bump on merge is **patch** (`auto-patch-release.yml` on push to `main`).
-- Use **minor** or **major** only via workflow_dispatch or an explicit user request.
-- Skip auto release for docs/chore/ci-only commits, agent-harness-only diffs (`.cursor/`, `lefthook.yml`), or `[skip release]` in the push subject (`auto-patch-decide.sh`).
+- Use **minor** or **major** only via workflow_dispatch or an explicit user request. Dispatch it from `main` only: a run from another branch skips every job. A manual run passes `go tool task ci` and builds `switchyard-server` before it tags.
+- Skip auto release for docs/chore/ci-only commits, agent-harness-only diffs (`.cursor/`, `lefthook.yml`, `AGENTS.md`, `ai-copilots/`, `docs/`, `site/`), or `[skip release]` in the push subject (`auto-patch-decide.sh`).
+- A diff of packaging paths plus agent-harness paths ships as an image revision `X.Y.Z-rN` through `packaging-rebuild.yml`, not as a new `v*` tag (see [docs/releases.md](../../../docs/releases.md)).
 - MUST NOT push a `v*` tag by hand: no workflow runs on a tag push, so it would publish no binaries and no images. Every manual release goes through `auto-patch-release.yml` with `workflow_dispatch` (`bump=patch|minor|major`).
 - Confirm the GitHub Release has multi-platform binaries, `checksums.txt`, and changelog groups.
-- Confirm GHCR tags `ghcr.io/behaviorengineering/polypus:<semver>` and `polypus-switchyard:<semver>` after auto-patch (same workflow via `workflow_call`).
+- Confirm GHCR tags `ghcr.io/behaviorengineering/polypus:<semver>` and `polypus-switchyard:<semver>` after auto-patch (same workflow via `workflow_call`). `:latest` moves only after the image smoke and the manifest checks pass, and never for an `-rN` revision.
 
 ## Must not
 

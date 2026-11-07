@@ -29,8 +29,6 @@ type BackendLookup func(provider string) (config.BackendDef, bool)
 // production).
 type ClientGet func(config.BackendDef) (*Client, error)
 
-// runSpeechPlugin short-circuits Bifrost speech/transcription for Cloudflare
-// backends onto the extension /ai/run adapter (Workers AI has no /ai/v1/audio/*).
 // speechCall is the backend, model and request kind one short circuit serves.
 type speechCall struct {
 	backend config.BackendDef
@@ -38,6 +36,8 @@ type speechCall struct {
 	kind    string
 }
 
+// runSpeechPlugin short-circuits Bifrost speech/transcription for Cloudflare
+// backends onto the extension /ai/run adapter (Workers AI has no /ai/v1/audio/*).
 type runSpeechPlugin struct {
 	lookup BackendLookup
 	get    ClientGet

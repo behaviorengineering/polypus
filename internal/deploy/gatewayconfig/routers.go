@@ -2,9 +2,11 @@ package gatewayconfig
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,11 +26,11 @@ type routersFile struct {
 	Routers map[string]struct {
 		Capability string `yaml:"capability"`
 		Route      struct {
-			Type      string    `yaml:"type"`
-			Target    string    `yaml:"target"`
-			Capable   string    `yaml:"capable"`
-			Efficient string    `yaml:"efficient"`
-			Targets   yaml.Node `yaml:"targets"`
+			Type      config.RouteType `yaml:"type"`
+			Target    string           `yaml:"target"`
+			Capable   string           `yaml:"capable"`
+			Efficient string           `yaml:"efficient"`
+			Targets   yaml.Node        `yaml:"targets"`
 		} `yaml:"route"`
 	} `yaml:"routers"`
 }
@@ -65,8 +67,9 @@ func HasComposedRouters(path string) (bool, error) {
 	}
 	for _, r := range f.Routers {
 		switch r.Route.Type {
-		case "stage_router", "llm_classifier", "fallback":
+		case config.RouteStageRouter, config.RouteLLMClassifier, config.RouteFallback:
 			return true, nil
+		case config.RoutePassthrough:
 		}
 	}
 	return false, nil
@@ -79,24 +82,19 @@ func RouterSmokeTargets(path string) ([]RouterTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(f.Routers))
-	for name := range f.Routers {
-		names = append(names, name)
-	}
-	slices.Sort(names)
 	var out []RouterTarget
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(f.Routers)) {
 		r := f.Routers[name]
 		if c := strings.TrimSpace(r.Capability); c != "" && c != "chat" {
 			continue
 		}
-		target := RouterTarget{Model: "router/" + name, Composed: r.Route.Type != "passthrough"}
+		target := RouterTarget{Model: "router/" + name, Composed: r.Route.Type != config.RoutePassthrough}
 		switch r.Route.Type {
-		case "passthrough":
+		case config.RoutePassthrough:
 			target.Leaves = []string{r.Route.Target}
-		case "stage_router":
+		case config.RouteStageRouter:
 			target.Leaves = []string{r.Route.Capable, r.Route.Efficient}
-		case "fallback", "llm_classifier":
+		case config.RouteFallback, config.RouteLLMClassifier:
 			if target.Leaves, err = routeTargets(&r.Route.Targets); err != nil {
 				return nil, fmt.Errorf("gatewayconfig: router %s: %w", name, err)
 			}
@@ -123,13 +121,8 @@ func routeTargets(node *yaml.Node) ([]string, error) {
 		if err := node.Decode(&named); err != nil {
 			return nil, err
 		}
-		keys := make([]string, 0, len(named))
-		for k := range named {
-			keys = append(keys, k)
-		}
-		slices.Sort(keys)
-		leaves := make([]string, 0, len(keys))
-		for _, k := range keys {
+		leaves := make([]string, 0, len(named))
+		for _, k := range slices.Sorted(maps.Keys(named)) {
 			leaves = append(leaves, named[k])
 		}
 		return leaves, nil

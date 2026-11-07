@@ -97,7 +97,7 @@ func (s *Store) Generate(ctx context.Context, name string) (GenerateResult, erro
 		return GenerateResult{}, derrors.New(derrors.CodeInvalid, "keys.Generate", "invalid name")
 	}
 	var out GenerateResult
-	err := statefile.WithFileLock(ctx, s.path, func() error {
+	err := s.withLock(ctx, "keys.Generate", func() error {
 		file, err := s.read()
 		if err != nil {
 			return err
@@ -157,7 +157,7 @@ func canAdd(file filePayload, name string) error {
 func (s *Store) Rotate(ctx context.Context, name string) (GenerateResult, error) {
 	name = strings.TrimSpace(name)
 	var out GenerateResult
-	err := statefile.WithFileLock(ctx, s.path, func() error {
+	err := s.withLock(ctx, "keys.Rotate", func() error {
 		file, err := s.read()
 		if err != nil {
 			return err
@@ -190,7 +190,7 @@ func (s *Store) Rotate(ctx context.Context, name string) (GenerateResult, error)
 // Delete removes a key by name.
 func (s *Store) Delete(ctx context.Context, name string) error {
 	name = strings.TrimSpace(name)
-	return statefile.WithFileLock(ctx, s.path, func() error {
+	return s.withLock(ctx, "keys.Delete", func() error {
 		file, err := s.read()
 		if err != nil {
 			return err
@@ -264,7 +264,7 @@ func (s *Store) Authorize(ctx context.Context, token string) (open bool, err err
 // matched it. Under the file lock it rewrites only when the stored hash is still
 // legacyHash, so a rotate or delete in between wins.
 func (s *Store) upgradeHash(ctx context.Context, id, legacyHash string, secret []byte) error {
-	return statefile.WithFileLock(ctx, s.path, func() error {
+	return s.withLock(ctx, "keys.upgradeHash", func() error {
 		file, err := s.read()
 		if err != nil {
 			return err
@@ -348,6 +348,19 @@ func (s *Store) read() (filePayload, error) {
 	return file, nil
 }
 
+// withLock runs fn holding the key file's lock. fn's own error is returned as it
+// is; a lock failure is wrapped with op, the key operation that wanted the lock.
+func (s *Store) withLock(ctx context.Context, op string, fn func() error) error {
+	var fnErr error
+	if err := statefile.WithFileLock(ctx, s.path, func() error {
+		fnErr = fn()
+		return nil
+	}); err != nil {
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), op, "lock key file").With("path", s.path)
+	}
+	return fnErr
+}
+
 func (s *Store) write(file filePayload) error {
 	file.Version = 1
 	raw, err := json.MarshalIndent(file, "", "  ")
@@ -355,7 +368,7 @@ func (s *Store) write(file filePayload) error {
 		return derrors.Wrap(err, derrors.CodeInternal, "keys.write", "marshal")
 	}
 	if err := statefile.WriteAtomic(s.path, raw, 0o600); err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), "keys.write", "write").With("path", s.path)
 	}
 	// Drop the cache so this process never serves the old file, even when the
 	// filesystem's mtime is too coarse to tell the two apart.

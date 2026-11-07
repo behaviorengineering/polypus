@@ -116,7 +116,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (batch.Meta, er
 		return batch.Meta{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), opCreate, "save").
 			With("backend", req.Backend.ID)
 	}
-	submitErr := s.cfg.Breakers.Execute(req.Backend.ID, func() error {
+	submitErr := s.cfg.Breakers.Execute(ctx, req.Backend.ID, func() error {
 		return sub.Submit(ctx, req.Job, &meta)
 	})
 	// From here the provider has answered, so the record of that answer is saved even
@@ -166,17 +166,9 @@ func (s *Service) cancelOrphan(ctx context.Context, sub Submitter, meta batch.Me
 // provider that cannot cancel answers CodeUnimplemented: that is returned to the
 // caller but not counted against the breaker, since the upstream is not failing.
 func (s *Service) cancelUpstream(ctx context.Context, sub Submitter, meta batch.Meta) error {
-	var cancelErr error
-	if err := s.cfg.Breakers.Execute(meta.BackendID, func() error {
-		cancelErr = sub.Cancel(ctx, meta)
-		if derrors.CodeOf(cancelErr) == derrors.CodeUnimplemented {
-			return nil
-		}
-		return cancelErr
-	}); err != nil {
-		return err
-	}
-	return cancelErr
+	return s.cfg.Breakers.Execute(ctx, meta.BackendID, func() error {
+		return sub.Cancel(ctx, meta)
+	})
 }
 
 // cancelExpired asks the provider to stop a batch Polypus has expired on its own
@@ -221,7 +213,7 @@ func (s *Service) Refresh(ctx context.Context, backend config.BackendDef, meta b
 			With("batch_id", meta.ID)
 	}
 	var poll Poll
-	if err = s.cfg.Breakers.Execute(meta.BackendID, func() error {
+	if err = s.cfg.Breakers.Execute(ctx, meta.BackendID, func() error {
 		var perr error
 		poll, perr = sub.Poll(ctx, meta)
 		return perr
@@ -292,7 +284,7 @@ func (s *Service) finalize(ctx context.Context, meta batch.Meta, lines []batch.L
 	}
 	if !applied {
 		// Another request finalised it first; return what it wrote.
-		stored, err := s.cfg.Store.GetBatch(meta.ID)
+		stored, err := s.cfg.Store.GetBatch(ctx, meta.ID)
 		if err != nil {
 			return meta, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), opFinalize, "reload").With("batch_id", meta.ID)
 		}
@@ -320,5 +312,6 @@ func (s *Service) Cancel(ctx context.Context, backend config.BackendDef, meta ba
 			With("batch_id", meta.ID)
 	}
 	meta.Status = batch.StatusCancelling
-	return meta, s.save(ctx, opCancel, meta)
+	// The provider has accepted the cancel; a client hang-up must not lose the record.
+	return meta, s.save(context.WithoutCancel(ctx), opCancel, meta)
 }

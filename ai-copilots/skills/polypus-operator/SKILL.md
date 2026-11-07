@@ -28,6 +28,8 @@ description: >-
 
 **MUST NOT** start `bin/polypus` or MLX in ad-hoc Cursor shells.
 
+MLX is opt-in: `go tool task serve` starts it only when the config sets `processes.mlx: true` (the example config does) or `POLYPUS_ENABLE_MLX=1`, and it needs `go tool task mlx-sync` once first. A config without the key, or one `polypus processes --print mlx` cannot read, leaves MLX off.
+
 ## Decision flows
 
 Offer numbered options. One probe per turn when possible.
@@ -95,7 +97,7 @@ Default model: `router/investigator` (override with `POLYPUS_ROUTER_SMOKE_MODEL`
 
 Router smoke integration requires Switchyard routing metadata: response header `x-model-router-selected-model` (or body `model` = served leaf). `polypus.Smoke` Options `RequireSelectedModel` and `AllowedSelectedModels` enforce that leaf is present and in the configured capable/efficient set.
 
-**Tracing:** On composed router chat, the gateway `polypus.router` span sets `polypus.downstream_model` when Switchyard returns selected-model metadata. Switchyard child spans already record `gen_ai.request.model` on `libsy.client_call`. Gateway and Switchyard export to `polypus-otelcol` (`POLYPUS_OTLP_ENDPOINT`, default `http://127.0.0.1:4317` when Phoenix and HyperDX containers run); the collector copies all traces to HyperDX and OpenInference / `gen_ai.*` spans to Phoenix.
+**Tracing:** On composed router chat, the gateway `polypus.router` span sets `polypus.downstream_model` when Switchyard returns selected-model metadata. Switchyard child spans already record `gen_ai.request.model` on `libsy.client_call`. Gateway and Switchyard export to `polypus-otelcol` through `POLYPUS_OTLP_ENDPOINT` (then `OTEL_EXPORTER_OTLP_ENDPOINT`), which `pc-up.sh` sets to `http://127.0.0.1:4317` when the Phoenix and HyperDX containers run; with neither set there is no OTLP export; the collector copies all traces to HyperDX and OpenInference / `gen_ai.*` spans to Phoenix.
 
 **Gemini / Bifrost chat (leaf backends):** When the client sends W3C `traceparent`, Phoenix should show `polypus.chat` on the same trace as the client span, plus Bifrost LLM child spans (for example `chat_completion_stream <model>`). Bifrost v1.8.4 does not expose an injectable Google HTTP client, so there is no timed `CLIENT POST generativelanguage.googleapis.com` span; Gemini hops instead carry a synthetic `url.full` on the Bifrost child (`generativelanguage.googleapis.com`, query `key=REDACTED`). Per chunk, compare `polypus.bifrost.stream_chunk` events on `polypus.chat`: `polypus.stream.raw_sha256` / `raw_present` (Google `RawResponse`, usually final chunk only), `polypus.stream.openai_sha256` (Bifrost OpenAI JSON before sanitize), and `polypus.stream.sse_action` (`forward`, `rewrite_usage`, or `drop`). Set `POLYPUS_STREAM_CHUNK_DEBUG=true` only for short captures; previews are capped and URL-redacted.
 
@@ -171,7 +173,7 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
   polypus secret set CF_AI_API_KEY
   polypus secret set CF_ACCOUNT_ID
   ```
-  `secret set` refuses names that are not listed under `secrets:` in the live config. Omit `secrets:` for MLX-only so the keyring is never queried. Docker Compose / Windows GitLab: put `CF_*` in the container env (SOPS); do not use the host keyring inside Linux containers.
+  `secret set` refuses names that are not listed under `secrets:` in the live config. Omit `secrets:` for MLX-only so the keyring is never queried. Docker Compose / Windows GitLab: put `CF_*` in the container env (SOPS); do not use the host keyring inside Linux containers. `polypus deploy` reads each deploy secret from the shell, then keyring service `polypus-<identifier>`, then the optional SOPS file `~/.config/polypus-<identifier>/secrets.enc.yaml` (age key from `SOPS_AGE_KEY`, `SOPS_AGE_KEY_FILE` or the SOPS default key file), and sets none of them in its own environment. A shell value that differs from the keyring is a conflict: a terminal prompt settles it for the run, and without a terminal the command exits 2. `--secrets-from env|keyring` or `POLYPUS_SECRETS_FROM` chooses ahead; CI on a runner without a keyring uses `POLYPUS_SECRETS_FROM=env`.
 - After YAML `backends`, `routers:`, or secrets change: restart gateway in process-compose TUI (or `go tool task serve-down && go tool task serve`). Runtime allow via `GET /` form or `POST /v1/admin/models/allow` does **not** require restart.
 - Gateway access keys (optional): `polypus admin-key generate --name ops --yes`. When at least one key exists, the whole gateway (except `GET /health`, which returns only `{"status":"ok"}`) requires `Authorization: Bearer ppk...`, `X-Api-Key`, or HTTP Basic (password = the key). Empty key store = open. Allow POST is inventory-gated only (no per-route key).
 - With `cf_local` configured, serve fail-closes on startup if Cloudflare Model Search ping fails (fix `secret set` / env; MLX-only configs skip this probe). Remote backends (including `extension: gemini` and OpenRouter) must resolve `auth.bearer_env` at startup.
@@ -183,8 +185,8 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 - Phoenix UI: http://127.0.0.1:6006 (LLM / OpenInference)
 - HyperDX UI: http://127.0.0.1:8080 (app traces / logs)
 - OTLP ingest (gateway, Switchyard, clients): gRPC `127.0.0.1:4317`, HTTP `127.0.0.1:4318` via `polypus-otelcol` (`otelcol.config.yaml` routing: all traces to HyperDX; OpenInference / `gen_ai.*` spans also copied to Phoenix)
-- OTel fan-out integration smoke: `POLYPUS_SMOKE_OTEL=1 go tool task smoke-otel` (Docker `phoenix`, `hyperdx`, `otelcol`; matches `go tool task serve` obs stack). Homelab host: `make smoke-collector` from `polypus-local` after deploy or serve.
-- `POLYPUS_OTLP_ENDPOINT` defaults to `http://127.0.0.1:4317` when both `POLYPUS_PHOENIX=1` and `POLYPUS_HYPERDX=1` (set by `pc-up.sh`); use `${POLYPUS_OTLP_ENDPOINT}` for `openinference.endpoint` in client configs
+- OTel fan-out integration smoke: `go tool task smoke-otel` (sets `POLYPUS_SMOKE_OTEL=1`; Docker `phoenix`, `hyperdx`, `otelcol`; matches `go tool task serve` obs stack). Against a running stack: `polypus deploy smoke-collector`; with a loopback gateway (`POLYPUS_BASE_URL=http://127.0.0.1:1320`) it defaults to the local ports (`OTELCOL_OTLP_GRPC_PORT` 4317, `PHOENIX_PORT` 6006, `HYPERDX_PORT` 8080), and with no gateway named it needs `--otlp`, `--phoenix-url` and `--hyperdx-url` (or `POLYPUS_OTLP_ENDPOINT`, `PHOENIX_BASE_URL`, `HYPERDX_BASE_URL`). Homelab host: `make smoke-collector` from `polypus-local` after deploy or serve.
+- No endpoint, no export: the gateway has no built-in OTLP address. `pc-up.sh` sets `POLYPUS_OTLP_ENDPOINT=http://127.0.0.1:4317` (the port follows `OTELCOL_OTLP_GRPC_PORT`) when both `POLYPUS_PHOENIX` and `POLYPUS_HYPERDX` are on and Docker runs; a gateway started any other way exports nothing until `POLYPUS_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set. `POLYPUS_PHOENIX` and `POLYPUS_HYPERDX` only choose which containers `pc-up.sh` starts. Use `${POLYPUS_OTLP_ENDPOINT}` for `openinference.endpoint` in client configs
 - HyperDX OTel table TTL: `HYPERDX_OTEL_EXPORTER_TABLES_TTL` (default `1h`); set `HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL=true` once to rewrite existing `otel_*` table TTLs
 - HyperDX ClickHouse system-log TTL: 7 days via `hyperdx.clickhouse.config.xml` (separate from OTel retention)
 - Failure dumps: `logs/inference-failures/` via [olly](https://github.com/behaviorengineering/olly)

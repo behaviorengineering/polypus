@@ -9,7 +9,7 @@ import (
 
 func decode(t *testing.T, observability bool) serveConfig {
 	t.Helper()
-	data, err := Render(observability)
+	data, err := render(observability)
 	if err != nil {
 		t.Fatal(err)
 	}

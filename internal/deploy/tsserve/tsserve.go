@@ -4,9 +4,11 @@ package tsserve
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/behaviorengineering/polypus/internal/deploy/stack"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // certDomain is expanded by the Tailscale container to the node's own name.
@@ -15,11 +17,14 @@ const certDomain = "${TS_CERT_DOMAIN}:443"
 // observabilityForwards are the tailnet ports forwarded to the collector, Phoenix
 // and HyperDX inside the compose network.
 var observabilityForwards = map[string]string{
-	"4317": "otelcol:4317",
-	"4318": "otelcol:4318",
-	"6006": "phoenix:6006",
-	"8080": "hyperdx:8080",
+	"4317": stack.ServiceOtelcol + ":4317",
+	"4318": stack.ServiceOtelcol + ":4318",
+	"6006": stack.ServicePhoenix + ":6006",
+	"8080": stack.ServiceHyperDX + ":8080",
 }
+
+// gatewayProxy is the gateway's address inside the compose network.
+const gatewayProxy = "http://" + stack.ServiceGateway + ":1320" // NOSONAR: compose-network hop; Tailscale serve terminates HTTPS in front.
 
 type tcpHandler struct {
 	HTTPS      bool   `json:"HTTPS,omitempty"`
@@ -40,13 +45,13 @@ type serveConfig struct {
 	AllowFunnel map[string]bool       `json:"AllowFunnel"`
 }
 
-// Render returns serve.json: 443 proxies to the gateway, and with observability the
+// render returns serve.json: 443 proxies to the gateway, and with observability the
 // OTLP, Phoenix and HyperDX ports forward over the tailnet. Funnel stays off.
-func Render(observability bool) ([]byte, error) {
+func render(observability bool) ([]byte, error) {
 	cfg := serveConfig{
 		TCP: map[string]tcpHandler{"443": {HTTPS: true}},
 		Web: map[string]webServer{
-			certDomain: {Handlers: map[string]webHandler{"/": {Proxy: "http://gateway:1320"}}},
+			certDomain: {Handlers: map[string]webHandler{"/": {Proxy: gatewayProxy}}},
 		},
 		AllowFunnel: map[string]bool{certDomain: false},
 	}
@@ -57,23 +62,24 @@ func Render(observability bool) ([]byte, error) {
 	}
 	out, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("tsserve: render: %w", err)
+		return nil, derrors.Wrap(err, derrors.CodeInternal, "tsserve.render", "marshal serve.json")
 	}
 	return append(out, '\n'), nil
 }
 
 // Write renders serve.json into dir (created if missing) and returns its path.
 func Write(dir string, observability bool) (string, error) {
-	data, err := Render(observability)
+	const op = "tsserve.Write"
+	data, err := render(observability)
 	if err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return "", fmt.Errorf("tsserve: mkdir %q: %w", dir, err)
+		return "", derrors.Wrap(err, derrors.CodeInternal, op, "mkdir "+dir)
 	}
 	path := filepath.Join(dir, "serve.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return "", fmt.Errorf("tsserve: write %q: %w", path, err)
+		return "", derrors.Wrap(err, derrors.CodeInternal, op, "write "+path)
 	}
 	return path, nil
 }

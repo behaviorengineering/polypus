@@ -145,3 +145,21 @@ func TestRunSpeechPluginRejectsNilContext(t *testing.T) {
 		t.Fatalf("want an invalid short circuit, got %+v", sc)
 	}
 }
+
+func TestNilClientIsNotReady(t *testing.T) {
+	var c *Client
+	ctx := hopCtx(t)
+	checks := map[string]error{}
+	_, _, checks["Synthesize"] = c.Synthesize(ctx, SpeechRequest{Input: "hi"})
+	_, checks["Transcribe"] = c.Transcribe(ctx, TranscriptionRequest{Audio: []byte("a")})
+	_, checks["SystemOne"] = c.SystemOne(ctx, "typesafe/jev", []byte(`{}`))
+	_, checks["SubmitBatch"] = c.SubmitBatch(ctx, "m", "", nil)
+	_, checks["PollBatch"] = c.PollBatch(ctx, "m", "r")
+	_, checks["ListModelsStrict"] = c.ListModelsStrict(ctx)
+	checks["Ping"] = c.Ping(ctx)
+	for name, err := range checks {
+		if got := derrors.CodeOf(err); got != derrors.CodeNotReady {
+			t.Fatalf("%s on a nil client: code %q, want not_ready (err %v)", name, got, err)
+		}
+	}
+}

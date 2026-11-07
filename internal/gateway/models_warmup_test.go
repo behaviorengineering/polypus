@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/behaviorengineering/polypus/internal/config"
 )
 
 func TestModelsRefreshLoopCancels(t *testing.T) {
@@ -31,5 +33,19 @@ func TestModelsRefreshLoopCancels(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("expected 2 warm calls, got %d", calls.Load())
+	}
+}
+
+func TestModelsRefreshLoopWaitReturnsAfterCancel(t *testing.T) {
+	h := modelsHandler{responder: testResponder, inventory: config.ModelsInventory{Warmup: true, RefreshInterval: time.Hour}}
+	ctx, cancel := context.WithCancel(context.Background())
+	wait := h.startModelsRefreshLoop(ctx)
+	cancel()
+	done := make(chan struct{})
+	go func() { wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait must return once the loop stops")
 	}
 }

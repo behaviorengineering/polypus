@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/outbound"
@@ -126,8 +126,8 @@ type gitRefResponse struct {
 // missing tag wraps ErrNotFound (CodeNotFound).
 func (c *Client) TagCommit(ctx context.Context, tag string) (string, error) {
 	const op = "github.TagCommit"
-	var ref gitRefResponse
-	if err := c.get(ctx, op, fmt.Sprintf("%s/repos/%s/git/ref/tags/%s", c.base, c.ownerRepo, tag), &ref); err != nil {
+	ref, err := getJSON[gitRefResponse](ctx, c, op, fmt.Sprintf("%s/repos/%s/git/ref/tags/%s", c.base, c.ownerRepo, tag))
+	if err != nil {
 		return "", err
 	}
 	sha := strings.TrimSpace(ref.Object.SHA)
@@ -137,8 +137,8 @@ func (c *Client) TagCommit(ctx context.Context, tag string) (string, error) {
 	if !strings.EqualFold(ref.Object.Type, "tag") {
 		return sha, nil
 	}
-	var annotated gitRefResponse
-	if err := c.get(ctx, op, fmt.Sprintf("%s/repos/%s/git/tags/%s", c.base, c.ownerRepo, sha), &annotated); err != nil {
+	annotated, err := getJSON[gitRefResponse](ctx, c, op, fmt.Sprintf("%s/repos/%s/git/tags/%s", c.base, c.ownerRepo, sha))
+	if err != nil {
 		return "", err
 	}
 	commit := strings.TrimSpace(annotated.Object.SHA)
@@ -164,16 +164,16 @@ func (c *Client) RunsForSHA(ctx context.Context, sha string) ([]WorkflowRun, err
 // RunJobs returns the jobs of the run.
 func (c *Client) RunJobs(ctx context.Context, runID int64) ([]Job, error) {
 	const op = "github.RunJobs"
-	var doc jobsResponse
-	if err := c.get(ctx, op, fmt.Sprintf("%s/repos/%s/actions/runs/%d/jobs?per_page=30", c.base, c.ownerRepo, runID), &doc); err != nil {
+	doc, err := getJSON[jobsResponse](ctx, c, op, fmt.Sprintf("%s/repos/%s/actions/runs/%d/jobs?per_page=30", c.base, c.ownerRepo, runID))
+	if err != nil {
 		return nil, err
 	}
 	return doc.Jobs, nil
 }
 
 func (c *Client) runs(ctx context.Context, op, url string) ([]WorkflowRun, error) {
-	var doc runsResponse
-	if err := c.get(ctx, op, url, &doc); err != nil {
+	doc, err := getJSON[runsResponse](ctx, c, op, url)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]WorkflowRun, 0, len(doc.WorkflowRuns))
@@ -197,18 +197,19 @@ func (c *Client) runs(ctx context.Context, op, url string) ([]WorkflowRun, error
 	return out, nil
 }
 
-// get sends one GET under the outbound retry policy and decodes a 200 answer into
-// into. ctx must carry a deadline.
-func (c *Client) get(ctx context.Context, op, url string, into any) error {
+// getJSON sends one GET under the outbound retry policy and decodes a 200 answer into
+// a T. ctx must carry a deadline. A body past maxBody is an error, not a truncation.
+func getJSON[T any](ctx context.Context, c *Client, op, url string) (T, error) {
+	var out T
 	if ctx == nil {
-		return derrors.New(derrors.CodeInvalid, op, "context required")
+		return out, derrors.New(derrors.CodeInvalid, op, "context required")
 	}
 	if _, ok := ctx.Deadline(); !ok {
-		return derrors.New(derrors.CodeFailedPrecondition, op, "context needs a deadline")
+		return out, derrors.New(derrors.CodeFailedPrecondition, op, "context needs a deadline")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeInvalid, op, "new request").With("url", url)
+		return out, derrors.Wrap(err, derrors.CodeInvalid, op, "new request").With("url", url)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Authorization", "Bearer "+c.token)
@@ -216,24 +217,24 @@ func (c *Client) get(ctx context.Context, op, url string, into any) error {
 	resp, err := c.policies.Do(ctx, outbound.DepGitHub, c.http, req) // nil uses the process default.
 	if err != nil {
 		outbound.CloseResponse(resp)
-		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "GET "+url)
+		return out, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "GET "+url)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	body, err := httpx.ReadCapped(resp.Body, maxBody, op)
 	if err != nil {
-		return derrors.Wrap(err, derrors.CodeUnavailable, op, "read GET "+url)
+		return out, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "read GET "+url)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return statusError(op, url, resp.StatusCode, body)
+		return out, statusError(op, url, resp.StatusCode, body)
 	}
-	if err := json.Unmarshal(body, into); err != nil {
-		return derrors.Wrap(err, derrors.CodeUnavailable, op, "parse GET "+url)
+	if err := json.Unmarshal(body, &out); err != nil {
+		return out, derrors.Wrap(err, derrors.CodeUnavailable, op, "parse GET "+url)
 	}
-	return nil
+	return out, nil
 }
 
 func statusError(op, url string, status int, body []byte) error {
-	cause := fmt.Errorf("HTTP %d: %s", status, truncate(body, maxErrorBody))
+	cause := fmt.Errorf("HTTP %d: %s", status, httpx.Truncate(string(body), maxErrorBody))
 	msg := "GET " + url
 	switch status {
 	case http.StatusNotFound:
@@ -245,12 +246,4 @@ func statusError(op, url string, status int, body []byte) error {
 	default:
 		return derrors.Wrap(cause, derrors.CodeUnavailable, op, msg)
 	}
-}
-
-func truncate(b []byte, n int) string {
-	s := strings.TrimSpace(string(b))
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

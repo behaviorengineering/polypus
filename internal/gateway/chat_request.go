@@ -32,12 +32,27 @@ func parseChatRequest(body []byte) (chatRequest, error) {
 	if dec.More() {
 		return chatRequest{}, derrors.New(derrors.CodeInvalid, op, "invalid json: trailing data")
 	}
-	model, _ := root[keyModel].(string)
-	model = strings.TrimSpace(model)
+	var model string
+	if raw, present := root[keyModel]; present && raw != nil {
+		s, ok := raw.(string)
+		if !ok {
+			return chatRequest{}, derrors.New(derrors.CodeInvalid, op, "model must be a string")
+		}
+		model = strings.TrimSpace(s)
+	}
 	if model == "" {
 		return chatRequest{}, derrors.New(derrors.CodeInvalid, op, "model required")
 	}
-	stream, _ := root["stream"].(bool)
+	// OpenAI answers 400 for a stream that is not a boolean; a silent false would
+	// send one JSON body to a client waiting for SSE.
+	var stream bool
+	if raw, present := root["stream"]; present && raw != nil {
+		b, ok := raw.(bool)
+		if !ok {
+			return chatRequest{}, derrors.New(derrors.CodeInvalid, op, "stream must be a boolean")
+		}
+		stream = b
+	}
 	return chatRequest{
 		raw:      body,
 		root:     root,

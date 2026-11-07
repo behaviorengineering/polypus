@@ -47,11 +47,7 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if g, ok := gatewayFromHandler(handler); ok {
-			g.Close()
-		}
-	})
+	t.Cleanup(func() { _ = handler.Close() })
 	if _, err := os.Stat(tomlPath); !os.IsNotExist(err) {
 		t.Fatalf("NewHandler must not write Switchyard TOML: err=%v", err)
 	}
@@ -100,11 +96,11 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 	g, ok := gatewayFromHandler(handler)
 	if !ok {
 		t.Fatal("expected gateway handler")
 	}
-	t.Cleanup(g.Close)
 
 	if err := writeSwitchyardConfig(g, opts); err != nil {
 		t.Fatal(err)

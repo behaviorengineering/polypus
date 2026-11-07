@@ -23,6 +23,7 @@ type account struct {
 }
 
 // newAccount returns a Bifrost account for leaf backends plus optional Switchyard.
+// It reads the Switchyard setting once; hasSwitchyard reports what it decided.
 func newAccount(cfg config.RouterConfig) *account {
 	backends := make(map[schemas.ModelProvider]config.BackendDef, len(cfg.Backends)+1)
 	for id, b := range cfg.Backends {
@@ -38,6 +39,14 @@ func newAccount(cfg config.RouterConfig) *account {
 	return &account{backends: backends, timeouts: cfg.Timeouts}
 }
 
+// hasSwitchyard reports whether the account registered the Switchyard provider.
+func (a *account) hasSwitchyard() bool {
+	_, ok := a.backends[schemas.ModelProvider(ProviderSwitchyard)]
+	return ok
+}
+
+// shouldRegisterSwitchyard reads POLYPUS_SWITCHYARD from the environment, so only
+// newAccount calls it, once per client.
 func shouldRegisterSwitchyard(cfg config.RouterConfig) bool {
 	if cfg.HasComposedRouters() {
 		return true

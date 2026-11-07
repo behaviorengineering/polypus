@@ -143,3 +143,10 @@ func TestGeminiClientsCacheOneInstance(t *testing.T) {
 		t.Fatal("expected same client instance")
 	}
 }
+
+func TestNilClientIsNotReady(t *testing.T) {
+	var c *Client
+	if _, err := c.ListModelsStrict(context.Background()); derrors.CodeOf(err) != derrors.CodeNotReady {
+		t.Fatalf("err = %v, want not_ready", err)
+	}
+}

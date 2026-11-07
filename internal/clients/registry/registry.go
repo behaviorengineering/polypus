@@ -9,10 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/outbound"
@@ -27,6 +30,13 @@ const defaultBasicUser = "token"
 
 // maxErrorBody bounds how much of an error response is kept for the message.
 const maxErrorBody = 200
+
+// maxManifestDrain bounds how much of a manifest answer is drained; only its status
+// is read.
+const maxManifestDrain = 1 << 20
+
+// maxTokenBody bounds a token endpoint answer.
+const maxTokenBody = 1 << 20
 
 var manifestAccept = strings.Join([]string{
 	"application/vnd.oci.image.index.v1+json",
@@ -112,7 +122,9 @@ func ParseRef(ref string) (Ref, error) {
 
 // ManifestExists returns nil when the registry has a manifest for ref. It wraps
 // ErrManifestNotFound (CodeNotFound) when the tag is missing and ErrUnauthorized
-// (CodeUnauthorized) when the registry refuses. ctx must carry a deadline.
+// (CodeUnauthorized) when the registry refuses. A token endpoint that is down, slow
+// or rate limited keeps its own code, so an outage never reads as a refused token.
+// ctx must carry a deadline.
 func (c *Client) ManifestExists(ctx context.Context, ref Ref) error {
 	const op = "registry.ManifestExists"
 	if ctx == nil {
@@ -122,19 +134,25 @@ func (c *Client) ManifestExists(ctx context.Context, ref Ref) error {
 		return derrors.New(derrors.CodeFailedPrecondition, op, "context needs a deadline")
 	}
 	manifestURL := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", scheme(ref.Registry), ref.Registry, ref.Repository, ref.Tag)
-	status, err := c.manifestGet(ctx, ref, manifestURL, "")
+	ans, err := c.manifestGet(ctx, ref, manifestURL, "")
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "GET "+manifestURL)
 	}
+	status := ans.status
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		bearer, err := c.pullToken(ctx, ref)
+		bearer, err := c.pullToken(ctx, ref, ans.challenge)
 		if err != nil {
+			if code := derrors.CodeOr(err, derrors.CodeUnauthorized); code != derrors.CodeUnauthorized {
+				// Transport, deadline, 429 or 5xx from the token endpoint: keep its code.
+				return derrors.Wrap(err, code, op, "pull token").With("registry", ref.Registry)
+			}
 			return derrors.Wrap(fmt.Errorf("%w: %w", ErrUnauthorized, err), derrors.CodeUnauthorized, op, c.unauthorizedHint(ref)).
 				With("registry", ref.Registry)
 		}
-		if status, err = c.manifestGet(ctx, ref, manifestURL, bearer); err != nil {
+		if ans, err = c.manifestGet(ctx, ref, manifestURL, bearer); err != nil {
 			return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "GET "+manifestURL)
 		}
+		status = ans.status
 	}
 	return statusError(op, manifestURL, status)
 }
@@ -164,10 +182,11 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("registry HTTP %d", e.Code)
 }
 
-// credential is the GitHub token when ref is on ghcr.io, else empty: no other host
-// ever receives it.
-func (c *Client) credential(ref Ref) string {
-	if !strings.EqualFold(ref.Registry, GHCRHost) {
+// credential is the GitHub token when ref is on ghcr.io and tokenURL is ghcr.io's own
+// token service, else empty: no other host ever receives it, even when a ghcr.io
+// challenge names another realm.
+func (c *Client) credential(ref Ref, tokenURL *url.URL) string {
+	if !strings.EqualFold(ref.Registry, GHCRHost) || !strings.EqualFold(tokenURL.Host, GHCRHost) {
 		return ""
 	}
 	return c.githubToken
@@ -184,76 +203,182 @@ func (c *Client) unauthorizedHint(ref Ref) string {
 	}
 }
 
-// depName is the outbound breaker key for ref's registry.
-func depName(ref Ref) string {
-	if strings.EqualFold(ref.Registry, GHCRHost) {
+// depName is the outbound breaker key for a registry or token host.
+func depName(host string) string {
+	if strings.EqualFold(host, GHCRHost) {
 		return outbound.DepGHCR
 	}
-	return outbound.Scoped(outbound.DepRegistry, ref.Registry)
+	return outbound.Scoped(outbound.DepRegistry, host)
 }
 
-func (c *Client) manifestGet(ctx context.Context, ref Ref, manifestURL, bearer string) (int, error) {
+// manifestAnswer is what a manifest GET tells the caller: its status and, on a 401,
+// the WWW-Authenticate challenge naming the token service.
+type manifestAnswer struct {
+	status    int
+	challenge string
+}
+
+func (c *Client) manifestGet(ctx context.Context, ref Ref, manifestURL, bearer string) (manifestAnswer, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
 	if err != nil {
-		return 0, fmt.Errorf("new request: %w", err)
+		return manifestAnswer{}, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Accept", manifestAccept)
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	resp, err := c.policies.Do(ctx, depName(ref), c.http, req)
+	resp, err := c.policies.Do(ctx, depName(ref.Registry), c.http, req)
 	if err != nil {
 		outbound.CloseResponse(resp)
-		return 0, err
+		return manifestAnswer{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		return 0, fmt.Errorf("read manifest response: %w", err)
+	// Only the status matters; drain a bounded part so the connection can be reused,
+	// and never stream an unbounded body until the deadline.
+	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, maxManifestDrain)); err != nil {
+		return manifestAnswer{}, fmt.Errorf("read manifest response: %w", err)
 	}
-	return resp.StatusCode, nil
+	return manifestAnswer{status: resp.StatusCode, challenge: resp.Header.Get("WWW-Authenticate")}, nil
 }
 
 type tokenResponse struct {
-	Token string `json:"token"`
+	Token       string `json:"token"`
+	AccessToken string `json:"access_token"`
 }
 
-// pullToken returns a Bearer token for a manifest GET from the registry's token
-// endpoint. On ghcr.io with a GitHub token it authenticates with Basic auth, the way
-// docker login does; otherwise it asks for an anonymous pull token, which is how
-// public packages are read.
-func (c *Client) pullToken(ctx context.Context, ref Ref) (string, error) {
-	scope := fmt.Sprintf("repository:%s:pull", ref.Repository)
-	tokenURL := fmt.Sprintf("%s://%s/token?service=%s&scope=%s",
-		scheme(ref.Registry), ref.Registry, url.QueryEscape(ref.Registry), url.QueryEscape(scope))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
+// pullToken returns a Bearer token for a manifest GET. It asks the token service the
+// registry's challenge names (realm, service and scope), or <registry>/token when the
+// challenge names none. On ghcr.io with a GitHub token it authenticates with Basic
+// auth, the way docker login does; otherwise it asks for an anonymous pull token,
+// which is how public packages are read. A refusal is CodeUnauthorized; a transport
+// failure, deadline, 429 or 5xx keeps its own code.
+func (c *Client) pullToken(ctx context.Context, ref Ref, challenge string) (string, error) {
+	const op = "registry.pullToken"
+	tokenURL, err := tokenEndpoint(ref, challenge)
 	if err != nil {
-		return "", fmt.Errorf("new token request: %w", err)
+		return "", err
 	}
-	if pat := c.credential(ref); pat != "" {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL.String(), nil)
+	if err != nil {
+		return "", derrors.Wrap(err, derrors.CodeInternal, op, "new token request")
+	}
+	if pat := c.credential(ref, tokenURL); pat != "" {
 		req.SetBasicAuth(c.basicUser, pat)
 	}
-	resp, err := c.policies.Do(ctx, depName(ref), c.http, req)
+	target := redactQuery(tokenURL.String())
+	resp, err := c.policies.Do(ctx, depName(tokenURL.Host), c.http, req)
 	if err != nil {
 		outbound.CloseResponse(resp)
-		return "", fmt.Errorf("GET %s: %w", redactQuery(tokenURL), err)
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "GET "+target)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := httpx.ReadCapped(resp.Body, maxTokenBody, op)
 	if err != nil {
-		return "", fmt.Errorf("read token response: %w", err)
+		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("token endpoint HTTP %d: %s", resp.StatusCode, truncate(body, maxErrorBody))
+		return "", derrors.New(tokenStatusCode(resp.StatusCode), op,
+			fmt.Sprintf("token endpoint HTTP %d: %s", resp.StatusCode, httpx.Truncate(string(body), maxErrorBody))).
+			With("status", strconv.Itoa(resp.StatusCode)).With("target", target)
 	}
 	var doc tokenResponse
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return "", fmt.Errorf("token endpoint: parse JSON: %w", err)
+		return "", derrors.Wrap(err, derrors.CodeUnavailable, op, "parse token response").With("target", target)
 	}
 	tok := strings.TrimSpace(doc.Token)
 	if tok == "" {
-		return "", errors.New("token endpoint: empty token in response")
+		tok = strings.TrimSpace(doc.AccessToken)
+	}
+	if tok == "" {
+		return "", derrors.New(derrors.CodeUnavailable, op, "empty token in response").With("target", target)
 	}
 	return tok, nil
+}
+
+// tokenStatusCode maps a token endpoint status: a 429 is a rate limit and a 5xx an
+// outage; any other refusal (401, 403, 404, another 4xx) means no token.
+func tokenStatusCode(status int) derrors.Code {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return derrors.CodeRateLimited
+	case status >= 500:
+		return derrors.CodeUnavailable
+	default:
+		return derrors.CodeUnauthorized
+	}
+}
+
+// tokenEndpoint is the token service URL for ref: the realm of the registry's Bearer
+// challenge with its service and scope, or <registry>/token when the challenge names
+// no realm. A realm must be https (plain http only on this machine).
+func tokenEndpoint(ref Ref, challenge string) (*url.URL, error) {
+	const op = "registry.tokenEndpoint"
+	scope := fmt.Sprintf("repository:%s:pull", ref.Repository)
+	params := parseBearerChallenge(challenge)
+	realm := params["realm"]
+	if realm == "" {
+		u, err := url.Parse(fmt.Sprintf("%s://%s/token", scheme(ref.Registry), ref.Registry))
+		if err != nil {
+			return nil, derrors.Wrap(err, derrors.CodeInvalid, op, "token url").With("registry", ref.Registry)
+		}
+		u.RawQuery = url.Values{"service": {ref.Registry}, "scope": {scope}}.Encode()
+		return u, nil
+	}
+	u, err := url.Parse(realm)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && (u.Scheme != "http" || !isLocalHost(u.Hostname()))) {
+		return nil, derrors.New(derrors.CodeUnauthorized, op, "token realm is not an https URL").
+			With("registry", ref.Registry).With("realm", redactQuery(realm))
+	}
+	q := u.Query()
+	if svc := params["service"]; svc != "" {
+		q.Set("service", svc)
+	}
+	if sc := params["scope"]; sc != "" {
+		scope = sc
+	}
+	q.Set("scope", scope)
+	u.RawQuery = q.Encode()
+	return u, nil
+}
+
+// parseBearerChallenge reads the parameters of a WWW-Authenticate Bearer challenge,
+// such as Bearer realm="https://auth.docker.io/token",service="registry.docker.io".
+// Keys are lower case; any other scheme yields none.
+func parseBearerChallenge(h string) map[string]string {
+	scheme, rest, ok := strings.Cut(strings.TrimSpace(h), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return nil
+	}
+	params := map[string]string{}
+	for rest = strings.TrimSpace(rest); rest != ""; {
+		key, after, ok := strings.Cut(rest, "=")
+		if !ok {
+			break
+		}
+		after = strings.TrimSpace(after)
+		var val string
+		if strings.HasPrefix(after, `"`) {
+			end := strings.IndexByte(after[1:], '"')
+			if end < 0 {
+				break
+			}
+			val, after = after[1:1+end], after[2+end:]
+		} else {
+			val, after, _ = strings.Cut(after, ",")
+		}
+		params[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(val)
+		rest = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(after), ","))
+	}
+	return params
+}
+
+// isLocalHost reports this machine: localhost or a loopback address.
+func isLocalHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // scheme is plain http for a registry on this machine, else https.
@@ -267,12 +392,4 @@ func scheme(registry string) string {
 func redactQuery(raw string) string {
 	base, _, _ := strings.Cut(raw, "?")
 	return base
-}
-
-func truncate(b []byte, n int) string {
-	s := strings.TrimSpace(string(b))
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

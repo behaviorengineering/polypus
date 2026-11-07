@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
-	"github.com/behaviorengineering/polypus/internal/clients/catalog"
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
@@ -80,7 +80,7 @@ func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string,
 		return "", derrors.New(derrors.CodeInvalid, opSubmitBatch, "context required")
 	}
 	if c == nil {
-		return "", derrors.New(derrors.CodeFailedPrecondition, opSubmitBatch, "not configured")
+		return "", derrors.New(derrors.CodeNotReady, opSubmitBatch, "not configured")
 	}
 	model = NormalizeModel(strings.TrimSpace(model))
 	if model == "" {
@@ -110,6 +110,11 @@ func (c *Client) SubmitBatch(ctx context.Context, model string, endpoint string,
 	return parseSubmitRequestID(raw)
 }
 
+// batchPollRequest is the async batch poll body.
+type batchPollRequest struct {
+	RequestID string `json:"request_id"`
+}
+
 // PollBatch checks status or fetches completed responses for a queued batch. A poll
 // is idempotent, so a transient failure is retried within ctx's deadline.
 func (c *Client) PollBatch(ctx context.Context, model, cfRequestID string) (BatchPollResult, error) {
@@ -117,16 +122,14 @@ func (c *Client) PollBatch(ctx context.Context, model, cfRequestID string) (Batc
 		return BatchPollResult{}, derrors.New(derrors.CodeInvalid, opPollBatch, "context required")
 	}
 	if c == nil {
-		return BatchPollResult{}, derrors.New(derrors.CodeFailedPrecondition, opPollBatch, "not configured")
+		return BatchPollResult{}, derrors.New(derrors.CodeNotReady, opPollBatch, "not configured")
 	}
 	model = NormalizeModel(strings.TrimSpace(model))
 	cfRequestID = strings.TrimSpace(cfRequestID)
 	if model == "" || cfRequestID == "" {
 		return BatchPollResult{}, derrors.New(derrors.CodeInvalid, opPollBatch, "model and request_id required")
 	}
-	payload, err := json.Marshal(map[string]string{
-		"request_id": cfRequestID,
-	})
+	payload, err := json.Marshal(batchPollRequest{RequestID: cfRequestID})
 	if err != nil {
 		return BatchPollResult{}, derrors.Wrap(err, derrors.CodeInternal, opPollBatch, "marshal")
 	}
@@ -134,7 +137,12 @@ func (c *Client) PollBatch(ctx context.Context, model, cfRequestID string) (Batc
 	if err != nil {
 		return BatchPollResult{}, err
 	}
-	return parsePollResult(raw)
+	poll, err := parsePollResult(raw)
+	if err != nil {
+		return BatchPollResult{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opPollBatch, "poll answer").
+			With("request_id", cfRequestID)
+	}
+	return poll, nil
 }
 
 // postBatchRun posts payload to the async batch /run endpoint. A submit (retry false)
@@ -155,7 +163,7 @@ func (c *Client) postBatchRun(ctx context.Context, model string, payload []byte,
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := catalog.ReadCapped(resp.Body, runMaxBody, opPostBatchRun)
+	raw, err := httpx.ReadCapped(resp.Body, runMaxBody, opPostBatchRun)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +283,9 @@ type cfBatchResponseRow struct {
 }
 
 // parsePollResult reads a poll result (postBatchRun has already removed the
-// {success, result} envelope): its responses once done, else its status.
+// {success, result} envelope): its responses once done, else its status. An answer
+// with neither is unexpected (an API change or a malformed reply) and is an error, so
+// the poll loop logs it instead of treating the batch as queued until it expires.
 func parsePollResult(raw []byte) (BatchPollResult, error) {
 	var result struct {
 		Status    string               `json:"status"`
@@ -298,7 +308,10 @@ func parsePollResult(raw []byte) (BatchPollResult, error) {
 		return out, nil
 	}
 	switch status {
-	case "queued", "":
+	case "":
+		return BatchPollResult{}, derrors.New(derrors.CodeUnavailable, "cloudflare.parsePollResult", "poll answer has no status and no responses").
+			With("body", httpx.Truncate(string(raw), errorBodyMax))
+	case "queued":
 		return BatchPollResult{State: BatchPollQueued}, nil
 	case "running", "in_progress":
 		return BatchPollResult{State: BatchPollRunning}, nil

@@ -25,7 +25,7 @@ type polypusBreakerMeta struct {
 	State string `json:"state"`
 }
 
-func (s *shared) writeUnavailableError(w http.ResponseWriter, err error, message, upstreamName string) {
+func (rs responder) writeUnavailableError(w http.ResponseWriter, err error, message, upstreamName string) {
 	cls := upstream.ClassifyDialFailure(err, upstreamName)
 	if upstream.Unavailable(err) {
 		w.Header().Set("Retry-After", strconv.Itoa(int(upstream.OpenTimeout.Seconds())))
@@ -33,7 +33,7 @@ func (s *shared) writeUnavailableError(w http.ResponseWriter, err error, message
 	body := openaiErrorBody{
 		Error: openaiError{
 			Message: message,
-			Type:    "unavailable_error",
+			Type:    errTypeUnavailable,
 			Code:    cls.Layer,
 		},
 		Polypus: &polypusFailureBody{
@@ -46,7 +46,7 @@ func (s *shared) writeUnavailableError(w http.ResponseWriter, err error, message
 	if cls.BreakerState != "" {
 		body.Polypus.CircuitBreaker = &polypusBreakerMeta{State: cls.BreakerState}
 	}
-	s.writeJSON(w, http.StatusServiceUnavailable, body)
+	rs.writeJSON(w, http.StatusServiceUnavailable, body)
 }
 
 // dialFailureLabels classifies a dial error with the gateway's breaker and upstream

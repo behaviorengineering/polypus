@@ -72,7 +72,7 @@ func TestHealthBackendsProbesInParallel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(handler.(interface{ Close() }).Close)
+	t.Cleanup(func() { _ = handler.Close() })
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/backends", nil))
@@ -102,7 +102,7 @@ func TestHealthBackendsBodyHasNoCauseChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(handler.(interface{ Close() }).Close)
+	t.Cleanup(func() { _ = handler.Close() })
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/backends", nil))

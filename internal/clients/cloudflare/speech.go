@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
@@ -79,13 +80,20 @@ type TranscriptionRequest struct {
 	Language string
 }
 
+// auraRequest is the Workers AI Deepgram Aura TTS body.
+type auraRequest struct {
+	Text     string `json:"text"`
+	Speaker  string `json:"speaker"`
+	Encoding string `json:"encoding"`
+}
+
 // Synthesize calls Workers AI TTS (Deepgram Aura).
 func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, string, error) {
 	if ctx == nil {
 		return nil, "", derrors.New(derrors.CodeInvalid, opSynthesize, "context required")
 	}
 	if c == nil {
-		return nil, "", derrors.New(derrors.CodeFailedPrecondition, opSynthesize, "not configured")
+		return nil, "", derrors.New(derrors.CodeNotReady, opSynthesize, "not configured")
 	}
 	input := strings.TrimSpace(req.Input)
 	if input == "" {
@@ -98,12 +106,7 @@ func (c *Client) Synthesize(ctx context.Context, req SpeechRequest) ([]byte, str
 	speaker := catalog.FirstNonEmpty(req.Voice, c.speech.Voice) // c.speech.Voice is never empty (withBuiltins).
 	encoding := catalog.FirstNonEmpty(req.ResponseFormat, "mp3")
 
-	body := map[string]string{
-		"text":     input,
-		"speaker":  speaker,
-		"encoding": encoding,
-	}
-	payload, err := json.Marshal(body)
+	payload, err := json.Marshal(auraRequest{Text: input, Speaker: speaker, Encoding: encoding})
 	if err != nil {
 		return nil, "", derrors.Wrap(err, derrors.CodeInternal, opSynthesize, "marshal")
 	}
@@ -140,7 +143,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 		return "", derrors.New(derrors.CodeInvalid, opTranscribe, "context required")
 	}
 	if c == nil {
-		return "", derrors.New(derrors.CodeFailedPrecondition, opTranscribe, "not configured")
+		return "", derrors.New(derrors.CodeNotReady, opTranscribe, "not configured")
 	}
 	if len(req.Audio) == 0 {
 		return "", derrors.New(derrors.CodeInvalid, opTranscribe, "empty audio")
@@ -177,7 +180,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := catalog.ReadCapped(resp.Body, runMaxBody, opTranscribe)
+	body, err := httpx.ReadCapped(resp.Body, runMaxBody, opTranscribe)
 	if err != nil {
 		return "", err
 	}
@@ -189,7 +192,7 @@ func (c *Client) Transcribe(ctx context.Context, req TranscriptionRequest) (stri
 
 func readAudioBody(resp *http.Response) ([]byte, string, error) {
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
-	body, err := catalog.ReadCapped(resp.Body, runMaxBody, opSpeech)
+	body, err := httpx.ReadCapped(resp.Body, runMaxBody, opSpeech)
 	if err != nil {
 		return nil, contentType, err
 	}
@@ -204,7 +207,9 @@ func readAudioBody(resp *http.Response) ([]byte, string, error) {
 }
 
 // audioFromEnvelope unwraps a Workers AI JSON reply: an error envelope becomes an
-// error, a base64 string result is decoded, any other result is returned as is.
+// error, and the audio is read from a base64 string result or a {"audio": "<base64>"}
+// object result (the MeloTTS shape). Anything else (no result, another shape, a string
+// that is not base64) is an error, never JSON bytes passed off as audio.
 func audioFromEnvelope(resp *http.Response, body []byte) ([]byte, error) {
 	var envelope struct {
 		Success bool             `json:"success"`
@@ -215,25 +220,42 @@ func audioFromEnvelope(resp *http.Response, body []byte) ([]byte, error) {
 		return nil, derrors.Wrap(err, derrors.CodeUnavailable, opSpeech, "parse json")
 	}
 	if !envelope.Success {
-		if rl := ratelimit.Classify(opSpeech, resp.StatusCode, resp.Header, body); rl != nil {
+		if rl, ok := ratelimit.Classify(opSpeech, resp.StatusCode, resp.Header, body); ok {
 			return nil, rl
 		}
 		return nil, derrors.New(derrors.CodeUnavailable, opSpeech, firstErrorMessage(envelope.Errors, "cloudflare workers ai error"))
 	}
-	switch {
-	case len(envelope.Result) == 0:
-		return body, nil
-	case envelope.Result[0] != '"':
-		return envelope.Result, nil
-	}
+	result := bytes.TrimSpace(envelope.Result)
 	var audioStr string
-	if err := json.Unmarshal(envelope.Result, &audioStr); err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeUnavailable, opSpeech, "parse result string")
+	switch {
+	case len(result) == 0 || string(result) == "null":
+		return nil, derrors.New(derrors.CodeUnavailable, opSpeech, "success envelope with no audio")
+	case result[0] == '"':
+		if err := json.Unmarshal(result, &audioStr); err != nil {
+			return nil, derrors.Wrap(err, derrors.CodeUnavailable, opSpeech, "parse result string")
+		}
+	case result[0] == '{':
+		var obj struct {
+			Audio string `json:"audio"`
+		}
+		if err := json.Unmarshal(result, &obj); err != nil {
+			return nil, derrors.Wrap(err, derrors.CodeUnavailable, opSpeech, "parse result object").
+				With("body", httpx.Truncate(string(result), errorBodyMax))
+		}
+		audioStr = obj.Audio
+	default:
+		return nil, derrors.New(derrors.CodeUnavailable, opSpeech, "unrecognised speech result").
+			With("body", httpx.Truncate(string(result), errorBodyMax))
 	}
-	if dec, err := base64.StdEncoding.DecodeString(audioStr); err == nil && len(dec) > 0 {
-		return dec, nil
+	if strings.TrimSpace(audioStr) == "" {
+		return nil, derrors.New(derrors.CodeUnavailable, opSpeech, "unrecognised speech result").
+			With("body", httpx.Truncate(string(result), errorBodyMax))
 	}
-	return []byte(audioStr), nil
+	audio, err := base64.StdEncoding.DecodeString(audioStr)
+	if err != nil {
+		return nil, derrors.Wrap(err, derrors.CodeUnavailable, opSpeech, "speech result is not base64")
+	}
+	return audio, nil
 }
 
 func looksLikeJSON(b []byte) bool {

@@ -3,21 +3,23 @@ package gateway
 import (
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
+// batchMaxInputBytes caps one uploaded batch input file.
 const batchMaxInputBytes = 10 << 20
 
-type filesHandler struct{ *shared }
+// filesHandler serves the Files API that batch inputs are uploaded through.
+type filesHandler struct {
+	responder
+	batchStore *batch.DiskStore
+}
 
 func (h filesHandler) serveFiles(w http.ResponseWriter, r *http.Request) {
-	if h.batchStore == nil {
-		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveFiles", "batch store not configured"))
-		return
-	}
 	if r.URL.Path == pathFiles {
 		if r.Method == http.MethodPost {
 			h.serveFileUpload(w, r)
@@ -55,28 +57,29 @@ func (h filesHandler) serveFiles(w http.ResponseWriter, r *http.Request) {
 func (h filesHandler) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 	// The batch input cap plus multipart overhead; past it the upload gets 413.
 	r.Body = http.MaxBytesReader(w, r.Body, batchMaxInputBytes+1<<20)
-	if err := r.ParseMultipartForm(batchMaxInputBytes); err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "multipart"))
+	if err := r.ParseMultipartForm(batchMaxInputBytes); err != nil { //nolint:gosec // G120: MaxBytesReader above caps the body
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "multipart"))
 		return
 	}
 	purpose := strings.TrimSpace(r.FormValue("purpose"))
 	if purpose != string(batch.FilePurposeBatch) {
-		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveFileUpload", "purpose must be batch"))
+		h.writeHandlerError(w, r, derrors.New(derrors.CodeInvalid, "gateway.serveFileUpload", "purpose must be batch"))
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "file required"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "file required"))
 		return
 	}
 	defer func() { _ = file.Close() }()
 	content, err := io.ReadAll(io.LimitReader(file, batchMaxInputBytes+1))
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "read file"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveFileUpload", "read file"))
 		return
 	}
 	if len(content) > batchMaxInputBytes {
-		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveFileUpload", "file exceeds 10MB batch limit"))
+		h.writeHandlerError(w, r, derrors.New(derrors.CodeInvalid, "gateway.serveFileUpload", "file exceeds the batch input limit").
+			With("limit_bytes", strconv.Itoa(batchMaxInputBytes)))
 		return
 	}
 	filename := "batch.jsonl"
@@ -88,25 +91,25 @@ func (h filesHandler) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 		Purpose:  batch.FilePurposeBatch,
 	}
 	if err := h.batchStore.SaveFile(r.Context(), rec, content); err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	h.writeJSON(w, http.StatusOK, rec)
 }
 
 func (h filesHandler) serveFileRetrieve(w http.ResponseWriter, r *http.Request, id string) {
-	rec, err := h.batchStore.GetFile(id)
+	rec, err := h.batchStore.GetFile(r.Context(), id)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	h.writeJSON(w, http.StatusOK, rec)
 }
 
 func (h filesHandler) serveFileContent(w http.ResponseWriter, r *http.Request, id string) {
-	content, err := h.batchStore.ReadFileContent(id)
+	content, err := h.batchStore.ReadFileContent(r.Context(), id)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/jsonl")
@@ -119,7 +122,7 @@ func (h filesHandler) serveFileContent(w http.ResponseWriter, r *http.Request, i
 
 func (h filesHandler) serveFileDelete(w http.ResponseWriter, r *http.Request, id string) {
 	if err := h.batchStore.DeleteFile(r.Context(), id); err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	var deleted struct {

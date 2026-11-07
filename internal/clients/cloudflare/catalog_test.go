@@ -115,6 +115,7 @@ func TestCatalogFailureEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.policies = fastPolicies()
 	_, strictErr := client.ListModelsStrict(hopCtx(t))
 	if strictErr == nil {
 		t.Fatal("expected strict error with no cache")

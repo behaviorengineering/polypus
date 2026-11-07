@@ -146,12 +146,27 @@ func TestBifrostErrIgnoresCloudflareCodesForOtherBackends(t *testing.T) {
 	status := http.StatusBadGateway
 	berr := &schemas.BifrostError{
 		StatusCode: &status,
-		Error:      &schemas.ErrorField{Message: "upstream said 3040 things"},
+		Error:      &schemas.ErrorField{Message: "upstream failed"},
+		ExtraFields: schemas.BifrostErrorExtraFields{
+			RawResponse: json.RawMessage(`{"success":false,"errors":[{"code":3040,"message":"busy"}]}`),
+		},
 	}
 	if err := bifrostErr(berr, nil, false); errors.Is(err, derrors.ErrRateLimited) {
 		t.Fatalf("a 502 from a non-Cloudflare backend is not a rate limit: %v", err)
 	}
 	if err := bifrostErr(berr, nil, true); !errors.Is(err, derrors.ErrRateLimited) {
-		t.Fatalf("Cloudflare's 3040 is a capacity limit: %v", err)
+		t.Fatalf("Cloudflare's structured 3040 is a capacity limit: %v", err)
+	}
+}
+
+func TestBifrostErrCloudflareFreeTextCodeOnA5xxIsNotARateLimit(t *testing.T) {
+	status := http.StatusBadGateway
+	berr := &schemas.BifrostError{
+		StatusCode: &status,
+		Error:      &schemas.ErrorField{Message: "upstream said 3040 things"},
+	}
+	err := bifrostErr(berr, nil, true)
+	if errors.Is(err, derrors.ErrRateLimited) || derrors.CodeOf(err) != derrors.CodeUnavailable {
+		t.Fatalf("a 5xx that only mentions 3040 must stay an upstream failure: %v", err)
 	}
 }

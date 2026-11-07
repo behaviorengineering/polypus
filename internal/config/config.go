@@ -15,10 +15,9 @@ import (
 
 // Defaults for where the gateway listens and its speech backend.
 const (
-	DefaultHost       = "127.0.0.1"
-	DefaultPort       = 1320
-	DefaultMLXPort    = 1322
-	DefaultBackendURL = "http://127.0.0.1:1322"
+	DefaultHost    = "127.0.0.1"
+	DefaultPort    = 1320
+	DefaultMLXPort = 1322
 	// DefaultGatewayURL is where a gateway on the defaults answers.
 	DefaultGatewayURL = "http://127.0.0.1:1320"
 	// DefaultSwitchyardBaseURL is where the local Switchyard listens.
@@ -27,17 +26,27 @@ const (
 
 // ServeOptions configures the public Polypus HTTP gateway.
 type ServeOptions struct {
-	Host       string
-	Port       int
+	Host string
+	Port int
+	// BackendURL is the MLX speech backend the operator chose. When set it replaces
+	// the config's backends.mlx_local.base_url; empty keeps the config's URL (or,
+	// with no config file, the default MLX port).
 	BackendURL string
 	Keyring    operatorconfig.Keyring // optional; defaults to OS keyring when resolving config secrets.
-	// ConfigPath is an explicit config file; empty resolves POLYPUS_CONFIG, then the
-	// user config.
+	// ConfigPath is an explicit config file, which must exist; empty resolves
+	// POLYPUS_CONFIG, then the user config.
 	ConfigPath string
+	// BaseURL is the URL Switchyard and render call back into the gateway on
+	// (POLYPUS_BASE_URL, for example Docker Compose service DNS). Empty derives it
+	// from Host and Port.
+	BaseURL string
 }
 
-// LoadServeOptions reads POLYPUS_* and POLYPUS_BACKEND_URL / POLYPUS_MLX_URL from the environment.
-// A set but invalid port is an error rather than a silent fall back to the default.
+// LoadServeOptions reads POLYPUS_HOST, POLYPUS_PORT and POLYPUS_BASE_URL, and the
+// MLX backend from POLYPUS_BACKEND_URL, else POLYPUS_MLX_URL, else POLYPUS_MLX_HOST
+// and POLYPUS_MLX_PORT when either is set. With none of the MLX variables set,
+// BackendURL stays empty so the config's mlx_local base_url stands. A set but
+// invalid port is an error rather than a silent fall back to the default.
 func LoadServeOptions() (ServeOptions, error) {
 	out, err := loadServeOptions()
 	if err != nil {
@@ -56,27 +65,43 @@ func loadServeOptions() (ServeOptions, error) {
 	if err != nil {
 		return ServeOptions{}, err
 	}
-	backend := strings.TrimSpace(os.Getenv("POLYPUS_BACKEND_URL"))
-	if backend == "" {
-		backend = strings.TrimSpace(os.Getenv("POLYPUS_MLX_URL"))
+	backend, err := envBackendURL()
+	if err != nil {
+		return ServeOptions{}, err
 	}
-	if backend == "" {
-		mlxHost := strings.TrimSpace(os.Getenv("POLYPUS_MLX_HOST"))
-		if mlxHost == "" {
-			mlxHost = DefaultHost
-		}
-		mlxPort, err := envPort("POLYPUS_MLX_PORT", DefaultMLXPort)
-		if err != nil {
-			return ServeOptions{}, err
-		}
-		backend = httpBaseURL(mlxHost, mlxPort)
-	}
-	backend = strings.TrimRight(backend, "/")
 	return ServeOptions{
 		Host:       host,
 		Port:       port,
 		BackendURL: backend,
+		BaseURL:    strings.TrimRight(strings.TrimSpace(os.Getenv("POLYPUS_BASE_URL")), "/"),
 	}, nil
+}
+
+// envBackendURL is the MLX backend URL the environment names, or empty when it
+// names none. A set but invalid POLYPUS_MLX_PORT is an error.
+func envBackendURL() (string, error) {
+	backend := strings.TrimSpace(os.Getenv("POLYPUS_BACKEND_URL"))
+	if backend == "" {
+		backend = strings.TrimSpace(os.Getenv("POLYPUS_MLX_URL"))
+	}
+	if backend != "" {
+		return strings.TrimRight(backend, "/"), nil
+	}
+	mlxHost := strings.TrimSpace(os.Getenv("POLYPUS_MLX_HOST"))
+	mlxPort, err := envPort("POLYPUS_MLX_PORT", 0)
+	if err != nil {
+		return "", err
+	}
+	if mlxHost == "" && mlxPort == 0 {
+		return "", nil
+	}
+	if mlxHost == "" {
+		mlxHost = DefaultHost
+	}
+	if mlxPort == 0 {
+		mlxPort = DefaultMLXPort
+	}
+	return httpBaseURL(mlxHost, mlxPort), nil
 }
 
 // ListenAddr returns host:port for the gateway.
@@ -85,10 +110,11 @@ func (o ServeOptions) ListenAddr() string {
 }
 
 // GatewayBaseURL returns the HTTP base URL Switchyard and render use to call back into Polypus.
-// When POLYPUS_BASE_URL is set (e.g. Docker Compose service DNS), it wins over bind address.
-// Otherwise wildcard bind addresses map to loopback so outbound clients can connect.
+// BaseURL (POLYPUS_BASE_URL, read once by LoadServeOptions) wins over the bind
+// address. Otherwise wildcard bind addresses map to loopback so outbound clients
+// can connect.
 func (o ServeOptions) GatewayBaseURL() string {
-	if v := strings.TrimRight(strings.TrimSpace(os.Getenv("POLYPUS_BASE_URL")), "/"); v != "" {
+	if v := strings.TrimRight(strings.TrimSpace(o.BaseURL), "/"); v != "" {
 		return v
 	}
 	host := strings.TrimSpace(o.Host)
@@ -113,7 +139,8 @@ func httpBaseURL(host string, port int) string {
 	return "http://" + joinHostPort(host, port)
 }
 
-// envPort reads a TCP port from env, or returns def when it is unset.
+// envPort reads a TCP port from env, or returns def when it is unset. def may be 0
+// to mean "unset".
 func envPort(env string, def int) (int, error) {
 	raw := strings.TrimSpace(os.Getenv(env))
 	if raw == "" {

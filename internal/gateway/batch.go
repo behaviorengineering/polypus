@@ -12,11 +12,23 @@ import (
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/batches"
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
-type batchesHandler struct{ *shared }
+// batchesHandler serves the Batches API.
+type batchesHandler struct {
+	responder
+	registry   *router.Registry
+	batchStore *batch.DiskStore
+	batches    *batches.Service
+	timeouts   config.Timeouts
+}
+
+// batchCreateMaxBody caps a create request: a small JSON object of three strings.
+// The input itself is an uploaded file, capped by batchMaxInputBytes.
+const batchCreateMaxBody = 64 << 10
 
 type createBatchRequest struct {
 	InputFileID      string `json:"input_file_id"`
@@ -30,10 +42,6 @@ type batchListResponse struct {
 }
 
 func (h batchesHandler) serveBatches(w http.ResponseWriter, r *http.Request) {
-	if h.batchStore == nil {
-		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatches", "batch store not configured"))
-		return
-	}
 	switch r.Method {
 	case http.MethodPost:
 		h.serveBatchCreate(w, r)
@@ -45,10 +53,6 @@ func (h batchesHandler) serveBatches(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h batchesHandler) serveBatchByID(w http.ResponseWriter, r *http.Request) {
-	if h.batchStore == nil {
-		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveBatchByID", "batch store not configured"))
-		return
-	}
 	path := strings.TrimPrefix(r.URL.Path, pathBatchesPrefix)
 	path = strings.Trim(path, "/")
 	if strings.HasSuffix(path, "/cancel") {
@@ -72,17 +76,17 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 	const op = "gateway.serveBatchCreate"
 	reg := h.registry
 	if reg.Config().EffectiveBatchBackend() == "" {
-		h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, op, "no batch backend configured"))
+		h.writeHandlerError(w, r, derrors.New(derrors.CodeNotReady, op, "no batch backend configured"))
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, batchMaxInputBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, batchCreateMaxBody))
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "read body"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, op, "read body"))
 		return
 	}
 	var req createBatchRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "parse json"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, op, "parse json"))
 		return
 	}
 	if strings.TrimSpace(req.CompletionWindow) == "" {
@@ -90,35 +94,35 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 	}
 	inputID := strings.TrimSpace(req.InputFileID)
 	if inputID == "" {
-		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, op, "input_file_id required"))
+		h.writeHandlerError(w, r, derrors.New(derrors.CodeInvalid, op, "input_file_id required"))
 		return
 	}
-	raw, err := h.batchStore.ReadFileContent(inputID)
+	raw, err := h.batchStore.ReadFileContent(r.Context(), inputID)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	parsed, err := batch.ParseBatchJSONL(raw, req.Endpoint)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	backendID, downstream, err := reg.ResolveBatch(parsed.Model)
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, op, "resolve backend"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), op, "resolve backend"))
 		return
 	}
 	publicModel := parsed.Model
 	if !strings.Contains(publicModel, "/") {
 		publicModel = prefixModelID(backendID, downstream)
 	}
-	if !h.ensureModelAllowed(backendID, publicModel) {
+	if !ensureModelAllowed(h.registry, backendID, publicModel) {
 		h.writeModelNotAllowed(w, publicModel)
 		return
 	}
 	backend, ok := reg.Backend(backendID)
 	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, op, msgBackendNotFound).With("backend", backendID))
+		h.writeHandlerError(w, r, errBackendNotFound(op, backendID))
 		return
 	}
 
@@ -137,7 +141,7 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 		Job:              batches.Job{Downstream: downstream, Endpoint: req.Endpoint, Lines: parsed.Lines},
 	})
 	if createErr != nil {
-		h.writeUpstreamDialError(w, dialFailure{err: createErr, upstream: backendID})
+		h.writeUpstreamDialError(w, r, dialFailure{err: createErr, upstream: backendID})
 		return
 	}
 	h.writeJSON(w, http.StatusOK, meta.Public())
@@ -146,20 +150,20 @@ func (h batchesHandler) serveBatchCreate(w http.ResponseWriter, r *http.Request)
 // batchHopContext bounds one batch call to the provider by the chat hop budget.
 // timeoutHeader is the caller's requested timeout, if any.
 func (h batchesHandler) batchHopContext(ctx context.Context, timeoutHeader, backendID string) (context.Context, context.CancelFunc) {
-	hop := h.timeouts.ResolveChat(timeoutHeader, backendID, config.ChatPlain)
-	return context.WithTimeout(ctx, hopBudget(hop, config.DefaultTimeouts().Chat))
+	hop := hopBudget(h.timeouts.ResolveChat(timeoutHeader, backendID, config.ChatPlain), config.DefaultTimeouts().Chat)
+	configured := hopBudget(h.timeouts.ResolveChat("", backendID, config.ChatPlain), config.DefaultTimeouts().Chat)
+	return context.WithTimeout(callerBudget(ctx, hop, configured), hop)
 }
 
 func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Request, id string) {
-	meta, err := h.batchStore.GetBatch(id)
+	meta, err := h.batchStore.GetBatch(r.Context(), id)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	backend, ok := h.registry.Backend(meta.BackendID)
 	if !ok && !meta.Status.Terminal() {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveBatchRetrieve", msgBackendNotFound).
-			With("backend", meta.BackendID))
+		h.writeHandlerError(w, r, errBackendNotFound("gateway.serveBatchRetrieve", meta.BackendID))
 		return
 	}
 	ctx, cancel := h.batchHopContext(r.Context(), r.Header.Get(config.TimeoutHeader), meta.BackendID)
@@ -171,16 +175,16 @@ func (h batchesHandler) serveBatchRetrieve(w http.ResponseWriter, r *http.Reques
 			h.writeJSON(w, http.StatusOK, meta.Public())
 			return
 		}
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	h.writeJSON(w, http.StatusOK, updated.Public())
 }
 
 func (h batchesHandler) serveBatchList(w http.ResponseWriter, r *http.Request) {
-	items, err := h.batchStore.ListBatches()
+	items, err := h.batchStore.ListBatches(r.Context())
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	pub := make([]batch.PublicBatch, 0, len(items))
@@ -191,22 +195,21 @@ func (h batchesHandler) serveBatchList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h batchesHandler) serveBatchCancel(w http.ResponseWriter, r *http.Request, id string) {
-	meta, err := h.batchStore.GetBatch(id)
+	meta, err := h.batchStore.GetBatch(r.Context(), id)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	backend, ok := h.registry.Backend(meta.BackendID)
 	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeUnavailable, "gateway.serveBatchCancel", msgBackendNotFound).
-			With("backend", meta.BackendID))
+		h.writeHandlerError(w, r, errBackendNotFound("gateway.serveBatchCancel", meta.BackendID))
 		return
 	}
 	ctx, cancel := h.batchHopContext(r.Context(), r.Header.Get(config.TimeoutHeader), meta.BackendID)
 	defer cancel()
 	updated, err := h.batches.Cancel(ctx, backend, meta)
 	if err != nil {
-		h.writeUpstreamDialError(w, dialFailure{err: err, upstream: meta.BackendID})
+		h.writeUpstreamDialError(w, r, dialFailure{err: err, upstream: meta.BackendID})
 		return
 	}
 	h.writeJSON(w, http.StatusOK, updated.Public())

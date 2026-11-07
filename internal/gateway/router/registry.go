@@ -91,20 +91,21 @@ func (r *Registry) ResolveSTT(model string) (schemas.ModelProvider, string, erro
 	return schemas.ModelProvider(id), downstream, nil
 }
 
-// DefaultSystemOneModel is used when the client omits model on POST /v1/systemone.
-const DefaultSystemOneModel = "typesafe/jev"
+// defaultSystemOneModel is used when the client omits model on POST /v1/systemone.
+const defaultSystemOneModel = "typesafe/jev"
 
 // ResolveSystemOne picks backend and model for TypeSafe / Decider systemone evaluation.
 func (r *Registry) ResolveSystemOne(model string) (string, string, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		model = DefaultSystemOneModel
+		model = defaultSystemOneModel
 	}
 	cfg := r.loadCfg()
 	return resolveCapability(cfg, config.CapSystemOne, cfg.EffectiveSystemOneBackend(), model)
 }
 
-// ResolveBatch picks backend and downstream model for OpenAI Batch (Cloudflare extension).
+// ResolveBatch picks backend and downstream model for an OpenAI batch on any backend
+// with the batch capability (Anthropic, OpenRouter or Cloudflare).
 func (r *Registry) ResolveBatch(model string) (string, string, error) {
 	cfg := r.loadCfg()
 	return resolveCapability(cfg, config.CapBatch, cfg.EffectiveBatchBackend(), strings.TrimSpace(model))

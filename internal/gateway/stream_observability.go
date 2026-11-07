@@ -17,8 +17,12 @@ import (
 
 type streamChunkCounterKey struct{}
 
-// chunkDumpSink is where a stream's dropped chunks go.
+// chunkDumpSink is how a stream's chunks are recorded: span events, with previews
+// when asked, and dumps of the chunks it drops.
 type chunkDumpSink struct {
+	// preview adds redacted chunk previews to the span events
+	// (observability.Config.StreamChunkDebug).
+	preview bool
 	// dir receives dropped-chunk dumps; empty turns them off.
 	dir string
 	// log reports a dump that could not be written.
@@ -70,8 +74,13 @@ func nextStreamChunkIndex(ctx context.Context) int {
 
 func recordBifrostStreamChunk(ctx context.Context, chunk router.ChatStreamChunk, action streamSSEAction, emit bool) {
 	idx := nextStreamChunkIndex(ctx)
+	preview := false
+	if c := streamCounter(ctx); c != nil {
+		preview = c.sink.preview
+	}
 	observability.RecordChatStreamChunk(ctx, observability.StreamChunk{
 		Index: idx, OpenAIJSON: chunk.OpenAIJSON, RawProviderJSON: chunk.RawProviderJSON, SSEAction: string(action), Emitted: emit,
+		Preview: preview,
 	})
 	if action == streamSSEDrop {
 		dumpIllegalStreamChunk(ctx, idx, chunk.OpenAIJSON, chunk.RawProviderJSON)
@@ -114,6 +123,26 @@ func warnChunkDumpOnce(c *streamChunkCounter, path, traceID string, err error) {
 	c.sink.log.Warn("polypus: stream chunk dump not written", "path", path, "trace_id", traceID, "err", err)
 }
 
+// chunkDumpInfix sits between the trace id and the chunk index in a dump name, so
+// /debug/failures/<trace> finds a stream's chunk dumps beside its failure dump.
+const chunkDumpInfix = ".stream-chunk-"
+
+// chunkDumpName is <trace>.stream-chunk-<index>-<unix nanos>.json. The index is
+// zero-padded so a directory listing sorts a stream's dumps in chunk order.
+func chunkDumpName(traceID string, idx int, at time.Time) string {
+	return fmt.Sprintf("%s%s%06d-%d.json", traceID, chunkDumpInfix, idx, at.UnixNano())
+}
+
+// dumpField keeps a chunk as JSON when it is valid JSON, and as text otherwise: the
+// sanitizer drops an undecodable chunk after finish_reason, and json.Marshal rejects
+// an invalid RawMessage, so that chunk would never be written.
+func dumpField(raw []byte) any {
+	if json.Valid(raw) {
+		return json.RawMessage(raw)
+	}
+	return string(raw)
+}
+
 func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProviderJSON []byte) {
 	counter := streamCounter(ctx)
 	if counter == nil || counter.sink.dir == "" || !claimChunkDump(counter) {
@@ -125,13 +154,12 @@ func dumpIllegalStreamChunk(ctx context.Context, idx int, openaiJSON, rawProvide
 	if sc.HasTraceID() {
 		traceID = sc.TraceID().String()
 	}
-	name := fmt.Sprintf("stream-chunk-%s-%d-%d.json", traceID, idx, counter.sink.now().UnixNano())
-	path := filepath.Join(dir, name)
-	payload := map[string]json.RawMessage{
-		apiFlavorOpenAI: openaiJSON,
+	path := filepath.Join(dir, chunkDumpName(traceID, idx, counter.sink.now()))
+	payload := map[string]any{
+		apiFlavorOpenAI: dumpField(openaiJSON),
 	}
 	if len(rawProviderJSON) > 0 {
-		payload["raw_provider"] = rawProviderJSON
+		payload["raw_provider"] = dumpField(rawProviderJSON)
 	}
 	body, err := json.Marshal(payload)
 	if err == nil {

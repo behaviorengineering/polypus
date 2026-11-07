@@ -33,7 +33,7 @@ func VerifyPublishComplete(ctx context.Context, version string, opts WaitOptions
 	if version == "" {
 		return derrors.New(derrors.CodeInvalid, op, "empty version for publish-complete check")
 	}
-	parsed, err := ParseImageTag(version)
+	parsed, err := parseImageTag(version)
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInvalid, op, "parse version")
 	}
@@ -56,7 +56,7 @@ func VerifyPublishComplete(ctx context.Context, version string, opts WaitOptions
 		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "runs for "+sha)
 	}
 	for _, run := range runs {
-		if !strings.EqualFold(run.Name, autoPatchWorkflow) || !strings.EqualFold(run.Conclusion, conclusionSuccess) {
+		if !strings.EqualFold(run.Name, autoPatchWorkflow) || !succeeded(run.Conclusion) {
 			continue
 		}
 		ok, err := runHasSuccessfulJob(ctx, gh, run.ID, verifyJob)
@@ -81,7 +81,7 @@ func verifyDockerReleasePublishComplete(ctx context.Context, gh *github.Client, 
 			return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "runs of "+wf)
 		}
 		for _, wr := range runs {
-			if !strings.EqualFold(wr.Conclusion, conclusionSuccess) {
+			if !succeeded(wr.Conclusion) {
 				continue
 			}
 			if strings.Contains(strings.ToLower(wr.Name+"\n"+wr.DisplayTitle), want) {
@@ -100,7 +100,7 @@ func runHasSuccessfulJob(ctx context.Context, gh *github.Client, runID int64, jo
 	}
 	want := strings.ToLower(strings.TrimSpace(jobName))
 	for _, j := range jobs {
-		if strings.ToLower(strings.TrimSpace(j.Name)) == want && strings.EqualFold(j.Conclusion, conclusionSuccess) {
+		if strings.ToLower(strings.TrimSpace(j.Name)) == want && succeeded(j.Conclusion) {
 			return true, nil
 		}
 	}

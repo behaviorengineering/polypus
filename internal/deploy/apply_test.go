@@ -16,6 +16,7 @@ import (
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 
 	"github.com/behaviorengineering/polypus/internal/deploy/execx"
+	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
 	"github.com/behaviorengineering/polypus/internal/deploy/smoke"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
@@ -106,11 +107,10 @@ func newApplyFixture(t *testing.T, gatewayURL string) applyFixture {
 			t.Fatal(err)
 		}
 	}
-	// The process environment wins over the keyring, so the secrets come from here.
+	// The keyring is empty, so the secrets come from the shell.
 	t.Setenv("TS_AUTHKEY", "tskey-auth-"+strings.Repeat("t", 24))
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-"+strings.Repeat("k", 24))
 	t.Setenv("POLYPUS_API_KEY", "")
-	t.Setenv("SOPS_SECRETS_FILE", "")
 	t.Setenv("POLYPUS_SMOKE_PROVIDERS", "")
 	t.Setenv("POLYPUS_SMOKE_SYSTEMONE", "")
 
@@ -124,12 +124,12 @@ func newApplyFixture(t *testing.T, gatewayURL string) applyFixture {
 	opts.HealthURL = gatewayURL
 	opts.HealthTimeout = 2 * time.Second
 	opts.HealthPollInterval = time.Millisecond
-	opts.Keyring = operatorconfig.NewMemKeyring()
+	opts.Secrets = &secrets.Resolver{Keyring: operatorconfig.NewMemKeyring()}
 	opts.SkipOverlayPrune = true
 	opts.DockerRun = docker.run
 	opts.DockerOutput = docker.output
 	opts.DockerLookPath = func(string) (string, error) { return "/usr/bin/docker", nil }
-	opts.ImageProbe = func(context.Context, string, string) error { return nil }
+	opts.ImageProbe = func(context.Context, string) error { return nil }
 	opts.Smoke = func(context.Context, smoke.Options) error {
 		smoked++
 		return nil

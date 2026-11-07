@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -57,8 +58,6 @@ func TestRecordChatStreamChunk_eventsOnActiveSpan(t *testing.T) {
 }
 
 func TestRecordChatStreamChunk_debugRedactsSecrets(t *testing.T) {
-	streamChunkDebug.Store(true)
-	t.Cleanup(func() { streamChunkDebug.Store(false) })
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 	prev := otel.GetTracerProvider()
@@ -70,7 +69,7 @@ func TestRecordChatStreamChunk_debugRedactsSecrets(t *testing.T) {
 
 	ctx, span := Tracer().Start(context.Background(), "polypus.chat")
 	leaky := []byte(`https://generativelanguage.googleapis.com/v1?key=super-secret`)
-	RecordChatStreamChunk(ctx, StreamChunk{Index: 1, OpenAIJSON: leaky, SSEAction: "drop"})
+	RecordChatStreamChunk(ctx, StreamChunk{Index: 1, OpenAIJSON: leaky, SSEAction: "drop", Preview: true})
 	span.End()
 
 	preview := false
@@ -103,4 +102,15 @@ func eventAttrMap(attrs []attribute.KeyValue) map[string]any {
 		out[string(a.Key)] = a.Value.AsInterface()
 	}
 	return out
+}
+
+func TestCappedRedactedCutsOnRunes(t *testing.T) {
+	s := strings.Repeat("a", streamChunkPreviewMax-1) + "é and more"
+	got := cappedRedacted(s)
+	if !utf8.ValidString(got) {
+		t.Fatalf("preview is not valid UTF-8: %q", got[len(got)-4:])
+	}
+	if len(got) > streamChunkPreviewMax {
+		t.Fatalf("preview %d bytes, want at most %d", len(got), streamChunkPreviewMax)
+	}
 }

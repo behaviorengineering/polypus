@@ -62,18 +62,55 @@ func TestResolveCollectorOptionsCoercesHTTPSObservabilityURLs(t *testing.T) {
 	}
 }
 
-func TestResolveCollectorOptionsLoopbackUnchanged(t *testing.T) {
+func TestResolveCollectorOptionsLoopbackUsesTheLocalStack(t *testing.T) {
 	t.Setenv("POLYPUS_BASE_URL", "http://127.0.0.1:1320")
+	t.Setenv("POLYPUS_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("PHOENIX_BASE_URL", "")
+	t.Setenv("HYPERDX_BASE_URL", "")
+	t.Setenv("OTELCOL_OTLP_GRPC_PORT", "")
+	t.Setenv("PHOENIX_PORT", "")
+	t.Setenv("HYPERDX_PORT", "")
+
+	out := ResolveCollectorOptions(CollectorOptions{}, "")
+	if out.OTLPEndpoint != "http://127.0.0.1:4317" {
+		t.Fatalf("OTLPEndpoint = %q, want the local otelcol gRPC port", out.OTLPEndpoint)
+	}
+	if out.PhoenixBaseURL != "http://127.0.0.1:6006" || out.HyperDXBaseURL != "http://127.0.0.1:8080" {
+		t.Fatalf("Phoenix %q, HyperDX %q; want the local stack", out.PhoenixBaseURL, out.HyperDXBaseURL)
+	}
+	if out.SkipHyperDXVerify || out.DisableHyperDXCH {
+		t.Fatal("expected HyperDX verify and its ClickHouse fallback on loopback")
+	}
+}
+
+func TestResolveCollectorOptionsLoopbackFollowsTheStackPorts(t *testing.T) {
+	t.Setenv("POLYPUS_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("PHOENIX_BASE_URL", "")
+	t.Setenv("HYPERDX_BASE_URL", "http://127.0.0.1:9999")
+	t.Setenv("OTELCOL_OTLP_GRPC_PORT", "14317")
+	t.Setenv("PHOENIX_PORT", "16006")
+	t.Setenv("HYPERDX_PORT", "18080")
+
+	out := ResolveCollectorOptions(CollectorOptions{}, "http://localhost:1320")
+	if out.OTLPEndpoint != "http://localhost:14317" || out.PhoenixBaseURL != "http://localhost:16006" {
+		t.Fatalf("OTLP %q, Phoenix %q; want the overridden ports", out.OTLPEndpoint, out.PhoenixBaseURL)
+	}
+	if out.HyperDXBaseURL != "http://127.0.0.1:9999" {
+		t.Fatalf("HyperDXBaseURL = %q, want HYPERDX_BASE_URL kept", out.HyperDXBaseURL)
+	}
+}
+
+func TestResolveCollectorOptionsNoGatewayAssumesNothing(t *testing.T) {
+	t.Setenv("POLYPUS_BASE_URL", "")
 	t.Setenv("POLYPUS_OTLP_ENDPOINT", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("PHOENIX_BASE_URL", "")
 	t.Setenv("HYPERDX_BASE_URL", "")
 
 	out := ResolveCollectorOptions(CollectorOptions{}, "")
-	if out.OTLPEndpoint != "" {
-		t.Fatalf("expected empty OTLP for loopback, got %q", out.OTLPEndpoint)
-	}
-	if out.SkipHyperDXVerify {
-		t.Fatal("expected HyperDX verify on loopback")
+	if out.OTLPEndpoint != "" || out.PhoenixBaseURL != "" || out.HyperDXBaseURL != "" {
+		t.Fatalf("got %+v, want every endpoint left for otelcol to report", out)
 	}
 }

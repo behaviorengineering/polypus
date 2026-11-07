@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -82,13 +83,15 @@ func TestChatBodyWantsThinkingOpenAIOnly(t *testing.T) {
 	}
 }
 
-// applyChatThinking runs applyChatThinkingRoot over a JSON body.
+// applyChatThinking runs applyChatThinkingRoot over a JSON body and reports whether
+// it changed the body.
 func applyChatThinking(body []byte, extension, model string) ([]byte, bool) {
-	var root map[string]any
-	if err := json.Unmarshal(body, &root); err != nil {
+	var before, root map[string]any
+	if json.Unmarshal(body, &before) != nil || json.Unmarshal(body, &root) != nil {
 		return body, false
 	}
-	if !applyChatThinkingRoot(root, extension, model) {
+	applyChatThinkingRoot(root, extension, model)
+	if reflect.DeepEqual(before, root) {
 		return body, false
 	}
 	out, err := json.Marshal(root)
@@ -102,4 +105,40 @@ func applyChatThinking(body []byte, extension, model string) ([]byte, bool) {
 func chatBodyWantsThinking(body []byte) bool {
 	var root map[string]any
 	return json.Unmarshal(body, &root) == nil && chatMapWantsThinking(root)
+}
+
+func TestReasoningMaxTokensMatchesDecodedNumber(t *testing.T) {
+	root := map[string]any{keyReasoning: map[string]any{keyMaxTokens: json.Number("-1")}}
+	setNestedReasoningMaxTokens(root, -1)
+	if got := root[keyReasoning].(map[string]any)[keyMaxTokens]; got != json.Number("-1") {
+		t.Fatalf("an equal json.Number must be kept as sent, got %#v", got)
+	}
+}
+
+func TestReasoningEffortIgnoresNonStrings(t *testing.T) {
+	cases := []struct {
+		body string
+		want string
+	}{
+		{`{"reasoning":{"effort":7}}`, ""},
+		{`{"reasoning_effort":1}`, ""},
+		{`{"reasoning":{"effort":null},"reasoning_effort":"high"}`, "high"},
+		{`{"reasoning":{"effort":" low "}}`, "low"},
+	}
+	for _, c := range cases {
+		var root map[string]any
+		if err := json.Unmarshal([]byte(c.body), &root); err != nil {
+			t.Fatal(err)
+		}
+		if got := chatMapReasoningEffort(root); got != c.want {
+			t.Fatalf("%s: effort %q want %q", c.body, got, c.want)
+		}
+	}
+	var root map[string]any
+	if err := json.Unmarshal([]byte(`{"messages":[{"content":[{"type":7}]}]}`), &root); err != nil {
+		t.Fatal(err)
+	}
+	if chatMapHasVision(root) {
+		t.Fatal("a non-string part type is not vision")
+	}
 }

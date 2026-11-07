@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -26,14 +27,14 @@ func TestDiskStoreFileRoundTrip(t *testing.T) {
 	if err := store.SaveFile(t.Context(), rec, content); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.GetFile(rec.ID)
+	got, err := store.GetFile(t.Context(), rec.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Bytes != int64(len(content)) || got.CreatedAt != fixed.Unix() {
 		t.Fatalf("meta mismatch: %+v", got)
 	}
-	raw, err := store.ReadFileContent(rec.ID)
+	raw, err := store.ReadFileContent(t.Context(), rec.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,16 +57,16 @@ func TestDiskStoreRejectsIDsOutsideRoot(t *testing.T) {
 	}
 	for _, id := range []string{"../../secret", "../secret.json", "a/b", `a\b`, "..", "file_ok\x00"} {
 		var de *derrors.Error
-		if _, err := store.GetFile(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+		if _, err := store.GetFile(t.Context(), id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
 			t.Errorf("GetFile(%q): want CodeInvalid, got %v", id, err)
 		}
-		if _, err := store.ReadFileContent(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+		if _, err := store.ReadFileContent(t.Context(), id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
 			t.Errorf("ReadFileContent(%q): want CodeInvalid, got %v", id, err)
 		}
 		if err := store.DeleteFile(t.Context(), id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
 			t.Errorf("DeleteFile(%q): want CodeInvalid, got %v", id, err)
 		}
-		if _, err := store.GetBatch(id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
+		if _, err := store.GetBatch(t.Context(), id); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
 			t.Errorf("GetBatch(%q): want CodeInvalid, got %v", id, err)
 		}
 		if err := store.UpdateBatch(t.Context(), Meta{ID: id}); !errors.As(err, &de) || de.Code() != derrors.CodeInvalid {
@@ -129,10 +130,10 @@ func TestDeleteFileFailsClosedOnUnreadableBatch(t *testing.T) {
 	if err := store.DeleteFile(t.Context(), rec.ID); err == nil {
 		t.Fatal("an unreadable batch may reference the file; delete must refuse")
 	}
-	if _, err := store.GetFile(rec.ID); err != nil {
+	if _, err := store.GetFile(t.Context(), rec.ID); err != nil {
 		t.Fatalf("file must still exist: %v", err)
 	}
-	if _, err := store.ListBatches(); err == nil {
+	if _, err := store.ListBatches(t.Context()); err == nil {
 		t.Fatal("ListBatches must surface the corrupt batch")
 	}
 }
@@ -222,5 +223,89 @@ func TestDiskStoreTwoStoresSameRootSerialise(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, lockBase+".lock")); err != nil {
 		t.Fatalf("the cross-process lock lives under the store root: %v", err)
+	}
+}
+
+// TestDiskStoreReadsDoNotWaitForAWriter checks a reader never queues behind a writer:
+// with the write mutex held (a write in progress), every read still answers.
+func TestDiskStoreReadsDoNotWaitForAWriter(t *testing.T) {
+	store, err := NewDiskStore(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &FileRecord{Filename: "in.jsonl", Purpose: FilePurposeBatch}
+	if err := store.SaveFile(t.Context(), rec, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	meta := &Meta{InputFileID: rec.ID}
+	if err := store.SaveBatch(t.Context(), meta); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		if _, err := store.GetFile(t.Context(), rec.ID); err != nil {
+			done <- err
+			return
+		}
+		if _, err := store.ReadFileContent(t.Context(), rec.ID); err != nil {
+			done <- err
+			return
+		}
+		if _, err := store.GetBatch(t.Context(), meta.ID); err != nil {
+			done <- err
+			return
+		}
+		_, err := store.ListBatches(t.Context())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reads waited for the writer's lock")
+	}
+}
+
+func TestDiskStoreReadsHonourTheContext(t *testing.T) {
+	store, err := NewDiskStore(t.TempDir(), func() time.Time { return time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := &Meta{Status: StatusInProgress}
+	if err := store.SaveBatch(t.Context(), meta); err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Unix(1, 0))
+	defer cancelExpired()
+	var nilCtx context.Context // Nil on purpose.
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		want derrors.Code
+	}{
+		{"nil", nilCtx, derrors.CodeInvalid},
+		{"canceled", canceled, derrors.CodeCanceled},
+		{"deadline", expired, derrors.CodeTimeout},
+	} {
+		reads := map[string]func() error{
+			"GetFile":         func() error { _, err := store.GetFile(tc.ctx, "file-x"); return err },
+			"ReadFileContent": func() error { _, err := store.ReadFileContent(tc.ctx, "file-x"); return err },
+			"GetBatch":        func() error { _, err := store.GetBatch(tc.ctx, meta.ID); return err },
+			"ListBatches":     func() error { _, err := store.ListBatches(tc.ctx); return err },
+		}
+		for name, read := range reads {
+			if got := derrors.CodeOf(read()); got != tc.want {
+				t.Errorf("%s with a %s context: code %s, want %s", name, tc.name, got, tc.want)
+			}
+		}
+	}
+	if got, err := store.ListBatches(t.Context()); err != nil || len(got) != 1 {
+		t.Fatalf("a live context lists the batch: %v, %v", got, err)
 	}
 }

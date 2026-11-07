@@ -329,10 +329,10 @@ func (w logWriter) Write(p []byte) (int, error) {
 func (h *Harness) gatewayLog() string {
 	h.logMu.Lock()
 	defer h.logMu.Unlock()
-	const max = 64 << 10
+	const logTailMax = 64 << 10
 	data := h.logBuf.Bytes()
-	if len(data) > max {
-		data = data[len(data)-max:]
+	if len(data) > logTailMax {
+		data = data[len(data)-logTailMax:]
 	}
 	return string(data)
 }

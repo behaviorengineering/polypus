@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // UIProxy mounts an HTTP UI under a gateway path prefix.
@@ -121,7 +123,8 @@ func defaultUIProxyTitle(path string) string {
 	if seg == "" {
 		return "UI"
 	}
-	return strings.ToUpper(seg[:1]) + seg[1:]
+	r, size := utf8.DecodeRuneInString(seg)
+	return string(unicode.ToUpper(r)) + seg[size:]
 }
 
 func defaultUIProxyDescription(path string) string {

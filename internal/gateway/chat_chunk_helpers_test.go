@@ -3,7 +3,11 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
 
 // splitSanitized spreads a sanitizer result into out, action and whether it emits.
@@ -11,9 +15,44 @@ func splitSanitized(r sanitizedChunk) ([]byte, streamSSEAction, bool) {
 	return r.out, r.action, r.action != streamSSEDrop
 }
 
-// copyOpenAIChatStream sanitizes a stream that is not the HTTP response.
-func copyOpenAIChatStream(ctx context.Context, dst io.Writer, src io.Reader, stripExtraFields bool) (int64, error) {
-	return copyOpenAIChatStreamWithOpts(ctx, dst, src, stripExtraFields, nil)
+// streamThroughGateway feeds an upstream OpenAI SSE body to writeBifrostChatSSE, one
+// data frame per Bifrost chunk, and returns what the client gets. Bifrost ends a
+// stream by closing its channel, so an upstream [DONE] is not a chunk. When ctx ends
+// first, the chunks stop without the channel closing, as a real stream does.
+func streamThroughGateway(ctx context.Context, upstream string) (*httptest.ResponseRecorder, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	chunks := make(chan router.ChatStreamChunk)
+	errs := make(chan error)
+	go func() {
+		for _, line := range strings.Split(upstream, "\n") {
+			data, ok := strings.CutPrefix(strings.TrimSpace(strings.TrimPrefix(line, "\ufeff")), "data:")
+			data = strings.TrimSpace(data)
+			if !ok || data == "[DONE]" {
+				continue
+			}
+			select {
+			case chunks <- router.ChatStreamChunk{OpenAIJSON: []byte(data)}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		close(chunks)
+		close(errs)
+	}()
+	rec := httptest.NewRecorder()
+	err := writeBifrostChatSSE(ctx, rec, bifrostStream{chunks: chunks, errs: errs})
+	return rec, err
+}
+
+// gatewaySSE is the body streamThroughGateway gives the client.
+func gatewaySSE(t *testing.T, upstream string) string {
+	t.Helper()
+	rec, err := streamThroughGateway(context.Background(), upstream)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	return rec.Body.String()
 }
 
 // choiceHasBothReasoningSpellings is the test oracle for a delta or message that

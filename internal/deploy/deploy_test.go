@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/deploy/compose"
 	"github.com/behaviorengineering/polypus/internal/deploy/images"
 	"github.com/behaviorengineering/polypus/internal/deploy/progress"
 )
@@ -20,18 +21,19 @@ func TestPostComposeUpReloadPrunesBeforeRecreate(t *testing.T) {
 	var order []string
 	opts := Options{
 		PruneFunc: func(ctx context.Context, gatewayPath string) error {
-			order = append(order, "prune")
+			order = append(order, "prune "+gatewayPath)
 			return nil
 		},
 	}
-	err := postComposeUpReload(ctx, opts, progress.New(io.Discard), "/gateway.yaml", func(ctx context.Context, services ...string) error {
-		order = append(order, "recreate")
+	cc := compose.Client{ComposeFile: "c.yml", Run: func(_ context.Context, _ string, args, _ []string) error {
+		order = append(order, "docker "+strings.Join(args[len(args)-2:], " "))
 		return nil
-	}, "gateway")
+	}}
+	err := postComposeUpReload(ctx, opts, progress.New(io.Discard), cc, plan{gatewayPath: "/gateway.yaml"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"prune", "recreate"}
+	want := []string{"prune /gateway.yaml", "docker gateway tailscale"}
 	if !slices.Equal(order, want) {
 		t.Fatalf("order %v want %v", order, want)
 	}

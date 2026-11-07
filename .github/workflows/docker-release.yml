@@ -67,14 +67,8 @@ jobs:
           DISPATCH_MOVE_LATEST: ${{ github.event.inputs.move_latest }}
         run: |
           set -euo pipefail
-          RAW=""
-          if [[ -n "${INPUT_VERSION}" ]]; then
-            RAW="${INPUT_VERSION}"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            RAW="${DISPATCH_TAG}"
-          else
-            RAW="${GITHUB_REF_NAME}"
-          fi
+          # inputs.version is set when called; a manual dispatch passes tag instead.
+          RAW="${INPUT_VERSION:-${DISPATCH_TAG}}"
           if [[ ! "$RAW" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "refusing non-semver tag: $RAW (expected vX.Y.Z)" >&2
             exit 1
@@ -109,10 +103,9 @@ jobs:
             CHECKOUT_REF="${RAW}"
           fi
 
-          if [[ "${{ github.event_name }}" == "workflow_call" && "${INPUT_MOVE_LATEST}" == "false" ]]; then
-            MOVE_LATEST=false
-          fi
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${DISPATCH_MOVE_LATEST}" == "false" ]]; then
+          # In a called workflow github.event_name is the caller's event, never
+          # workflow_call, so read both inputs without gating on the event.
+          if [[ "${INPUT_MOVE_LATEST}" == "false" || "${DISPATCH_MOVE_LATEST}" == "false" ]]; then
             MOVE_LATEST=false
           fi
 
@@ -142,8 +135,6 @@ jobs:
         run: |
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus" >> "$GITHUB_OUTPUT"
           echo "switchyard_image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/polypus-switchyard" >> "$GITHUB_OUTPUT"
-          echo "gateway_base=debian:bookworm-slim" >> "$GITHUB_OUTPUT"
-          echo "switchyard_base=debian:trixie-slim" >> "$GITHUB_OUTPUT"
 
       # amd64 is required. arm64 is built when the release has both arm64 archives; tags
       # released before arm64 builds have none, so a packaging rebuild of them stays amd64.
@@ -194,18 +185,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve base image digests (labels)
+      # docker-bake.hcl names both base images; the digests pin FROM and fill the labels.
+      - name: Resolve base image digests
         id: base_digest
         run: |
           set -euo pipefail
+          bake="$(docker buildx bake -f docker-bake.hcl --print gateway switchyard)"
+          gw_base="$(jq -r '.target.gateway.args.BASE_IMAGE' <<<"$bake")"
+          sy_base="$(jq -r '.target.switchyard.args.BASE_IMAGE' <<<"$bake")"
           gw_digest=""
           sy_digest=""
-          if gw_digest="$(docker buildx imagetools inspect "${{ steps.meta.outputs.gateway_base }}" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+          if gw_digest="$(docker buildx imagetools inspect "${gw_base}" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
             true
           else
             gw_digest=""
           fi
-          if sy_digest="$(docker buildx imagetools inspect "${{ steps.meta.outputs.switchyard_base }}" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+          if sy_digest="$(docker buildx imagetools inspect "${sy_base}" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
             true
           else
             sy_digest=""
@@ -227,37 +222,21 @@ jobs:
             fi
           done
 
-      - name: Build tag list
-        id: tags
-        env:
-          IMAGE_TAG: ${{ steps.release.outputs.image_tag }}
-          MOVE_LATEST: ${{ steps.release.outputs.move_latest }}
-        run: |
-          set -euo pipefail
-          gw="${{ steps.meta.outputs.image }}:${IMAGE_TAG}"
-          sy="${{ steps.meta.outputs.switchyard_image }}:${IMAGE_TAG}"
-          if [[ "${MOVE_LATEST}" == "true" ]]; then
-            gw="${gw},${{ steps.meta.outputs.image }}:latest"
-            sy="${sy},${{ steps.meta.outputs.switchyard_image }}:latest"
-          fi
-          echo "gateway=${gw}" >> "$GITHUB_OUTPUT"
-          echo "switchyard=${sy}" >> "$GITHUB_OUTPUT"
-
-      # docker-bake.hcl defines both images; these env vars fill its variables.
+      # docker-bake.hcl defines both images and their base images; these env vars fill
+      # its other variables. Only the version tag is pushed here: :latest moves after
+      # the smoke and the manifest checks pass (last step).
       # source: . builds from the checkout, because docker-bin/ is not in git.
       - name: Build and push gateway and switchyard
         uses: docker/bake-action@5be5f02ff8819ecd3092ea6b2e6261c31774f2b4 # v6.10.0
         env:
           PLATFORMS: ${{ steps.bins.outputs.platforms }}
-          GATEWAY_TAGS: ${{ steps.tags.outputs.gateway }}
-          SWITCHYARD_TAGS: ${{ steps.tags.outputs.switchyard }}
+          GATEWAY_TAGS: ${{ steps.meta.outputs.image }}:${{ steps.release.outputs.image_tag }}
+          SWITCHYARD_TAGS: ${{ steps.meta.outputs.switchyard_image }}:${{ steps.release.outputs.image_tag }}
           APP_VERSION: ${{ steps.release.outputs.app_version }}
           GIT_REVISION: ${{ steps.oci.outputs.git_revision }}
           BUILD_CREATED: ${{ steps.oci.outputs.build_created }}
           REBUILD_REVISION: ${{ steps.release.outputs.rebuild_label }}
-          GATEWAY_BASE: ${{ steps.meta.outputs.gateway_base }}
           GATEWAY_BASE_DIGEST: ${{ steps.base_digest.outputs.gateway }}
-          SWITCHYARD_BASE: ${{ steps.meta.outputs.switchyard_base }}
           SWITCHYARD_BASE_DIGEST: ${{ steps.base_digest.outputs.switchyard }}
         with:
           source: .
@@ -317,3 +296,13 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Move :latest to the verified release
+        if: steps.release.outputs.move_latest == 'true'
+        env:
+          IMAGE_TAG: ${{ steps.release.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          for img in "${{ steps.meta.outputs.image }}" "${{ steps.meta.outputs.switchyard_image }}"; do
+            docker buildx imagetools create -t "${img}:latest" "${img}:${IMAGE_TAG}"
+          done

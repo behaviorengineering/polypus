@@ -1,4 +1,5 @@
-// polypus-smoke: multi-channel L1 probes against a Polypus gateway.
+// Command polypus-smoke runs multi-channel L1 probes against a Polypus gateway;
+// bare invoke prints the agent guide, and run sends the probes.
 package main
 
 import (

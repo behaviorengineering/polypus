@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
+	"github.com/behaviorengineering/polypus/internal/statefile"
 )
 
 // fakeSubmitter scripts one provider.
@@ -32,6 +34,8 @@ type fakeSubmitter struct {
 	breakSave bool
 	cancelErr error
 	cancels   int
+	// onCancel runs inside Cancel once the provider has accepted it.
+	onCancel func()
 	// cancelCtxErr and cancelHasDeadline record the ctx of the last Cancel.
 	cancelCtxErr      error
 	cancelHasDeadline bool
@@ -59,6 +63,9 @@ func (f *fakeSubmitter) Cancel(ctx context.Context, _ batch.Meta) error {
 	f.cancels++
 	f.cancelCtxErr = ctx.Err()
 	_, f.cancelHasDeadline = ctx.Deadline()
+	if f.cancelErr == nil && f.onCancel != nil {
+		f.onCancel()
+	}
 	return f.cancelErr
 }
 
@@ -107,7 +114,7 @@ func TestCreateRecordsAFailedSubmit(t *testing.T) {
 	if derrors.CodeOf(err) != derrors.CodeRateLimited {
 		t.Fatalf("the provider's code must survive: %v", err)
 	}
-	stored, gerr := store.GetBatch(meta.ID)
+	stored, gerr := store.GetBatch(t.Context(), meta.ID)
 	if gerr != nil || stored.Status != batch.StatusFailed || stored.FailedAt == 0 {
 		t.Fatalf("a failed submit stays stored as failed: %+v %v", stored, gerr)
 	}
@@ -161,6 +168,65 @@ func TestCancelledBatchFinishesCancelledWithItsLines(t *testing.T) {
 	sub.poll = Poll{State: PollDone, Lines: []batch.LineResult{{CustomID: "a", Body: []byte(`{}`)}}}
 	if meta, err = svc.Refresh(context.Background(), batchBackend, meta); err != nil || meta.Status != batch.StatusCancelled || meta.RequestCounts.Completed != 1 {
 		t.Fatalf("a cancelling batch ends cancelled with the finished lines: %+v %v", meta, err)
+	}
+}
+
+// TestCancelSavesCancellingAfterTheClientLeaves checks a client that hangs up after
+// the provider accepted the cancel still leaves the record saying cancelling, even
+// when the save has to wait for another holder of the store's lock.
+func TestCancelSavesCancellingAfterTheClientLeaves(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	clock := func() time.Time { return now }
+	root := t.TempDir()
+	store, err := batch.NewDiskStore(root, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := &fakeSubmitter{poll: Poll{State: PollRunning}}
+	svc, err := Config{
+		Store:     store,
+		Breakers:  upstream.NewBoard(),
+		Now:       clock,
+		Submitter: func(config.BackendDef) (Submitter, error) { return sub, nil },
+		Logger:    slog.New(slog.DiscardHandler),
+	}.CreateService()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := svc.Create(context.Background(), createRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Another gateway holds the store's lock while the client hangs up.
+	held, release := make(chan struct{}), make(chan struct{})
+	lockCtx, stopLock := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stopLock()
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- statefile.WithFileLock(lockCtx, filepath.Join(root, "store"), func() error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	ctx, hangUp := context.WithCancel(context.Background())
+	defer hangUp()
+	sub.onCancel = func() {
+		hangUp()
+		time.AfterFunc(100*time.Millisecond, func() { close(release) })
+	}
+	got, err := svc.Cancel(ctx, batchBackend, meta)
+	if err != nil || got.Status != batch.StatusCancelling {
+		t.Fatalf("cancel: %+v %v", got, err)
+	}
+	if err := <-lockDone; err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetBatch(t.Context(), meta.ID)
+	if err != nil || stored.Status != batch.StatusCancelling {
+		t.Fatalf("the record must say cancelling: %+v %v", stored, err)
 	}
 }
 
@@ -253,7 +319,7 @@ func TestCloudflareUnknownChatResultFailsTheLine(t *testing.T) {
 		{ExternalReference: "a", Success: true, Result: []byte(`{"unexpected":true}`)},
 		{ExternalReference: "b", Success: true, Result: []byte(`{"response":"hi"}`)},
 	})
-	if lines[0].ErrCode != "synthesis_failed" || len(lines[0].Body) != 0 {
+	if lines[0].ErrCode != batch.LineErrSynthesis || len(lines[0].Body) != 0 {
 		t.Fatalf("an unknown result must fail its line: %+v", lines[0])
 	}
 	if lines[1].ErrCode != "" || !strings.Contains(string(lines[1].Body), `"content":"hi"`) {
@@ -298,7 +364,7 @@ func TestRefreshExpiredCancelFailureStillExpires(t *testing.T) {
 	if err != nil || meta.Status != batch.StatusExpired {
 		t.Fatalf("a failed cancel must not block the expiry: %+v %v", meta, err)
 	}
-	stored, err := store.GetBatch(meta.ID)
+	stored, err := store.GetBatch(t.Context(), meta.ID)
 	if err != nil || stored.Status != batch.StatusExpired {
 		t.Fatalf("the expiry is saved: %+v %v", stored, err)
 	}

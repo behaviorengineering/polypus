@@ -374,9 +374,27 @@ func TestLoadRouterConfigEmptyFileMessage(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected an error for an empty config file")
 			}
-			if !strings.Contains(err.Error(), "polypus init --force") || strings.HasSuffix(err.Error(), "EOF") {
-				t.Fatalf("want a recovery hint instead of a bare EOF, got %v", err)
+			// init --force rewrites only the user config, so it is not the hint here.
+			if !strings.Contains(err.Error(), "point POLYPUS_CONFIG at another file") || strings.Contains(err.Error(), "init --force") || strings.HasSuffix(err.Error(), "EOF") {
+				t.Fatalf("want the fill-in hint instead of a bare EOF, got %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadRouterConfigEmptyUserConfigSaysInitForce(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("POLYPUS_CONFIG", "")
+	path := filepath.Join(xdg, "polypus", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("# nothing here\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadRouterConfig(ServeOptions{})
+	if err == nil || !strings.Contains(err.Error(), "run polypus init --force") {
+		t.Fatalf("an empty user config should point at init --force, got %v", err)
 	}
 }

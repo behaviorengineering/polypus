@@ -51,6 +51,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	// stream:true forces the HTTP proxy path (not Bifrost).
 	body := `{"model":"leaf/test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`

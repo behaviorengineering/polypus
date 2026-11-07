@@ -63,6 +63,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/apis", nil)
 	rec := httptest.NewRecorder()
@@ -160,6 +161,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 	req := httptest.NewRequest(http.MethodGet, "/v1/apis/openai/openapi.yaml", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -175,5 +177,68 @@ backends:
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("systemone schema without backend: %d", rec.Code)
+	}
+}
+
+func TestEveryCatalogueOperationIsServed(t *testing.T) {
+	cfg := scriptedRouterConfig()
+	leaf := cfg.Backends["leaf"]
+	syncOff := false
+	leaf.Models = &config.BackendModels{Sync: &syncOff} // No model list dial.
+	cfg.Backends["leaf"] = leaf
+	h := newScriptedGateway(t, &scriptedRouter{}, cfg)
+	for name, op := range openAICatalogEntry().Operations {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(op.Method, strings.ReplaceAll(op.Path, "{id}", "x"), nil))
+		if rec.Code == http.StatusMethodNotAllowed || rec.Code == http.StatusNotFound && rec.Header().Get("Content-Type") != "application/json" {
+			t.Fatalf("%s: %s %s is advertised but not served: %d %s", name, op.Method, op.Path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestOpenAIRetrieveFindsABareIdTheListShows(t *testing.T) {
+	models := func(ids ...string) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			data := make([]map[string]string, 0, len(ids))
+			for _, id := range ids {
+				data = append(data, map[string]string{"id": id, "object": "model"})
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	chat, so := models("m1"), models("typesafe/jev")
+	cfg := config.RouterConfig{
+		Chat:      config.CapabilityBackend{Enabled: true, Default: "chat"},
+		SystemOne: config.CapabilityBackend{Enabled: true, Default: "so"},
+		Policy:    config.DefaultRouterPolicy(),
+		Backends: map[string]config.BackendDef{
+			"chat": {ID: "chat", BaseURL: chat.URL, Capabilities: []config.Capability{config.CapChat}},
+			"so":   {ID: "so", BaseURL: so.URL, Capabilities: []config.Capability{config.CapSystemOne}},
+		},
+	}
+	h := newScriptedGateway(t, &scriptedRouter{}, cfg)
+	list := httptest.NewRecorder()
+	h.ServeHTTP(list, httptest.NewRequest(http.MethodGet, pathModels, nil))
+	if !strings.Contains(list.Body.String(), `"id":"m1"`) {
+		t.Fatalf("the list must show the default chat backend's bare alias: %s", list.Body.String())
+	}
+	for _, path := range []string{pathModelsPrefix + "m1", pathOpenAIModels + "/m1"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"id":"m1"`) {
+			t.Fatalf("%s: a bare id the list shows must be found, not looked up on the SystemOne backend: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestModelRetrieveBadEscapeIsJSON(t *testing.T) {
+	h := newBatchGatewayHandler(t, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, pathModelsPrefix+"%25zz", nil))
+	if rec.Code != http.StatusBadRequest || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("status %d content-type %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 }

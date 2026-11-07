@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
+
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 )
 
 func runChat(ctx context.Context, opts Options) ([]Result, error) {
@@ -19,16 +20,18 @@ func runChat(ctx context.Context, opts Options) ([]Result, error) {
 	var selected string
 	var chatErr error
 	content := timed(ChannelChat, "content_nonempty", opts.ChatModel, func() (string, error) {
-		var text string
-		text, selected, chatErr = chatPing(ctx, opts, opts.ChatModel)
+		var reply chatReply
+		reply, chatErr = chatPing(ctx, opts, opts.ChatModel)
 		if chatErr != nil {
 			return "", chatErr
 		}
-		d := strings.TrimSpace(text)
+		selected = reply.selectedModel
+		d := strings.TrimSpace(reply.content)
 		if d == "" {
-			return "", fmt.Errorf("empty content")
+			// The body shows why: a reasoning-only answer, a refusal, or a filter.
+			return "", fmt.Errorf("empty content: %s", httpx.Truncate(string(reply.raw), 200))
 		}
-		return truncate(d, 60), nil
+		return httpx.Truncate(d, 60), nil
 	})
 	out := []Result{ping, content}
 	if opts.RequireSelectedModel || len(opts.AllowedSelectedModels) > 0 {
@@ -80,9 +83,9 @@ func selectedModelAllowed(selected string, allowed []string) bool {
 func pingHealth(ctx context.Context, baseURL string) error {
 	req, err := httpNewGet(ctx, baseURL+"/health")
 	if err != nil {
-		return err
+		return fmt.Errorf("health: request: %w", err)
 	}
-	_, err = call(req, "health", probeBodyMax)
+	_, _, err = call(req, "health", probeBodyMax)
 	return err
 }
 
@@ -93,10 +96,17 @@ const (
 
 // pingRequest is the one-word chat request the chat and batch probes send.
 type pingRequest struct {
-	Model       string        `json:"model"`
-	Messages    []pingMessage `json:"messages"`
-	MaxTokens   int           `json:"max_tokens"`
-	Temperature float64       `json:"temperature"`
+	Model       string         `json:"model"`
+	Messages    []pingMessage  `json:"messages"`
+	MaxTokens   int            `json:"max_tokens"`
+	Temperature float64        `json:"temperature"`
+	Reasoning   *pingReasoning `json:"reasoning,omitempty"`
+}
+
+// pingReasoning is the reasoning.effort a probe sends when Options.ReasoningEffort
+// is set.
+type pingReasoning struct {
+	Effort string `json:"effort"`
 }
 
 type pingMessage struct {
@@ -105,36 +115,40 @@ type pingMessage struct {
 }
 
 func newPingRequest(model string, opts Options) pingRequest {
-	return pingRequest{
+	req := pingRequest{
 		Model:       model,
 		Messages:    []pingMessage{{Role: "user", Content: "Reply with the single word: ok"}},
 		MaxTokens:   opts.MaxTokens,
 		Temperature: opts.Temperature,
 	}
+	if effort := strings.TrimSpace(opts.ReasoningEffort); effort != "" {
+		req.Reasoning = &pingReasoning{Effort: effort}
+	}
+	return req
 }
 
-func chatPing(ctx context.Context, opts Options, model string) (content, selectedModel string, err error) {
+// chatReply is one chat probe answer: the first choice's content, the model the
+// gateway says it selected, and the raw body for error detail.
+type chatReply struct {
+	content       string
+	selectedModel string
+	raw           []byte
+}
+
+func chatPing(ctx context.Context, opts Options, model string) (chatReply, error) {
 	body, err := json.Marshal(newPingRequest(model, opts))
 	if err != nil {
-		return "", "", err
+		return chatReply{}, fmt.Errorf("chat: encode: %w", err)
 	}
 	req, err := httpNewPost(ctx, opts.BaseURL+"/v1/chat/completions", string(body))
 	if err != nil {
-		return "", "", err
+		return chatReply{}, fmt.Errorf("chat: request: %w", err)
 	}
-	resp, err := httpDefaultDo(req)
+	raw, hdr, err := call(req, "chat", probeBodyMax)
 	if err != nil {
-		return "", "", err
+		return chatReply{}, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, probeBodyMax))
-	if err != nil {
-		return "", "", fmt.Errorf("chat: read body: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", &statusError{what: "chat", status: resp.StatusCode, body: truncate(string(raw), errorBodyMax)}
-	}
-	selectedModel = extractSmokeSelectedModel(resp.Header, raw)
+	selectedModel := extractSmokeSelectedModel(hdr, raw)
 	var parsed struct {
 		Choices []struct {
 			Message struct {
@@ -143,12 +157,12 @@ func chatPing(ctx context.Context, opts Options, model string) (content, selecte
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return "", "", fmt.Errorf("chat: decode: %w", err)
+		return chatReply{}, fmt.Errorf("chat: decode: %w", err)
 	}
 	if len(parsed.Choices) == 0 {
-		return "", "", fmt.Errorf("no choices")
+		return chatReply{}, fmt.Errorf("chat: no choices")
 	}
-	return parsed.Choices[0].Message.Content, selectedModel, nil
+	return chatReply{content: parsed.Choices[0].Message.Content, selectedModel: selectedModel, raw: raw}, nil
 }
 
 func extractSmokeSelectedModel(hdr map[string][]string, body []byte) string {

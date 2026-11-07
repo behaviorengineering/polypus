@@ -15,7 +15,11 @@ const clickHouseFallbackEnv = "POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK"
 // ResolveCollectorOptions fills empty OTLP and observability URLs from operator env.
 // gatewayURL is the deployed gateway (empty reads POLYPUS_BASE_URL). When it is a
 // remote host, such as the environment's tailnet address, observability UIs use plain
-// http on tailnet TCP-forwarded ports (6006, 8080) and OTLP HTTP on :4318.
+// http on tailnet TCP-forwarded ports (6006, 8080) and OTLP HTTP on :4318. When it is
+// a loopback host, the local stack (go tool task serve, docker-compose.yml) is
+// assumed on that host: OTLP gRPC on OTELCOL_OTLP_GRPC_PORT (4317), Phoenix on
+// PHOENIX_PORT (6006) and HyperDX on HYPERDX_PORT (8080). With no gateway named,
+// nothing is assumed and otelcol names what is unset.
 //
 // For a remote gateway it also turns the ClickHouse fallback off (DisableHyperDXCH),
 // unless the operator set POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK: the fallback runs
@@ -34,8 +38,12 @@ func ResolveCollectorOptions(in CollectorOptions, gatewayURL string) CollectorOp
 			os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		)
 	}
+	isLoopback := remoteHost != "" && !isRemote
 	if strings.TrimSpace(out.OTLPEndpoint) == "" && isRemote {
 		out.OTLPEndpoint = observabilityHTTPBase(remoteHost, "4318")
+	}
+	if strings.TrimSpace(out.OTLPEndpoint) == "" && isLoopback {
+		out.OTLPEndpoint = observabilityHTTPBase(remoteHost, localPort("OTELCOL_OTLP_GRPC_PORT", "4317"))
 	}
 
 	if strings.TrimSpace(out.PhoenixBaseURL) == "" {
@@ -46,6 +54,9 @@ func ResolveCollectorOptions(in CollectorOptions, gatewayURL string) CollectorOp
 	} else if isRemote {
 		out.PhoenixBaseURL = coerceObservabilityHTTP(remoteHost, out.PhoenixBaseURL, "6006")
 	}
+	if strings.TrimSpace(out.PhoenixBaseURL) == "" && isLoopback {
+		out.PhoenixBaseURL = observabilityHTTPBase(remoteHost, localPort("PHOENIX_PORT", "6006"))
+	}
 
 	if strings.TrimSpace(out.HyperDXBaseURL) == "" {
 		out.HyperDXBaseURL = strings.TrimSpace(os.Getenv("HYPERDX_BASE_URL"))
@@ -55,8 +66,11 @@ func ResolveCollectorOptions(in CollectorOptions, gatewayURL string) CollectorOp
 	} else if isRemote {
 		out.HyperDXBaseURL = coerceObservabilityHTTP(remoteHost, out.HyperDXBaseURL, "8080")
 	}
+	if strings.TrimSpace(out.HyperDXBaseURL) == "" && isLoopback {
+		out.HyperDXBaseURL = observabilityHTTPBase(remoteHost, localPort("HYPERDX_PORT", "8080"))
+	}
 
-	if isRemote && !out.SkipHyperDXVerify {
+	if isRemote {
 		out.SkipHyperDXVerify = true
 	}
 	if isRemote && os.Getenv(clickHouseFallbackEnv) == "" {
@@ -65,8 +79,17 @@ func ResolveCollectorOptions(in CollectorOptions, gatewayURL string) CollectorOp
 	return out
 }
 
+// localPort reads a local stack port the way docker-compose.yml does: env, else def.
+func localPort(env, def string) string {
+	if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+		return v
+	}
+	return def
+}
+
 // remoteGatewayHost returns the gateway's host and whether it is another machine
-// (such as the environment's polypus-<identifier> tailnet address).
+// (such as the environment's polypus-<identifier> tailnet address). A loopback host
+// comes back with remote false; no host comes back empty.
 func remoteGatewayHost(baseURL string) (host string, remote bool) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
@@ -96,9 +119,10 @@ func isLoopbackHost(host string) bool {
 
 // observabilityHTTPBase is plain HTTP on purpose: the Tailscale serve config (tsserve) forwards the
 // collector, Phoenix and HyperDX ports as raw TCP on the tailnet, where WireGuard
-// already encrypts the traffic, so those ports have no TLS to speak.
+// already encrypts the traffic, so those ports have no TLS to speak. The local stack
+// on a loopback host has no TLS either.
 func observabilityHTTPBase(host, port string) string {
-	return "http://" + host + ":" + port // NOSONAR go:S5332 tailnet TCP forward, encrypted by WireGuard.
+	return "http://" + net.JoinHostPort(host, port) // NOSONAR go:S5332 tailnet TCP forward (WireGuard) or loopback.
 }
 
 func coerceObservabilityHTTP(gatewayHost, baseURL, port string) string {

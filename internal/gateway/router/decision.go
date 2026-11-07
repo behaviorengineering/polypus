@@ -15,7 +15,7 @@ import (
 func (c *Client) SystemOneDecisionRaw(ctx context.Context, call Call) ([]byte, error) {
 	backendID, downstream, body, timeout := call.BackendID, call.Model, call.Body, call.Timeout
 	if c == nil || c.bf == nil {
-		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.SystemOneDecisionRaw", "bifrost not configured")
+		return nil, derrors.New(derrors.CodeNotReady, "router.SystemOneDecisionRaw", "bifrost not configured")
 	}
 	if err := requireCallBound(ctx, timeout, "router.SystemOneDecisionRaw"); err != nil {
 		return nil, err

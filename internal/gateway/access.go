@@ -15,7 +15,7 @@ type accessProtector struct {
 	gw   *gatewayHandler
 }
 
-func wrapGatewayAccess(store *keys.Store, gw *gatewayHandler) http.Handler {
+func wrapGatewayAccess(store *keys.Store, gw *gatewayHandler) Handler {
 	if gw == nil {
 		panic("gateway: wrapGatewayAccess(nil gateway)")
 	}
@@ -36,11 +36,12 @@ func gatewayFromHandler(handler http.Handler) (*gatewayHandler, bool) {
 	return nil, false
 }
 
-// Close releases owned router resources on the inner gateway.
-func (a *accessProtector) Close() {
-	if a != nil && a.gw != nil {
-		a.gw.Close()
+// Close releases the inner gateway's router; see gatewayHandler.Close.
+func (a *accessProtector) Close() error {
+	if a == nil || a.gw == nil {
+		return nil
 	}
+	return a.gw.Close()
 }
 
 func (a *accessProtector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +57,7 @@ func (a *accessProtector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		unauthorized := derrors.CodeOf(err) == derrors.CodeUnauthorized
 		switch {
 		case err != nil && !unauthorized:
-			a.gw.writeHandlerError(w, derrors.Wrap(err, derrors.CodeNotReady, "gateway.accessProtector", "access key store unreadable"))
+			a.gw.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeNotReady, "gateway.accessProtector", "access key store unreadable"))
 			return
 		case accessExempt(r):
 			// The liveness probe needs no key.

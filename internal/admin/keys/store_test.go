@@ -3,6 +3,7 @@ package keys
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -203,4 +204,46 @@ func BenchmarkAuthorize(b *testing.B) {
 			}
 		}
 	})
+}
+
+func TestMutatorsNameTheKeyOperationOnALockOrWriteFailure(t *testing.T) {
+	// A key file under a path that is a file, not a directory, can be neither locked
+	// nor written.
+	parent := t.TempDir() + "/not-a-dir"
+	if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Config{
+		Path:  parent + "/keys.json",
+		Clock: func() time.Time { return time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC) },
+		Rand:  rand.Reader,
+	}.CreateStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	_, genErr := s.Generate(ctx, "ops")
+	_, rotErr := s.Rotate(ctx, "ops")
+	delErr := s.Delete(ctx, "ops")
+	for op, err := range map[string]error{"keys.Generate": genErr, "keys.Rotate": rotErr, "keys.Delete": delErr} {
+		var de *derrors.Error
+		if !errors.As(err, &de) || de.Op() != op {
+			t.Fatalf("%s: want the key operation as the outer op, got %v", op, err)
+		}
+	}
+}
+
+func TestWriteNamesTheKeyStore(t *testing.T) {
+	s, _ := testStore(t)
+	// The key file's parent is a file, so the write cannot land.
+	blocker := t.TempDir() + "/f"
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.path = blocker + "/keys.json"
+	err := s.write(filePayload{})
+	var de *derrors.Error
+	if !errors.As(err, &de) || de.Op() != "keys.write" || derrors.Field(err, "path") != s.path {
+		t.Fatalf("a failed write must name keys.write and the path, got %v", err)
+	}
 }

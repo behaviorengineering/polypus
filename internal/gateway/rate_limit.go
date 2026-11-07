@@ -19,6 +19,8 @@ const (
 	errTypeAuthentication = "authentication_error"
 	errTypeNotFound       = "not_found_error"
 	errTypeAPI            = "api_error"
+	errTypeRateLimit      = "rate_limit_error"
+	errTypeUnavailable    = "unavailable_error"
 )
 
 type openaiError struct {
@@ -28,7 +30,7 @@ type openaiError struct {
 	Code    string `json:"code"`
 }
 
-func (s *shared) writeRateLimitError(w http.ResponseWriter, err error) bool {
+func (rs responder) writeRateLimitError(w http.ResponseWriter, err error) bool {
 	if err == nil || derrors.CodeOf(err) != derrors.CodeRateLimited {
 		return false
 	}
@@ -42,7 +44,7 @@ func (s *shared) writeRateLimitError(w http.ResponseWriter, err error) bool {
 		w.Header().Set("Cf-Ray", ray)
 	}
 	setRateLimitExtraHeaders(w, err)
-	s.writeJSON(w, http.StatusTooManyRequests, openaiErrorBody{Error: openaiRateLimitError(err)})
+	rs.writeJSON(w, http.StatusTooManyRequests, openaiErrorBody{Error: openaiRateLimitError(err)})
 	return true
 }
 
@@ -71,7 +73,7 @@ func openaiRateLimitError(err error) openaiError {
 	}
 	return openaiError{
 		Message: rateLimitClientMessage(err),
-		Type:    "rate_limit_error",
+		Type:    errTypeRateLimit,
 		Code:    code,
 	}
 }

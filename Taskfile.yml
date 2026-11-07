@@ -32,7 +32,7 @@ tasks:
         echo "  1. go tool task init"
         echo "  2. go tool task serve"
         echo "  3. go tool task smoke-all"
-        echo "  4. POLYPUS_SMOKE_OTEL=1 go tool task smoke-otel"
+        echo "  4. go tool task smoke-otel   (needs Docker; leaves phoenix, hyperdx and otelcol running)"
 
   build:
     desc: Build gateway and switchyard-server binaries
@@ -41,7 +41,7 @@ tasks:
 
   serve:
     desc: process-compose TUI (gateway, backends, optional observability)
-    summary: "Builds, then starts the process-compose stack via scripts/pc-up.sh. Needs a POSIX shell and process-compose."
+    summary: "Builds bin/polypus and bin/switchyard-server, then starts the process-compose stack via scripts/pc-up.sh. Needs bash, process-compose and Docker for Phoenix, HyperDX and otelcol (asks before continuing without them; POLYPUS_DOCKER_CONTINUE=1 skips the prompt). MLX runs only when the config sets processes.mlx: true or POLYPUS_ENABLE_MLX=1, and then needs go tool task mlx-sync first."
     deps: [build]
     cmds:
       - ./scripts/pc-up.sh
@@ -79,16 +79,16 @@ tasks:
       - go vet ./...
 
   lint:
-    desc: Run golangci-lint on cmd, internal, pkg and media
-    summary: "go tool golangci-lint over cmd, internal, pkg and media with .golangci.yml."
+    desc: Run golangci-lint on cmd, internal and pkg
+    summary: "go tool golangci-lint over cmd, internal and pkg with .golangci.yml."
     cmds:
-      - go tool golangci-lint run --timeout 5m ./cmd/... ./internal/... ./pkg/... ./media/...
+      - go tool golangci-lint run --timeout 5m ./cmd/... ./internal/... ./pkg/...
 
   format:
     desc: Format Go sources with gofumpt
-    summary: "go tool gofumpt -w over cmd, internal, pkg and media (rewrites files)."
+    summary: "go tool gofumpt -w over cmd, internal and pkg (rewrites files)."
     cmds:
-      - go tool gofumpt -w ./cmd ./internal ./pkg ./media
+      - go tool gofumpt -w ./cmd ./internal ./pkg
 
   tidy:
     desc: Run go mod tidy
@@ -103,7 +103,7 @@ tasks:
       - go mod tidy -diff
       - task: check-config-example
       - |
-        unformatted=$(go tool gofumpt -l ./cmd ./internal ./pkg ./media)
+        unformatted=$(go tool gofumpt -l ./cmd ./internal ./pkg)
         if [ -n "$unformatted" ]; then
           echo "gofumpt needed (go tool task format):"
           echo "$unformatted"
@@ -175,9 +175,7 @@ tasks:
 
   smoke-higgs:
     desc: Integration smoke Higgs TTS
-    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). Higgs TTS; writes /tmp/polypus-higgs-smoke.mp3."
-    env:
-      POLYPUS_SMOKE_OUT: /tmp/polypus-higgs-smoke.mp3
+    summary: "Runs go test -tags=integration against hermetic mocks in internal/smoke/integration (15m timeout). Higgs TTS; the test writes its audio under its own temp dir (set POLYPUS_SMOKE_OUT to keep it)."
     cmds:
       - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}} -run '^TestSmokeHiggs$'
 
@@ -221,19 +219,21 @@ tasks:
       - cp images.env internal/deploy/stack/images.env
 
   sync-config-example:
-    internal: true
+    desc: Copy config.yaml.example into internal/config/ (the embedded example)
+    summary: "cp config.yaml.example internal/config/config.yaml.example, the copy polypus init embeds. build and init run it too; ci fails when the two drift."
     cmds:
       - cp config.yaml.example internal/config/config.yaml.example
 
   check-config-example:
-    internal: true
+    desc: Fail when internal/config/config.yaml.example drifts from config.yaml.example
+    summary: "Compares the two copies with git diff --no-index (needs git); ci and CI quality run it. Fix drift with go tool task sync-config-example."
     cmds:
       - |
         if [ ! -f internal/config/config.yaml.example ]; then
           echo "missing internal/config/config.yaml.example; run: go tool task sync-config-example" >&2
           exit 1
         fi
-        if ! cmp -s config.yaml.example internal/config/config.yaml.example; then
+        if ! git diff --no-index --quiet -- config.yaml.example internal/config/config.yaml.example; then
           echo "config example drift: edit config.yaml.example then go tool task sync-config-example" >&2
           exit 1
         fi
@@ -247,7 +247,7 @@ tasks:
   build-smoke-bin:
     internal: true
     cmds:
-      - go build {{.GO_BUILDFLAGS}} -o {{.SMOKE_BIN}} ./cmd/polypus-smoke
+      - go build {{.GO_BUILDFLAGS}} -ldflags "{{.LDFLAGS}}" -o {{.SMOKE_BIN}} ./cmd/polypus-smoke
 
   switchyard-build:
     internal: true
@@ -266,16 +266,3 @@ tasks:
           echo "switchyard-build: expected executable bin/switchyard-server after cargo install" >&2
           exit 1
         fi
-
-  install:
-    internal: true
-    cmds:
-      - go build {{.GO_BUILDFLAGS}} -ldflags "{{.LDFLAGS}}" -o {{.GOPATH}}/bin/polypus{{exeExt}} ./cmd/polypus
-    vars:
-      GOPATH:
-        sh: go env GOPATH
-
-  test-integration:
-    internal: true
-    cmds:
-      - go test -tags=integration -count=1 -timeout 15m {{.INTEGRATION_PKG}}

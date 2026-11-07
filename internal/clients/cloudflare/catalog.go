@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
@@ -100,7 +101,7 @@ func (c *Client) Ping(ctx context.Context) error {
 		return derrors.New(derrors.CodeInvalid, "cloudflare.Ping", "context required")
 	}
 	if c == nil {
-		return derrors.New(derrors.CodeFailedPrecondition, "cloudflare", "not configured")
+		return derrors.New(derrors.CodeNotReady, "cloudflare", "not configured")
 	}
 	_, _, err := c.fetchPage(ctx, 1)
 	return err
@@ -118,7 +119,7 @@ func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 		return ModelList{}, derrors.New(derrors.CodeInvalid, "cloudflare.ListModelsStrict", "context required")
 	}
 	if c == nil {
-		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, "cloudflare", "not configured")
+		return ModelList{}, derrors.New(derrors.CodeNotReady, "cloudflare", "not configured")
 	}
 	return catalog.ListStrict(ctx, catalog.Source{Provider: "cloudflare", Backend: c.backendID, Cache: c.cache, Fetch: c.fetchAll, Log: c.log})
 }
@@ -182,9 +183,9 @@ func (c *Client) fetchPage(ctx context.Context, page int) ([]Model, int, error) 
 	hdr := http.Header{}
 	hdr.Set("Authorization", "Bearer "+c.apiKey)
 	hdr.Set("Accept", "application/json")
-	h := catalog.HTTP{Client: c.httpClient, Policies: c.policies, Dep: c.dep()}
-	var body cfModelsSearchResponse
-	if err := catalog.GetJSON(ctx, h, opFetchPage, u.String(), hdr, modelsMaxBody, &body); err != nil {
+	h := httpx.HTTP{Client: c.httpClient, Policies: c.policies, Dep: c.dep()}
+	body, err := httpx.GetJSON[cfModelsSearchResponse](ctx, h, httpx.JSONGet{Op: opFetchPage, URL: u.String(), Header: hdr, MaxBody: modelsMaxBody})
+	if err != nil {
 		return nil, 0, err
 	}
 	if !body.Success {

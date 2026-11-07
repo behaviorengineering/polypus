@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -96,8 +98,8 @@ func RouterPublicID(name string) string {
 	return RouterIDPrefix + strings.TrimSpace(name)
 }
 
-// IsComposed reports whether the route is handled by Switchyard.
-func (r NamedRouter) IsComposed() bool {
+// isComposed reports whether the route is handled by Switchyard.
+func (r NamedRouter) isComposed() bool {
 	return r.Route.Type == RouteStageRouter || r.Route.Type == RouteLLMClassifier || r.Route.Type == RouteFallback
 }
 
@@ -229,14 +231,14 @@ func parseNamedRouters(raw map[string]namedRouterFile) (map[string]NamedRouter, 
 		return nil, nil
 	}
 	out := make(map[string]NamedRouter, len(raw))
-	for name, entry := range raw {
-		name = strings.TrimSpace(name)
+	// Sorted, so a file with several broken routers always names the same one.
+	for _, rawName := range slices.Sorted(maps.Keys(raw)) {
+		entry := raw[rawName]
+		name := strings.TrimSpace(rawName)
 		if name == "" {
 			return nil, fmt.Errorf("router: routers key must not be empty")
 		}
-		if strings.Contains(name, "/") {
-			return nil, fmt.Errorf("router: routers.%s: name must not contain '/'", name)
-		}
+		// validateRouterName refuses '/' with every other character outside [A-Za-z0-9_-].
 		if err := validateRouterName(name); err != nil {
 			return nil, fmt.Errorf("router: routers.%s: %w", name, err)
 		}
@@ -509,7 +511,10 @@ func validateRouters(cfg *RouterConfig) error {
 	}
 	// Switchyard target names a router emits must be unique across routers.
 	targetOwners := make(map[string]string)
-	for name, router := range cfg.Routers {
+	// Sorted, so a config with several broken routers always names the same one,
+	// and a target conflict always names the same pair.
+	for _, name := range slices.Sorted(maps.Keys(cfg.Routers)) {
+		router := cfg.Routers[name]
 		if router.Capability != CapChat {
 			return fmt.Errorf("router: routers.%s.capability must be chat (v1)", name)
 		}
@@ -544,7 +549,7 @@ func fillSwitchyardDefaults(cfg *RouterConfig) error {
 		cfg.Switchyard.BaseURL = DefaultSwitchyardBaseURL
 	}
 	if cfg.Switchyard.ConfigPath == "" {
-		path, err := DefaultSwitchyardRoutesPath()
+		path, err := defaultSwitchyardRoutesPath()
 		if err != nil {
 			return fmt.Errorf("router: switchyard.config_path default: %w", err)
 		}
@@ -750,13 +755,13 @@ func (c RouterConfig) ResolveSwitchyardConfigPath() (string, error) {
 	if v := strings.TrimSpace(c.Switchyard.ConfigPath); v != "" {
 		return v, nil
 	}
-	return DefaultSwitchyardRoutesPath()
+	return defaultSwitchyardRoutesPath()
 }
 
 // HasComposedRouters reports whether any router uses Switchyard.
 func (c RouterConfig) HasComposedRouters() bool {
 	for _, r := range c.Routers {
-		if r.IsComposed() {
+		if r.isComposed() {
 			return true
 		}
 	}

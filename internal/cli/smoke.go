@@ -61,13 +61,15 @@ func newSmokeVersionCmd() *cobra.Command {
 func newSmokeModelsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "models",
-		Short:   "Print the default probe model per channel",
+		Short:   "Print the model each channel probe sends (env overrides applied)",
 		GroupID: groupInspect,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "chat=%s\ntts=%s\nstt=%s\nsystemone=%s\nbatch=%s\n",
-				smoke.DefaultChatModel, smoke.DefaultTTSModel, smoke.DefaultSTTModel,
-				smoke.DefaultSystemOneModel, smoke.DefaultBatchModel)
+			// The same resolution run uses, so a smoke model env shows here.
+			var o smoke.Options
+			o.Normalize()
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Probe models\n  chat:       %s\n  tts:        %s\n  stt:        %s\n  systemone:  %s\n  batch:      %s\n",
+				o.ChatModel, o.TTSModel, o.STTModel, o.SystemOneModel, o.BatchModel)
 			return err
 		},
 	}

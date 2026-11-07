@@ -1,7 +1,8 @@
 package gatewayconfig
 
 import (
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -20,14 +21,8 @@ func SystemOneSmokeTargets(path string) ([]ChatSmokeTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(cfg.Backends))
-	for id := range cfg.Backends {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-
 	var out []ChatSmokeTarget
-	for _, id := range ids {
+	for _, id := range slices.Sorted(maps.Keys(cfg.Backends)) {
 		b := cfg.Backends[id]
 		if b.Smoke.Skip || !backendHasCapability(b, "systemone") {
 			continue

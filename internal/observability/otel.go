@@ -27,7 +27,6 @@ func Init(cfg Config) (func(context.Context) error, error) {
 	if cfg.Logger == nil {
 		return nil, derrors.New(derrors.CodeInvalid, "observability.Init", "logger is required")
 	}
-	streamChunkDebug.Store(cfg.StreamChunkDebug)
 	serviceName := cfg.ServiceName
 	if serviceName == "" {
 		serviceName = defaultServiceName

@@ -4,32 +4,37 @@ package overlay
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/deploy/compose"
 	"github.com/behaviorengineering/polypus/internal/deploy/execx"
 	"github.com/behaviorengineering/polypus/internal/deploy/gatewayconfig"
 	"github.com/behaviorengineering/polypus/internal/deploy/progress"
 	"github.com/behaviorengineering/polypus/internal/deploy/stack"
-	"github.com/behaviorengineering/polypus/internal/outbound"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	// DefaultService is the gateway's compose service.
-	DefaultService = stack.ServiceGateway
-	// DefaultOverlayPath is the models allow overlay inside the gateway container.
-	DefaultOverlayPath = "/var/lib/polypus/state/models-allow-overlay.yaml"
+	// defaultService is the gateway's compose service.
+	defaultService = stack.ServiceGateway
+	// DefaultOverlayPath is the models allow overlay inside the gateway container:
+	// the gateway's state volume, under the overlay's own file name.
+	DefaultOverlayPath = "/var/lib/polypus/state/" + config.ModelsAllowOverlayFile
 )
+
+// writeScript writes stdin to "$1.tmp" (owner-only), then renames it over "$1",
+// all as the container's own user, so the gateway can read what it gets.
+const writeScript = `umask 077 && cat > "$1.tmp" && mv "$1.tmp" "$1"`
 
 // ContainerConfig names the environment's compose project, the gateway service in
 // it, and the overlay path inside that service's container.
 type ContainerConfig struct {
+	// Compose runs the docker commands, through its Stdout seam and policies.
 	Compose     compose.Client
 	Service     string
 	OverlayPath string
@@ -39,26 +44,25 @@ type ContainerConfig struct {
 
 // PruneContainer reads overlay YAML from the running gateway, prunes git duplicates, and writes back.
 func PruneContainer(ctx context.Context, gatewayYAMLPath string, cfg ContainerConfig) error {
+	const op = "overlay.PruneContainer"
 	if cfg.Service == "" {
-		cfg.Service = DefaultService
+		cfg.Service = defaultService
 	}
 	if cfg.OverlayPath == "" {
 		cfg.OverlayPath = DefaultOverlayPath
 	}
 	yamlAllow, err := gatewayconfig.AllowLists(gatewayYAMLPath)
 	if err != nil {
-		return fmt.Errorf("overlay: %w", err)
+		return derrors.Wrap(err, derrors.CodeInvalid, op, "gateway allow lists")
 	}
-	overlay, missing, err := readOverlayFromContainer(ctx, cfg)
+	current, err := readOverlayFromContainer(ctx, cfg)
 	if err != nil {
-		return err
-	}
-	if missing {
-		overlay = File{}
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "read "+cfg.OverlayPath).
+			With("service", cfg.Service)
 	}
 	out := progress.New(cfg.Out)
-	pruned, removed := Prune(overlay, yamlAllow)
-	if equalOverlay(overlay, pruned) {
+	pruned, removed := prune(current, yamlAllow)
+	if equalOverlay(current, pruned) {
 		out.Println("deploy: overlay prune: no-op")
 		return out.Err()
 	}
@@ -66,45 +70,30 @@ func PruneContainer(ctx context.Context, gatewayYAMLPath string, cfg ContainerCo
 		out.Printf("deploy: overlay prune: removed backend=%s model=%s\n", r.Backend, r.Model)
 	}
 	if err := writeOverlayToContainer(ctx, cfg, pruned); err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "write "+cfg.OverlayPath).
+			With("service", cfg.Service)
 	}
 	return out.Err()
 }
 
-func readOverlayFromContainer(ctx context.Context, cfg ContainerConfig) (File, bool, error) {
-	args := cfg.Compose.Args("exec", "-T", cfg.Service, "cat", cfg.OverlayPath)
-	var out []byte
-	var missingFile bool
-	err := outbound.Run(ctx, outbound.DepDockerDaemon, func() error {
-		raw, runErr := execx.StdoutContext(ctx, "docker", args, cfg.Compose.Environ())
-		out = raw
-		if runErr == nil {
-			return nil
-		}
-		if overlayMissing(runErr) {
-			missingFile = true
-			return nil
-		}
-		if compose.DockerExecRetryable(runErr) {
-			return outbound.Retry(runErr)
-		}
-		return outbound.Abort(runErr)
-	})
+// readOverlayFromContainer returns the overlay in the gateway container; one that
+// does not exist yet, or is empty, is an empty overlay.
+func readOverlayFromContainer(ctx context.Context, cfg ContainerConfig) (file, error) {
+	raw, err := cfg.Compose.Exec(ctx, "overlay.read", nil, cfg.Service, "cat", cfg.OverlayPath)
 	if err != nil {
-		return File{}, false, fmt.Errorf("overlay: read: %w", err)
+		if overlayMissing(err) {
+			return file{}, nil
+		}
+		return file{}, err
 	}
-	if missingFile {
-		return File{}, true, nil
+	if strings.TrimSpace(string(raw)) == "" {
+		return file{}, nil
 	}
-	combined := strings.TrimSpace(string(out))
-	if combined == "" {
-		return File{}, true, nil
+	var f file
+	if err := yaml.Unmarshal(raw, &f); err != nil {
+		return file{}, derrors.Wrap(err, derrors.CodeInvalid, "overlay.read", "parse")
 	}
-	var file File
-	if err := yaml.Unmarshal(out, &file); err != nil {
-		return File{}, false, fmt.Errorf("overlay: parse: %w", err)
-	}
-	return file, false, nil
+	return f, nil
 }
 
 // overlayMissing reports a cat that failed because the overlay file does not exist
@@ -113,63 +102,22 @@ func overlayMissing(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(execx.Stderr(err)), "no such file")
 }
 
-func writeOverlayToContainer(ctx context.Context, cfg ContainerConfig, file File) error {
-	if file.Backends == nil {
-		file.Backends = map[string]Backend{}
+// writeOverlayToContainer replaces the overlay in one docker exec: the YAML goes
+// in on stdin and is renamed into place, so a retry rewrites the same file.
+func writeOverlayToContainer(ctx context.Context, cfg ContainerConfig, f file) error {
+	if f.Backends == nil {
+		f.Backends = map[string]backend{}
 	}
-	raw, err := yaml.Marshal(file)
+	raw, err := yaml.Marshal(f)
 	if err != nil {
-		return fmt.Errorf("overlay: marshal: %w", err)
+		return derrors.Wrap(err, derrors.CodeInternal, "overlay.write", "marshal")
 	}
-	tmp, err := os.CreateTemp("", "models-allow-overlay-*.yaml")
-	if err != nil {
-		return fmt.Errorf("overlay: temp: %w", err)
-	}
-	hostPath := tmp.Name()
-	defer func() {
-		_ = os.Remove(hostPath)
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("overlay: chmod temp: %w", err)
-	}
-	if _, err := tmp.Write(raw); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("overlay: write temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("overlay: close temp: %w", err)
-	}
-	remoteTmp := cfg.OverlayPath + ".tmp"
-	cpArgs := cfg.Compose.Args("cp", hostPath, cfg.Service+":"+remoteTmp)
-	mvArgs := cfg.Compose.Args("exec", "-T", cfg.Service, "mv", remoteTmp, cfg.OverlayPath)
-	chmodArgs := cfg.Compose.Args("exec", "-T", cfg.Service, "chmod", "600", cfg.OverlayPath)
-	env := cfg.Compose.Environ()
-	return outbound.Run(ctx, outbound.DepDockerDaemon, func() error {
-		if err := execx.RunContext(ctx, "docker", cpArgs, env); err != nil {
-			if compose.DockerExecRetryable(err) {
-				return outbound.Retry(err)
-			}
-			return outbound.Abort(fmt.Errorf("overlay: docker cp: %w", err))
-		}
-		if err := execx.RunContext(ctx, "docker", mvArgs, env); err != nil {
-			if compose.DockerExecRetryable(err) {
-				return outbound.Retry(err)
-			}
-			return outbound.Abort(fmt.Errorf("overlay: docker mv: %w", err))
-		}
-		if err := execx.RunContext(ctx, "docker", chmodArgs, env); err != nil {
-			if compose.DockerExecRetryable(err) {
-				return outbound.Retry(err)
-			}
-			return outbound.Abort(fmt.Errorf("overlay: docker chmod: %w", err))
-		}
-		return nil
-	})
+	_, err = cfg.Compose.Exec(ctx, "overlay.write", raw, cfg.Service, "sh", "-c", writeScript, "sh", cfg.OverlayPath)
+	return err
 }
 
-func equalOverlay(a, b File) bool {
-	return maps.EqualFunc(a.Backends, b.Backends, func(x, y Backend) bool {
+func equalOverlay(a, b file) bool {
+	return maps.EqualFunc(a.Backends, b.Backends, func(x, y backend) bool {
 		return slices.Equal(x.Allow, y.Allow)
 	})
 }

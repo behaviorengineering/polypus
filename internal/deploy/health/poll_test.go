@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/deploy/compose"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
@@ -99,5 +101,12 @@ func TestPollCancelDuringWait(t *testing.T) {
 func TestPollNeedsDeadline(t *testing.T) {
 	if err := Poll(context.Background(), &http.Client{}, "http://127.0.0.1:1", 0); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
 		t.Fatalf("err = %v, want a missing deadline refused", err)
+	}
+}
+
+func TestDumpGatewayRefusesANilContext(t *testing.T) {
+	//nolint:staticcheck // SA1012: the nil context is the case under test.
+	if err := DumpGateway(nil, io.Discard, compose.Client{}); derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("err = %v, want a nil context refused", err)
 	}
 }

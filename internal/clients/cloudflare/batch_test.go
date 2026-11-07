@@ -98,7 +98,7 @@ func TestParsePollResultRejectsUnknownStatus(t *testing.T) {
 	}
 }
 
-func TestParsePollResultEmptyStatusIsQueued(t *testing.T) {
+func TestParsePollResultEmptyStatusIsAnError(t *testing.T) {
 	t.Parallel()
 	cases := [][]byte{
 		[]byte(`{}`),
@@ -106,49 +106,32 @@ func TestParsePollResultEmptyStatusIsQueued(t *testing.T) {
 		[]byte(`{"request_id":"cf-req-1"}`),
 		[]byte(`{"success":true}`),
 		[]byte(`{"result":{}}`),
+		[]byte(`{"success":true,"result":{}}`),
 	}
 	for _, raw := range cases {
-		poll, err := unwrapThenParse(raw)
-		if err != nil {
-			t.Fatalf("parsePollResult(%s): %v", raw, err)
-		}
-		if poll.State != BatchPollQueued {
-			t.Fatalf("parsePollResult(%s) state=%v want queued", raw, poll.State)
+		_, err := unwrapThenParse(raw)
+		if derrors.CodeOf(err) != derrors.CodeUnavailable {
+			t.Fatalf("parsePollResult(%s): err %v, want an unavailable error, not queued", raw, err)
 		}
 	}
 }
 
-func TestUnwrapThenParseEmptyResultIsQueued(t *testing.T) {
+func TestParsePollResultQueued(t *testing.T) {
 	t.Parallel()
-	raw, err := unwrapBatchEnvelope([]byte(`{"success":true,"result":{}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	poll, err := parsePollResult(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if poll.State != BatchPollQueued {
-		t.Fatalf("state=%v want queued", poll.State)
+	poll, err := unwrapThenParse([]byte(`{"success":true,"result":{"status":"queued","request_id":"cf-req-1"}}`))
+	if err != nil || poll.State != BatchPollQueued {
+		t.Fatalf("poll %+v err %v, want queued", poll, err)
 	}
 }
 
-func TestBatchLinesKeepLargeIntegersExact(t *testing.T) {
-	items, err := translateBatchRequests(batch.EndpointChatCompletions, []batch.InputLine{{
-		CustomID: "a",
-		Body:     json.RawMessage(`{"model":"m","stream":true,"seed":9007199254740993,"messages":[]}`),
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := string(items[0]["seed"]); got != "9007199254740993" {
-		t.Fatalf("seed = %s, want it byte for byte", got)
-	}
-	if _, has := items[0]["model"]; has {
-		t.Fatal("model is dropped")
-	}
-	if got := string(items[0]["external_reference"]); got != `"a"` {
-		t.Fatalf("external_reference = %s", got)
+func TestPollBatchNamesTheRequestOnAnEmptyAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"result":{}}`))
+	}))
+	defer srv.Close()
+	_, err := batchTestClient(t, srv).PollBatch(hopCtx(t), "@cf/meta/llama-3.3-70b-instruct-fp8-fast", "cf-req-9")
+	if derrors.CodeOf(err) != derrors.CodeUnavailable || derrors.Field(err, "request_id") != "cf-req-9" {
+		t.Fatalf("err %+v, want unavailable naming request cf-req-9", err)
 	}
 }
 
@@ -195,7 +178,7 @@ func TestPostBatchRunMapsUpstream4xx(t *testing.T) {
 }
 
 // batchTestClient is a client for srv with policies of its own, so its breaker
-// counts only this test's calls.
+// counts only this test's calls and its retries back off in milliseconds.
 func batchTestClient(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
 	c, err := newClient(srv.URL+"/accounts/acct/ai", "token", time.Now, SpeechDefaults{})
@@ -203,7 +186,7 @@ func batchTestClient(t *testing.T, srv *httptest.Server) *Client {
 		t.Fatal(err)
 	}
 	c.backendID = "cf_batch"
-	c.policies = outbound.NewPolicies()
+	c.policies = fastPolicies()
 	return c
 }
 
@@ -245,4 +228,10 @@ func TestSubmitBatchIsNotRetried(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("a submit is paid and goes once; got %d calls", calls.Load())
 	}
+}
+
+// fastPolicies keeps production retry behaviour but backs off for a millisecond,
+// so retry tests do not wait in real time.
+func fastPolicies() *outbound.Policies {
+	return outbound.NewPoliciesWith(outbound.Backoff{Min: time.Millisecond, Max: time.Millisecond})
 }

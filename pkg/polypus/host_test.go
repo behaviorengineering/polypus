@@ -47,7 +47,16 @@ func TestHostBuildsHandlerThroughFacade(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	defer func() {
+		// The server stops first, then the handler releases its router.
+		srv.Close()
+		if err := h.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		if err := h.Close(); err != nil {
+			t.Errorf("a second Close must be safe: %v", err)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/health", nil)
@@ -121,6 +130,8 @@ func ExampleNewHandler() {
 		fmt.Println("handler:", polypus.CodeOf(err))
 		return
 	}
+	// Close releases the handler's router once the server has shut down.
+	defer func() { _ = h.Close() }()
 	mux := http.NewServeMux()
 	mux.Handle("/", h)
 	srv := &http.Server{
@@ -132,5 +143,6 @@ func ExampleNewHandler() {
 	//   go srv.ListenAndServe()
 	//   <-ctx.Done()
 	//   srv.Shutdown(shutdownCtx)
+	//   h.Close()
 	fmt.Println("listening on", srv.Addr)
 }
