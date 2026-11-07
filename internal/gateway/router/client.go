@@ -806,6 +806,43 @@ func anthropicOutOfCredit(status int, errType, msg string) bool {
 	return status == http.StatusBadRequest && strings.Contains(strings.ToLower(msg), "credit balance")
 }
 
+// refusalCode is the domain code for a provider's 4xx answer. A code the provider (or
+// a plugin) already set wins. A spent budget or credit becomes CodeNotReady (HTTP
+// 503), as Anthropic's out-of-credit does, so Switchyard falls back at once and the
+// caller sees the backend cannot serve now rather than a fault in its request.
+// Any other 4xx maps through clientErrorCode.
+func refusalCode(berr *schemas.BifrostError, status int) derrors.Code {
+	if berr != nil && berr.Error != nil && berr.Error.Error != nil {
+		var de *derrors.Error
+		if errors.As(berr.Error.Error, &de) {
+			return de.Code()
+		}
+	}
+	if billingRefusal(status, providerMessage(berr)) {
+		return derrors.CodeNotReady
+	}
+	return clientErrorCode(status)
+}
+
+// billingRefusal reports a provider refusing for money rather than for the request:
+// 402 Payment Required, or a 400 or 403 whose message names a budget or credit limit
+// (OpenRouter answers a spent weekly budget with 403 "Budget limit exceeded").
+func billingRefusal(status int, msg string) bool {
+	if status == http.StatusPaymentRequired {
+		return true
+	}
+	if status != http.StatusBadRequest && status != http.StatusForbidden {
+		return false
+	}
+	m := strings.ToLower(msg)
+	for _, hint := range []string{"budget limit", "credit balance", "insufficient credit", "out of credit"} {
+		if strings.Contains(m, hint) {
+			return true
+		}
+	}
+	return false
+}
+
 // clientErrorCode maps an upstream 4xx to the closest domain code (HTTPStatus maps it back).
 func clientErrorCode(status int) derrors.Code {
 	switch status {
@@ -867,6 +904,11 @@ func bifrostErr(berr *schemas.BifrostError, header http.Header, isCloudflare boo
 			cause = errors.Join(rl, berr.Error.Error)
 		}
 		return derrors.Wrap(cause, derrors.CodeRateLimited, "router.bifrost", "provider rate limited").With(fieldProvider, provider)
+	}
+	if status >= 400 && status < 500 && status != http.StatusTooManyRequests {
+		// The provider answered and refused: that is not an outage, so it keeps a
+		// caller-visible code instead of 502 unavailable.
+		return providerRefusal(berr, refusalCode(berr, status), "router.bifrost", status).With(fieldProvider, provider)
 	}
 	if berr.Error != nil && berr.Error.Error != nil {
 		// Keep a domain code the provider (or a plugin) already set, such as a
