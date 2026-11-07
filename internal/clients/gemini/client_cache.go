@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/behaviorengineering/polypus/internal/clients/catalog"
+	"github.com/behaviorengineering/polypus/internal/clients/clientcache"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/outbound"
@@ -20,7 +20,7 @@ type Clients struct {
 	Logger *slog.Logger
 	// Now ages the catalog caches. Required: Get fails without it.
 	Now func() time.Time
-	reg catalog.Registry[Client]
+	reg clientcache.Registry[Client]
 }
 
 // Get returns the cached client for b, building it on first use.
@@ -31,15 +31,11 @@ func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
 	if !b.IsGeminiExtension() {
 		return nil, derrors.Wrap(errNotGeminiExtension, derrors.CodeInvalid, opGet, "backend").With("backend", b.ID)
 	}
-	token, err := b.Auth.ResolveBearerToken()
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "resolve token").With("backend", b.ID)
-	}
 	listURL := openAIModelsListURL(b.BaseURL)
-	return cs.reg.Get(b.ID, token+"\x00"+listURL, func() (*Client, error) {
+	return cs.reg.ForBackend(opGet, b, listURL, func(token string) (*Client, error) {
 		c, err := newClient(listURL, token, cs.Now)
 		if err != nil {
-			return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "build client").With("backend", b.ID)
+			return nil, err
 		}
 		c.backendID = b.ID
 		c.policies = cs.Policies

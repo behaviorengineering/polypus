@@ -45,7 +45,7 @@ func TestEnsurePresentProbesSwitchyardOnlyWithRouters(t *testing.T) {
 		var probed []string
 		err := EnsurePresent(context.Background(), path, EnsureOptions{
 			Services: tc.svc,
-			Probe: func(_ context.Context, ref, _ string) error {
+			Probe: func(_ context.Context, ref string) error {
 				probed = append(probed, ref)
 				return nil
 			},

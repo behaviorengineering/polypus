@@ -63,13 +63,13 @@ func systemOnePing(ctx context.Context, opts Options) (string, error) {
 		},
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("systemone: encode: %w", err)
 	}
 	req, err := httpNewPost(ctx, opts.BaseURL+"/v1/systemone", string(raw))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("systemone: request: %w", err)
 	}
-	body, err := call(req, "systemone", probeBodyMax)
+	body, _, err := call(req, "systemone", probeBodyMax)
 	if err != nil {
 		return "", err
 	}
@@ -77,7 +77,7 @@ func systemOnePing(ctx context.Context, opts Options) (string, error) {
 		Answers map[string]json.RawMessage `json:"answers"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", err
+		return "", fmt.Errorf("systemone: decode: %w", err)
 	}
 	if len(parsed.Answers) == 0 {
 		return "", fmt.Errorf("empty answers")

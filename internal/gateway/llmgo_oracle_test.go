@@ -2,7 +2,6 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -98,18 +97,6 @@ func parseSSEWithLLMGo(t *testing.T, body string, contentType string, caps ...ll
 	}
 }
 
-func proxySanitizeSSE(upstream string) string {
-	var buf bytes.Buffer
-	_, _ = copyOpenAIChatStream(context.Background(), &buf, strings.NewReader(upstream), false)
-	return buf.String()
-}
-
-func proxySanitizeSSEStripExtra(upstream string) string {
-	var buf bytes.Buffer
-	_, _ = copyOpenAIChatStream(context.Background(), &buf, strings.NewReader(upstream), true)
-	return buf.String()
-}
-
 func requireOracleEOF(t *testing.T, terminal error) {
 	t.Helper()
 	if !errors.Is(terminal, io.EOF) {
@@ -180,7 +167,7 @@ func TestLLMGoOracleBaselineLegalAndTrailingChoice(t *testing.T) {
 	_, _, rawTerm := parseSSEWithLLMGo(t, raw, "")
 	requireOracleMalformed(t, rawTerm, "after the finish reason")
 
-	san := proxySanitizeSSE(raw)
+	san := gatewaySSE(t, raw)
 	text, finish, terminal = parseSSEWithLLMGo(t, san, "")
 	requireOracleEOF(t, terminal)
 	if text != "Hi" || finish != llm.FinishReasonStop {
@@ -193,14 +180,13 @@ func TestLLMGoOracleDualTable(t *testing.T) {
 	usageComplete := `{"id":"chat","model":"model","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`
 
 	tests := []struct {
-		name       string
-		upstream   string
-		stripExtra bool
-		rawSub     string // malformed substring; empty => expect EOF.
-		rawText    string
-		sanSub     string
-		sanText    string
-		sanFinish  llm.FinishReason
+		name      string
+		upstream  string
+		rawSub    string // malformed substring; empty => expect EOF.
+		rawText   string
+		sanSub    string
+		sanText   string
+		sanFinish llm.FinishReason
 	}{
 		{
 			name:      "empty trailing choice after stop",
@@ -287,13 +273,15 @@ func TestLLMGoOracleDualTable(t *testing.T) {
 			sanFinish: llm.FinishReasonStop,
 		},
 		{
+			// Bifrost ends the stream by closing its channel, so the gateway always
+			// closes with [DONE]; the undecodable tail after stop is dropped.
 			name: "truncated tail at EOF",
 			upstream: strings.Join([]string{
 				"data: " + vf + "\n", "\n",
 				"data: {\n",
 			}, ""),
-			rawSub: "without [DONE]",
-			sanSub: "without [DONE]",
+			rawSub:    "without [DONE]",
+			sanFinish: llm.FinishReasonStop,
 		},
 		{
 			name: "missing DONE after stop",
@@ -348,12 +336,11 @@ func TestLLMGoOracleDualTable(t *testing.T) {
 			sanFinish: llm.FinishReasonStop,
 		},
 		{
-			name:       "extra_fields strip bifrost",
-			upstream:   strings.Replace(gemmaStreamWithTrailingChoice(""), "\"id\":\"c1\"", "\"id\":\"c1\",\"extra_fields\":{\"x\":1}", 1),
-			stripExtra: true,
-			rawSub:     "after the finish reason",
-			sanText:    "Hi",
-			sanFinish:  llm.FinishReasonStop,
+			name:      "extra_fields strip bifrost",
+			upstream:  strings.Replace(gemmaStreamWithTrailingChoice(""), "\"id\":\"c1\"", "\"id\":\"c1\",\"extra_fields\":{\"x\":1}", 1),
+			rawSub:    "after the finish reason",
+			sanText:   "Hi",
+			sanFinish: llm.FinishReasonStop,
 		},
 	}
 
@@ -372,12 +359,7 @@ func TestLLMGoOracleDualTable(t *testing.T) {
 				}
 			}
 
-			var san string
-			if tc.stripExtra {
-				san = proxySanitizeSSEStripExtra(tc.upstream)
-			} else {
-				san = proxySanitizeSSE(tc.upstream)
-			}
+			san := gatewaySSE(t, tc.upstream)
 			text, finish, sanTerm := parseSSEWithLLMGo(t, san, "")
 			if tc.sanSub == "" {
 				requireOracleEOF(t, sanTerm)
@@ -409,32 +391,12 @@ func TestLLMGoOraclePerIndexSanitizerForwardsLLMGoLeaveLoud(t *testing.T) {
 	}
 	_, _, rawTerm := parseSSEWithLLMGo(t, upstream, "")
 	requireOracleMalformed(t, rawTerm, "after the finish reason")
-	_, _, sanTerm := parseSSEWithLLMGo(t, proxySanitizeSSE(upstream), "")
+	_, _, sanTerm := parseSSEWithLLMGo(t, gatewaySSE(t, upstream), "")
 	requireOracleMalformed(t, sanTerm, "after the finish reason")
 }
 
-type oneByteReader struct {
-	s string
-	i int
-}
-
-func (r *oneByteReader) Read(p []byte) (int, error) {
-	if r.i >= len(r.s) {
-		return 0, io.EOF
-	}
-	p[0] = r.s[r.i]
-	r.i++
-	return 1, nil
-}
-
-func TestLLMGoOracleOneByteReaderTrailingChoice(t *testing.T) {
-	raw := gemmaStreamWithTrailingChoice("")
-	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(context.Background(), &buf, &oneByteReader{s: raw}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text, finish, terminal := parseSSEWithLLMGo(t, buf.String(), "")
+func TestLLMGoOracleTrailingChoiceAfterStop(t *testing.T) {
+	text, finish, terminal := parseSSEWithLLMGo(t, gatewaySSE(t, gemmaStreamWithTrailingChoice("")), "")
 	requireOracleEOF(t, terminal)
 	if text != "Hi" || finish != llm.FinishReasonStop {
 		t.Fatalf("got %q %q", text, finish)
@@ -446,23 +408,21 @@ func TestLLMGoOracleWrongContentType(t *testing.T) {
 	requireOracleMalformed(t, terminal, "content type")
 }
 
-func TestCopyOpenAIChatStreamRespectsCancel(t *testing.T) {
+func TestChatStreamRespectsCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	src := strings.Repeat("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"},\"finish_reason\":null}]}\n\n", 1000)
-	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(ctx, &buf, strings.NewReader(src), false)
+	_, err := streamThroughGateway(ctx, src)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v want canceled", err)
 	}
 }
 
-func TestProxyStreamDropWritesFailureDump(t *testing.T) {
+func TestChatStreamDropWritesFailureDump(t *testing.T) {
 	dir := t.TempDir()
 
 	upstream := gemmaStreamWithTrailingChoice("late")
-	var buf bytes.Buffer
-	_, err := copyOpenAIChatStream(withStreamChunkCounter(context.Background(), chunkDumpSink{dir: dir, log: testShared.log, now: time.Now}), &buf, strings.NewReader(upstream), false)
+	_, err := streamThroughGateway(withStreamChunkCounter(context.Background(), chunkDumpSink{dir: dir, log: testResponder.log, now: time.Now}), upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,7 +508,7 @@ func TestLLMGoOracleDualReasoningAliasFromBifrostMarshal(t *testing.T) {
 	}
 }
 
-func TestLLMGoOracleDualReasoningProxyPassthrough(t *testing.T) {
+func TestLLMGoOracleDualReasoningStreamPassthrough(t *testing.T) {
 	upstream := strings.Join([]string{
 		`data: {"id":"chat","model":"model","choices":[{"index":0,"delta":{"reasoning":"hidden","reasoning_content":"hidden","content":"visible"},"finish_reason":null}]}`,
 		"",
@@ -557,25 +517,19 @@ func TestLLMGoOracleDualReasoningProxyPassthrough(t *testing.T) {
 		"data: [DONE]",
 		"",
 	}, "\n")
-	san := proxySanitizeSSE(upstream)
-	if !strings.Contains(san, `"reasoning"`) {
-		t.Fatalf("proxy sanitizer dropped OpenAI reasoning:\n%s", san)
-	}
-	if strings.Contains(san, `"reasoning_content"`) {
-		t.Fatalf("proxy sanitizer left reasoning_content alias:\n%s", san)
-	}
-	rec := httptest.NewRecorder()
-	ctx := observability.WithInterventionState(context.Background())
-	_, err := copyOpenAIChatStreamWithOpts(ctx, rec, strings.NewReader(upstream), false, &streamCopyOpts{
-		responseWriter:   rec,
-		statusCode:       http.StatusOK,
-		delayWriteHeader: true,
-	})
+	rec, err := streamThroughGateway(observability.WithInterventionState(context.Background()), upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
+	san := rec.Body.String()
+	if !strings.Contains(san, `"reasoning"`) {
+		t.Fatalf("stream sanitizer dropped OpenAI reasoning:\n%s", san)
+	}
+	if strings.Contains(san, `"reasoning_content"`) {
+		t.Fatalf("stream sanitizer left reasoning_content alias:\n%s", san)
+	}
 	if got := rec.Header().Get(config.InterventionHeader); got != "reasoning_alias" {
-		t.Fatalf("proxy intervention header=%q", got)
+		t.Fatalf("stream intervention header=%q", got)
 	}
 	text, _, terminal := parseSSEWithLLMGo(t, rec.Body.String(), "")
 	requireOracleEOF(t, terminal)

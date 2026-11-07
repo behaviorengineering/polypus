@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -69,9 +70,14 @@ func TestAdminKeyDryRunChecksWithoutPrompting(t *testing.T) {
 		withStdin(t, "")
 		args := append([]string{"admin-key"}, tc.args...)
 		args = append(args, "--dry-run")
-		code, _, errOut := captureRun(args)
-		if code != tc.code || !strings.Contains(errOut, tc.want) {
-			t.Errorf("%v: exit %d stderr %q, want exit %d and %q", args, code, errOut, tc.code, tc.want)
+		code, out, errOut := captureRun(args)
+		// The plan is the result and goes to stdout; a refusal is a diagnostic.
+		got := errOut
+		if tc.code == 0 {
+			got = out
+		}
+		if code != tc.code || !strings.Contains(got, tc.want) {
+			t.Errorf("%v: exit %d stdout %q stderr %q, want exit %d and %q", args, code, out, errOut, tc.code, tc.want)
 		}
 		if strings.Contains(errOut, "not confirmed") || strings.Contains(errOut, "Confirm") {
 			t.Errorf("%v: dry-run must not prompt: %q", args, errOut)
@@ -83,5 +89,63 @@ func TestAdminKeyDryRunChecksWithoutPrompting(t *testing.T) {
 	}
 	if string(before) != string(after) {
 		t.Fatal("a dry-run changed the key store")
+	}
+}
+
+// promptIO is a cmdIO reading input as if typed at a terminal.
+func promptIO(input string) (cmdIO, *bytes.Buffer, *bytes.Buffer) {
+	var out, errOut bytes.Buffer
+	return cmdIO{ctx: context.Background(), in: strings.NewReader(input), out: &out, errOut: &errOut, inTTY: true}, &out, &errOut
+}
+
+// TestAdminKeyPromptsReadCommandInput drives the name and confirm prompts through
+// the command's input rather than the process stdin.
+func TestAdminKeyPromptsReadCommandInput(t *testing.T) {
+	adminKeyFixture(t)
+	cio, out, errOut := promptIO("ci\ny\n")
+	if code := runAdminKeyGenerate(cio, adminKeyOpts{}); code != 0 {
+		t.Fatalf("exit %d stderr %q", code, errOut)
+	}
+	if !strings.Contains(errOut.String(), "Key name: ") || !strings.Contains(errOut.String(), `Confirm generate admin API key "ci"`) {
+		t.Fatalf("want both prompts on stderr, got %q", errOut)
+	}
+	if strings.TrimSpace(out.String()) == "" {
+		t.Fatal("generate must print the new key on stdout")
+	}
+
+	cio, _, errOut = promptIO("n\n")
+	if code := runAdminKeyDelete(cio, adminKeyOpts{name: "ci"}); code != 1 || !strings.Contains(errOut.String(), "not confirmed") {
+		t.Fatalf("a declined delete: exit %d stderr %q", code, errOut)
+	}
+}
+
+func TestAdminKeyDryRunWithoutNameRefusesToPrompt(t *testing.T) {
+	adminKeyFixture(t)
+	for _, verb := range []string{"generate", "rotate"} {
+		cio, _, errOut := promptIO("should-not-be-read\n")
+		run := runAdminKeyGenerate
+		if verb == "rotate" {
+			run = runAdminKeyRotate
+		}
+		if code := run(cio, adminKeyOpts{dryRun: true}); code != 2 {
+			t.Fatalf("%s --dry-run without --name: exit %d, want 2", verb, code)
+		}
+		if got := errOut.String(); !strings.Contains(got, "dry-run needs --name") || strings.Contains(got, "Key name") {
+			t.Fatalf("%s: want the --name refusal and no prompt, got %q", verb, got)
+		}
+	}
+}
+
+func TestAdminKeyListTextShowsRotation(t *testing.T) {
+	recs := []keys.Record{
+		{Name: "a", ID: "1", Prefix: "pk_a", CreatedAt: "2026-01-01T00:00:00Z"},
+		{Name: "b", ID: "2", Prefix: "pk_b", CreatedAt: "2026-01-01T00:00:00Z", RotatedAt: "2026-02-01T00:00:00Z"},
+	}
+	cio, out, _ := promptIO("")
+	if err := writeAdminKeyList(cio, recs); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "Rotated: never") || !strings.Contains(got, "Rotated: 2026-02-01T00:00:00Z") {
+		t.Fatalf("list text must carry RotatedAt, got %q", got)
 	}
 }

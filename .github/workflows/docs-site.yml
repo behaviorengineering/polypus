@@ -13,14 +13,14 @@ on:
     paths:
       - "README.md"
       - "docs/**"
-      - "media/banner.webp"
+      - "internal/gateway/assets/banner.webp"
       - "site/**"
       - ".github/workflows/docs-site.yml"
   pull_request:
     paths:
       - "README.md"
       - "docs/**"
-      - "media/banner.webp"
+      - "internal/gateway/assets/banner.webp"
       - "site/**"
       - ".github/workflows/docs-site.yml"
   workflow_dispatch:

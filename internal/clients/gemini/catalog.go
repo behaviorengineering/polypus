@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/outbound"
@@ -91,7 +92,7 @@ func openAIModelsListURL(base string) string {
 // ListModelsStrict fetches the catalog or returns an error when fetch fails and no cache exists.
 func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
-		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, opList, "not configured")
+		return ModelList{}, derrors.New(derrors.CodeNotReady, opList, "not configured")
 	}
 	if ctx == nil {
 		return ModelList{}, derrors.New(derrors.CodeInvalid, opList, "context required")
@@ -103,9 +104,9 @@ func (c *Client) fetch(ctx context.Context) ([]Model, error) {
 	hdr := http.Header{}
 	hdr.Set("Authorization", "Bearer "+c.apiKey)
 	hdr.Set("Accept", "application/json")
-	h := catalog.HTTP{Client: c.httpClient, Policies: c.policies, Dep: outbound.Scoped(outbound.DepGemini, c.backendID)}
-	var list ModelList
-	if err := catalog.GetJSON(ctx, h, opFetch, c.listURL, hdr, modelsMaxBody, &list); err != nil {
+	h := httpx.HTTP{Client: c.httpClient, Policies: c.policies, Dep: outbound.Scoped(outbound.DepGemini, c.backendID)}
+	list, err := httpx.GetJSON[ModelList](ctx, h, httpx.JSONGet{Op: opFetch, URL: c.listURL, Header: hdr, MaxBody: modelsMaxBody})
+	if err != nil {
 		return nil, err
 	}
 	return toModels(list), nil

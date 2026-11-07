@@ -6,11 +6,9 @@ package deploy
 import (
 	"context"
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -20,7 +18,6 @@ import (
 	"github.com/behaviorengineering/polypus/internal/deploy/gatewayconfig"
 	"github.com/behaviorengineering/polypus/internal/deploy/health"
 	"github.com/behaviorengineering/polypus/internal/deploy/images"
-	"github.com/behaviorengineering/polypus/internal/deploy/overlay"
 	"github.com/behaviorengineering/polypus/internal/deploy/paths"
 	"github.com/behaviorengineering/polypus/internal/deploy/progress"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
@@ -37,11 +34,7 @@ var observabilityServices = []string{stack.ServiceOtelcol, stack.ServicePhoenix,
 
 // collectorEndpoint is where the gateway and Switchyard send traces when the
 // collector runs.
-const collectorEndpoint = "http://otelcol:4317"
-
-// healthProbeTimeout bounds one health GET, so a hung connection costs one round of
-// the poll, not the whole health budget.
-const healthProbeTimeout = 5 * time.Second
+const collectorEndpoint = "http://" + stack.ServiceOtelcol + ":4317"
 
 // reloadServices are force-recreated after compose up so bind-mounted files
 // (gateway YAML, otelcol config, Tailscale serve.json) reload on Windows. Only
@@ -103,6 +96,9 @@ func Run(ctx context.Context, opts Options) error {
 		out.Println("deploy: dry run; nothing written, no containers changed")
 		return out.Err()
 	}
+	// One resolver for the whole run, so a conflict the operator settles while
+	// exporting stays settled for the smoke's client key.
+	opts.Secrets = opts.secretResolver()
 	if err := apply(ctx, opts, p, out); err != nil {
 		return err
 	}
@@ -239,8 +235,7 @@ func apply(ctx context.Context, opts Options, p plan, out *progress.Printer) (er
 	ctx, span := observability.Tracer().Start(ctx, "deploy.apply",
 		trace.WithAttributes(attribute.String("deploy.environment", opts.Name)))
 	defer func() { endSpan(span, err) }()
-	if opts.HealthTimeout <= 0 {
-		err = derrors.New(derrors.CodeInvalid, "deploy.apply", "health timeout must be positive")
+	if err = opts.checkBudgets(); err != nil {
 		return err
 	}
 	if opts.Tailnet != "" {
@@ -252,10 +247,15 @@ func apply(ctx context.Context, opts Options, p plan, out *progress.Printer) (er
 		out.Printf("deploy: this machine is on tailnet %s\n", opts.Tailnet)
 	}
 	var cc compose.Client
-	if err = phase(ctx, opts, "prepare", func(ctx context.Context) error {
+	if err = phase(ctx, opts, "prepare", func(context.Context) error {
 		var prepErr error
-		cc, prepErr = prepare(ctx, opts, p, out)
+		cc, prepErr = prepare(opts, p, out)
 		return prepErr
+	}); err != nil {
+		return err
+	}
+	if err = phase(ctx, opts, "images.ensure", func(ctx context.Context) error {
+		return ensureImages(ctx, opts, p)
 	}); err != nil {
 		return err
 	}
@@ -266,7 +266,7 @@ func apply(ctx context.Context, opts Options, p plan, out *progress.Printer) (er
 	if err = phase(ctx, opts, "health.poll", func(ctx context.Context) error {
 		pollCtx, cancel := context.WithTimeout(ctx, opts.HealthTimeout)
 		defer cancel()
-		return health.Poll(pollCtx, &http.Client{Timeout: healthProbeTimeout}, opts.HealthURL, opts.HealthPollInterval)
+		return health.Poll(pollCtx, opts.httpClient(), opts.HealthURL, opts.HealthPollInterval)
 	}); err != nil {
 		err = withDiagnostics(ctx, opts, cc, err)
 		return err
@@ -287,9 +287,36 @@ func apply(ctx context.Context, opts Options, p plan, out *progress.Printer) (er
 	return nil
 }
 
-// prepare writes the stack, pins, serve config and secrets, checks the images, and
-// returns the compose client for the environment.
-func prepare(ctx context.Context, opts Options, p plan, out *progress.Printer) (compose.Client, error) {
+// checkBudgets refuses a deploy whose phase budgets are not set, so no phase runs
+// on a silent fallback that Budget did not count.
+func (o Options) checkBudgets() error {
+	const op = "deploy.apply"
+	switch {
+	case o.HealthTimeout <= 0:
+		return derrors.New(derrors.CodeInvalid, op, "health timeout must be positive")
+	case o.ImageWaitTimeout <= 0:
+		return derrors.New(derrors.CodeInvalid, op, "image wait timeout must be positive")
+	case !o.SkipSmoke && o.SmokeTimeout <= 0:
+		return derrors.New(derrors.CodeInvalid, op, "smoke timeout must be positive")
+	}
+	return nil
+}
+
+// ensureImages checks the pinned images are in their registry, waiting for the
+// release's image build when one is missing.
+func ensureImages(ctx context.Context, opts Options, p plan) error {
+	ensure := images.DefaultEnsureOptions()
+	ensure.WaitTimeout = opts.ImageWaitTimeout
+	ensure.Services = p.services
+	ensure.Out = opts.Out
+	ensure.Probe = opts.ImageProbe
+	ensure.GitHub = opts.GitHub
+	return images.EnsurePresent(ctx, p.imagesEnv, ensure)
+}
+
+// prepare writes the stack, pins, serve config and secrets, and returns the
+// compose client for the environment.
+func prepare(opts Options, p plan, out *progress.Printer) (compose.Client, error) {
 	composeFile, err := stack.Write(opts.Dir())
 	if err != nil {
 		return compose.Client{}, err
@@ -298,18 +325,6 @@ func prepare(ctx context.Context, opts Options, p plan, out *progress.Printer) (
 		if err := images.WritePins(p.imagesEnv, p.pins); err != nil {
 			return compose.Client{}, err
 		}
-	}
-	if err := phase(ctx, opts, "images.ensure", func(ctx context.Context) error {
-		ensure := images.DefaultEnsureOptions()
-		if opts.ImageWaitTimeout > 0 {
-			ensure.WaitTimeout = opts.ImageWaitTimeout
-		}
-		ensure.Services = p.services
-		ensure.Out = opts.Out
-		ensure.Probe = opts.ImageProbe
-		return images.EnsurePresent(ctx, p.imagesEnv, ensure)
-	}); err != nil {
-		return compose.Client{}, err
 	}
 	serveDir := filepath.Join(opts.Dir(), stack.ServiceTailscale)
 	servePath, err := tsserve.Write(serveDir, p.services.Observability)
@@ -322,7 +337,7 @@ func prepare(ctx context.Context, opts Options, p plan, out *progress.Printer) (
 			return compose.Client{}, err
 		}
 	}
-	if err := secrets.ExportWithKeyring(opts.Keyring, opts.Name, p.secretNames, opts.EnvDeployPath()); err != nil {
+	if err := secrets.Export(opts.secretResolver(), opts.Name, p.secretNames, opts.EnvDeployPath()); err != nil {
 		return compose.Client{}, err
 	}
 	out.Printf("export-env: wrote %s and %s beside it\n", opts.EnvDeployPath(), secrets.GatewayEnvFileName)
@@ -333,6 +348,7 @@ func prepare(ctx context.Context, opts Options, p plan, out *progress.Printer) (
 		Env:         composeEnv(opts, p, serveDir),
 		Run:         opts.DockerRun,
 		Output:      opts.DockerOutput,
+		Stdout:      opts.DockerStdout,
 		LookPath:    opts.DockerLookPath,
 	}, nil
 }
@@ -345,9 +361,7 @@ const keylessHint = "deploy: the gateway has no access keys; anyone who can reac
 // asks the gateway. The check is advice only: when it cannot run, the deploy says
 // so and carries on.
 func hintIfKeyless(ctx context.Context, opts Options, out *progress.Printer) {
-	ctx, cancel := context.WithTimeout(ctx, healthProbeTimeout)
-	defer cancel()
-	open, err := health.Keyless(ctx, &http.Client{Timeout: healthProbeTimeout}, opts.HealthURL)
+	open, err := health.Keyless(ctx, opts.httpClient(), opts.HealthURL)
 	if err != nil {
 		out.Printf("deploy: access key check skipped: %v\n", err)
 		return
@@ -367,7 +381,8 @@ func withDiagnostics(ctx context.Context, opts Options, cc compose.Client, err e
 }
 
 // composeEnv is the variables docker-compose.deploy.yml reads from the deploy. It
-// is passed to each docker command, never set in this process's environment.
+// is passed to each docker command, never set in this process's environment; the
+// secrets reach compose only through the dotenv files Export writes.
 func composeEnv(opts Options, p plan, serveDir string) []string {
 	switchyard, endpoint := "0", ""
 	if p.services.Routers {
@@ -436,30 +451,16 @@ func startStack(ctx context.Context, opts Options, p plan, cc compose.Client, ou
 				return err
 			}
 		}
-		reload := reloadServices(p.services)
-		out.Printf("deploy: recreate %s (reload bind-mounted config)\n", strings.Join(reload, ", "))
-		if opts.PruneFunc == nil {
-			opts.PruneFunc = func(ctx context.Context, gatewayPath string) error {
-				return overlay.PruneContainer(ctx, gatewayPath, overlay.ContainerConfig{Compose: cc, Out: opts.Out})
-			}
-		}
-		return postComposeUpReload(ctx, opts, out, p.gatewayPath, cc.RecreateServices, reload...)
+		return postComposeUpReload(ctx, opts, out, cc, p)
 	})
 }
 
 func runSmoke(ctx context.Context, opts Options, p plan, out *progress.Printer) error {
-	smokeTimeout := opts.SmokeTimeout
-	if smokeTimeout <= 0 {
-		smokeTimeout = smoke.DefaultSmokeTimeout
-	}
-	smokeCtx, smokeCancel := context.WithTimeout(ctx, smokeTimeout)
+	smokeCtx, smokeCancel := context.WithTimeout(ctx, opts.SmokeTimeout)
 	defer smokeCancel()
-	clientKey, err := secrets.Lookup(opts.Keyring, opts.Name, secrets.ClientKeyName)
+	clientKey, err := smokeClientKey(opts, out)
 	if err != nil {
 		return err
-	}
-	if clientKey != "" {
-		out.Printf("deploy: smoke sends the client key (%s)\n", secrets.ClientKeyName)
 	}
 	if p.checks.Providers {
 		out.Println("deploy: provider chat smoke enabled (POLYPUS_SMOKE_PROVIDERS=0 to disable)")
@@ -481,30 +482,38 @@ func runSmoke(ctx context.Context, opts Options, p plan, out *progress.Printer) 
 	})
 }
 
-func postComposeUpReload(
-	ctx context.Context,
-	opts Options,
-	out *progress.Printer,
-	gatewayPath string,
-	recreate func(context.Context, ...string) error,
-	services ...string,
-) error {
-	if err := runPostUpOverlayPrune(ctx, opts, out, gatewayPath); err != nil {
-		return err
+// smokeClientKey reads the environment's client key for the smoke through its
+// secrets resolver, and says when the smoke will send one.
+func smokeClientKey(opts Options, out *progress.Printer) (string, error) {
+	key, _, err := opts.secretResolver().Resolve(opts.Name, secrets.ClientKeyName)
+	if err != nil {
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeFailedPrecondition), "deploy.smoke", "client key").
+			With("keyring_service", opts.Name)
 	}
-	return recreate(ctx, services...)
+	if key != "" {
+		out.Printf("deploy: smoke sends the client key (%s)\n", secrets.ClientKeyName)
+	}
+	return key, nil
 }
 
-func runPostUpOverlayPrune(ctx context.Context, opts Options, out *progress.Printer, gatewayPath string) error {
+// postComposeUpReload runs the overlay prune, then recreates the services whose
+// bind-mounted config must reload.
+func postComposeUpReload(ctx context.Context, opts Options, out *progress.Printer, cc compose.Client, p plan) error {
+	if err := runPostUpOverlayPrune(ctx, opts, out, cc, p.gatewayPath); err != nil {
+		return err
+	}
+	reload := reloadServices(p.services)
+	out.Printf("deploy: recreate %s (reload bind-mounted config)\n", strings.Join(reload, ", "))
+	return cc.RecreateServices(ctx, reload...)
+}
+
+func runPostUpOverlayPrune(ctx context.Context, opts Options, out *progress.Printer, cc compose.Client, gatewayPath string) error {
 	const op = "deploy.overlayPrune"
 	if opts.SkipOverlayPrune {
 		out.Println("deploy: skip overlay prune (--skip-overlay-prune)")
 		return nil
 	}
-	if opts.PruneFunc == nil {
-		return derrors.New(derrors.CodeInvalid, op, "no prune function")
-	}
-	if err := opts.PruneFunc(ctx, gatewayPath); err != nil {
+	if err := opts.prune(cc)(ctx, gatewayPath); err != nil {
 		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "overlay prune")
 	}
 	return nil

@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,6 +24,7 @@ const clientKeyBudget = 2 * time.Minute
 func newDeployClientKeyCmd() *cobra.Command {
 	var config, keyName, healthURL string
 	var rotate, dryRun, skipVerify bool
+	var from secretsFrom
 	cmd := &cobra.Command{
 		Use:   "client-key",
 		Short: "Lock the deployed gateway with a client key, stored in the keyring",
@@ -41,6 +44,9 @@ polypus deploy smoke sends it. Run polypus deploy run first.`,
 				url = env.GatewayURL()
 			}
 			cfg := clientkey.Config{Project: env.Name(), KeyName: keyName, Rotate: rotate, HealthURL: url, SkipVerify: skipVerify}
+			if cfg.Secrets, err = from.resolver(cmd); err != nil {
+				return err
+			}
 			if dryRun {
 				verb := "generate"
 				if rotate {
@@ -54,7 +60,7 @@ polypus deploy smoke sends it. Run polypus deploy run first.`,
 				ctx, cancel := context.WithTimeout(ctx, clientKeyBudget)
 				defer cancel()
 				res, err := clientkey.Lock(ctx, cfg)
-				return reportClientKey(cmd.OutOrStdout(), env, res, err)
+				return secretsConflictExit(cmd, reportClientKey(cmd.OutOrStdout(), env, res, err))
 			})
 		},
 	}
@@ -65,6 +71,7 @@ polypus deploy smoke sends it. Run polypus deploy run first.`,
 	f.BoolVar(&dryRun, "dry-run", false, "print what would happen; change nothing")
 	f.BoolVar(&skipVerify, "skip-verify", false, "skip the 401 and 200 check against the gateway")
 	f.StringVar(&healthURL, "health-url", "", healthURLHelp)
+	from.bind(cmd)
 	return cmd
 }
 
@@ -124,7 +131,7 @@ YAML, or POLYPUS_API_KEY. The value comes from a hidden prompt, or stdin with --
 				_, err := fmt.Fprintf(cmd.OutOrStdout(), "secret set: would store %s in keyring service %s\n", name, env.Name())
 				return err
 			}
-			value, err := readDeploySecret(cmd.ErrOrStderr(), name, fromStdin)
+			value, err := readDeploySecret(cmd.InOrStdin(), cmd.ErrOrStderr(), name, fromStdin)
 			if err != nil {
 				return err
 			}
@@ -146,24 +153,85 @@ YAML, or POLYPUS_API_KEY. The value comes from a hidden prompt, or stdin with --
 // requireEnvironmentSecret refuses names the environment's deploy never reads, so a
 // typo does not land unnoticed in the keyring.
 func requireEnvironmentSecret(env envconfig.Environment, name string) error {
-	names, err := deploy.ExportSecretNames(deploy.Options{GatewayConfig: env.Gateway})
+	names, err := deploy.EnvironmentSecretNames(env)
 	if err != nil {
 		return err
 	}
-	names = append(names, secrets.ClientKeyName)
 	if !slices.Contains(names, name) {
 		return &usageError{err: fmt.Errorf("%s is not a secret this environment uses (%s)", name, strings.Join(names, ", "))}
 	}
 	return nil
 }
 
-func readDeploySecret(errOut io.Writer, name string, fromStdin bool) (string, error) {
+func readDeploySecret(in io.Reader, errOut io.Writer, name string, fromStdin bool) (string, error) {
 	if fromStdin {
-		return readSecretStdin(os.Stdin)
+		return readSecretStdin(in)
 	}
-	v, err := readSecretPrompt(errOut, "polypus deploy secret set", name, os.Stdin)
+	v, err := readSecretPrompt(errOut, "polypus deploy secret set", name, in)
 	if err != nil {
 		return "", err
 	}
 	return validateSecretValue(v)
+}
+
+// secretsFrom is the --secrets-from flag of the commands that read an
+// environment's secrets: where a secret comes from when the shell and the
+// environment's keyring service both hold it.
+type secretsFrom struct{ value string }
+
+func (s *secretsFrom) bind(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&s.value, "secrets-from", "",
+		"take secrets from env (this shell only; the keyring is never read, for CI) or keyring (the environment's keyring service, then its SOPS secrets file); "+
+			"default reads the shell, then the keyring, then the SOPS file, and asks on a terminal when the shell and keyring differ, or fails (env "+secrets.SourceEnvVar+")")
+}
+
+// resolver returns the run's secrets resolver: the flag, else POLYPUS_SECRETS_FROM.
+// On a terminal a conflict is settled by a prompt; with no terminal it fails, and
+// secretsConflictExit turns that into exit status 2.
+func (s *secretsFrom) resolver(cmd *cobra.Command) (*secrets.Resolver, error) {
+	raw := s.value
+	if !cmd.Flags().Changed("secrets-from") {
+		raw = os.Getenv(secrets.SourceEnvVar)
+	}
+	prefer, err := secrets.ParseSource(raw)
+	if err != nil {
+		return nil, &usageError{err: err}
+	}
+	r := &secrets.Resolver{Prefer: prefer, Out: cmd.OutOrStdout()}
+	if in := cmd.InOrStdin(); isTerminal(in) {
+		r.Choose = promptSecretSource(in, cmd.ErrOrStderr())
+	}
+	return r, nil
+}
+
+// promptSecretSource asks the operator which value of a conflicting secret to use.
+// It names both sources and never prints either value.
+func promptSecretSource(in io.Reader, errOut io.Writer) func(*secrets.Conflict) (secrets.Source, error) {
+	reader := bufio.NewReader(in)
+	return func(c *secrets.Conflict) (secrets.Source, error) {
+		errorf(errOut, "deploy: %s is set in this shell and differs from keyring service %s.\n", c.Name, c.App)
+		errorf(errOut, "Use the value from the [s]hell or the [k]eyring for this run? ")
+		line, err := reader.ReadString('\n')
+		if err != nil && line == "" {
+			return secrets.SourceAny, fmt.Errorf("read answer: %w", err)
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "s", "shell", "env":
+			return secrets.SourceEnv, nil
+		case "k", "keyring":
+			return secrets.SourceKeyring, nil
+		}
+		return secrets.SourceAny, fmt.Errorf("answer %q: want shell or keyring", strings.TrimSpace(line))
+	}
+}
+
+// secretsConflictExit makes a secrets conflict nobody settled exit 2 with its
+// message, which names --secrets-from: like a usage error, the operator must
+// choose before the command can run.
+func secretsConflictExit(cmd *cobra.Command, err error) error {
+	var c *secrets.Conflict
+	if errors.As(err, &c) {
+		return &exitError{code: 2, msg: cmd.CommandPath() + ": " + err.Error(), err: err}
+	}
+	return err
 }

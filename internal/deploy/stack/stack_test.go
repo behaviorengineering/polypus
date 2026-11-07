@@ -31,7 +31,7 @@ func TestWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if compose != filepath.Join(dir, ComposeFileName) {
+	if compose != filepath.Join(dir, composeFileName) {
 		t.Fatalf("compose path %q", compose)
 	}
 	for name := range files {
@@ -92,7 +92,7 @@ func TestStackFileModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]os.FileMode{
-		ComposeFileName:              0o600,
+		composeFileName:              0o600,
 		"hyperdx.custom.config.yaml": 0o644,
 		"otelcol.config.yaml":        0o644,
 	}

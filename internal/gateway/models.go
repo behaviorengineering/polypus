@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/statefile"
 
 	"github.com/behaviorengineering/polypus/internal/clients/openaicompat"
@@ -169,10 +170,7 @@ func (h modelsHandler) serveModelsList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h modelsHandler) serveModelsListForSurface(surface modelSurface, w http.ResponseWriter, r *http.Request) {
-	cfg := config.RouterConfig{}
-	if h.registry != nil {
-		cfg = h.registry.Config()
-	}
+	cfg := h.registry.Config()
 	if surface == surfaceSystemOne && !systemOneAPIEnabled(cfg) {
 		h.writeAPINotConfigured(w)
 		return
@@ -193,8 +191,8 @@ func (h modelsHandler) serveModelsListForSurface(surface modelSurface, w http.Re
 	})
 }
 
-func (s *shared) writeAPINotConfigured(w http.ResponseWriter) {
-	s.writeJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
+func (rs responder) writeAPINotConfigured(w http.ResponseWriter) {
+	rs.writeJSON(w, http.StatusNotFound, openaiErrorBody{Error: openaiError{
 		Message: "SystemOne API is not configured on this gateway",
 		Type:    errTypeInvalidRequest,
 		Code:    codeAPINotConfigured,
@@ -206,10 +204,7 @@ func (h modelsHandler) serveModelRetrieve(w http.ResponseWriter, r *http.Request
 }
 
 func (h modelsHandler) serveModelRetrieveForSurface(surface modelSurface, pathPrefix string, w http.ResponseWriter, r *http.Request) {
-	cfg := config.RouterConfig{}
-	if h.registry != nil {
-		cfg = h.registry.Config()
-	}
+	cfg := h.registry.Config()
 	if surface == surfaceSystemOne && !systemOneAPIEnabled(cfg) {
 		h.writeAPINotConfigured(w)
 		return
@@ -222,12 +217,12 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface modelSurface, pathPr
 	}
 	id, err := url.PathUnescape(rawID)
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveModelRetrieve", "invalid model id"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveModelRetrieve", "invalid model id"))
 		return
 	}
 	id = strings.TrimSpace(id)
 	asInventory := inventoryView(r)
-	all := h.collectModelsForRetrieve(r.Context(), r.Header.Get("Authorization"), asInventory, id)
+	all := h.collectModelsForRetrieve(r.Context(), r.Header.Get("Authorization"), asInventory, surface, id)
 	if m, ok := lookupModelForSurface(cfg, all, surface, id); ok {
 		if surface == surfaceOpenAI {
 			setOpenAIModelsCanonicalLink(w)
@@ -243,21 +238,21 @@ func (h modelsHandler) serveModelRetrieveForSurface(surface modelSurface, pathPr
 	}})
 }
 
-// collectModelsForRetrieve loads catalog data for a single model id when not in inventory view.
-func (h modelsHandler) collectModelsForRetrieve(ctx context.Context, inboundAuth string, asInventory bool, targetID string) []openaiModel {
-	if asInventory || h.registry == nil {
+// collectModelsForRetrieve loads catalog data for a single model id when not in
+// inventory view: only the backend the id names, when it names one.
+func (h modelsHandler) collectModelsForRetrieve(ctx context.Context, inboundAuth string, asInventory bool, surface modelSurface, targetID string) []openaiModel {
+	if asInventory {
 		return h.collectModels(ctx, inboundAuth, asInventory)
 	}
 	targetID = strings.TrimSpace(targetID)
-	reg := h.registry
-	cfg := reg.Config()
+	cfg := h.registry.Config()
 	catalog := routerCatalogModels(cfg)
 	for _, m := range catalog {
 		if m.ID == targetID {
 			return catalog
 		}
 	}
-	backendID, _ := backendAndDownstreamForPublicID(cfg, targetID)
+	backendID := retrieveBackend(cfg, surface, targetID)
 	if backendID == "" {
 		return h.collectModels(ctx, inboundAuth, false)
 	}
@@ -268,10 +263,28 @@ func (h modelsHandler) collectModelsForRetrieve(ctx context.Context, inboundAuth
 	ctx, cancel := withModelsBudget(ctx, cfg)
 	defer cancel()
 	results := []backendInventory{{backend: backendID, models: h.inventoryForBackend(ctx, inboundAuth, b)}}
-	h.invCache.flush()
+	h.cache.flush()
 	byID := mergeBackendInventories(cfg, false, results)
 	mergeSeedModels(cfg, false, []string{backendID}, byID, seedModelsFromEnv(cfg))
 	return finalizeModelList(catalog, byID)
+}
+
+// retrieveBackend is the one backend a retrieve of publicID needs to list, or ""
+// when it needs the whole list. A backend prefix names it on either surface. On
+// the SystemOne surface a bare id belongs to the SystemOne backend; on the OpenAI
+// surface a bare id is a default backend's alias, so it is looked up in the same
+// full list GET /v1/models serves.
+func retrieveBackend(cfg config.RouterConfig, surface modelSurface, publicID string) string {
+	if prefix, _, ok := strings.Cut(publicID, "/"); ok && prefix != "" {
+		if _, configured := cfg.Backends[prefix]; configured {
+			return prefix
+		}
+	}
+	if surface != surfaceSystemOne {
+		return ""
+	}
+	backendID, _ := backendAndDownstreamForPublicID(cfg, publicID)
+	return backendID
 }
 
 // tracedProbeClient carries the model-list and health probes: no client Timeout
@@ -297,14 +310,11 @@ func (h modelsHandler) collectModels(ctx context.Context, inboundAuth string, as
 
 // collectModelsWith lists every backend's models in parallel through fetch.
 func (h modelsHandler) collectModelsWith(ctx context.Context, inboundAuth string, asInventory bool, fetch backendFetch) []openaiModel {
-	// Callers fall back here when there is no router, so this is the one guard.
-	if h.shared == nil || h.registry == nil {
-		return nil
-	}
-	ctx, cancel := withModelsBudget(ctx, h.registry.Config())
+	// One config snapshot for the budget and the backend list, so an admin allow
+	// that swaps the registry mid-pass cannot mix two configs.
+	cfg := h.registry.Config()
+	ctx, cancel := withModelsBudget(ctx, cfg)
 	defer cancel()
-	reg := h.registry
-	cfg := reg.Config()
 	ids := cfg.BackendIDs()
 
 	var catalog []openaiModel
@@ -327,7 +337,7 @@ func (h modelsHandler) collectModelsWith(ctx context.Context, inboundAuth string
 	}
 	wg.Wait()
 	// One disk write per pass, not one per backend.
-	h.invCache.flush()
+	h.cache.flush()
 
 	byID := mergeBackendInventories(cfg, asInventory, results)
 	mergeSeedModels(cfg, asInventory, ids, byID, seedModelsFromEnv(cfg))
@@ -338,27 +348,33 @@ func (h modelsHandler) collectModelsWith(ctx context.Context, inboundAuth string
 // catalogue: warm-up, the periodic refresh and an admin allow keep the cache
 // current, so a request serves the cache and dials only a backend with no entry yet.
 func (h modelsHandler) inventoryForBackend(ctx context.Context, inboundAuth string, b config.BackendDef) []openaiModel {
-	if b.Models != nil && !b.Models.ShouldSync() {
+	if !syncsModels(b) {
 		return mergeEnabledSyntheticMissing(b, nil)
 	}
-	if cached, ok := h.invCache.get(b.ID); ok {
+	if cached, ok := h.cache.get(b.ID); ok {
 		return cached
 	}
 	return h.refreshBackend(ctx, inboundAuth, b)
 }
 
+// syncsModels reports whether b's model list comes from the backend. With sync off
+// the list is the configured allow entries only.
+func syncsModels(b config.BackendDef) bool {
+	return b.Models == nil || b.Models.ShouldSync()
+}
+
 // refreshBackend fetches b's model list live and writes it to the cache. When the
 // fetch fails it falls back to the cached list, then to the configured seeds.
 func (h modelsHandler) refreshBackend(ctx context.Context, inboundAuth string, b config.BackendDef) []openaiModel {
-	syncOff := b.Models != nil && !b.Models.ShouldSync()
-	if list := h.liveCatalogLister(b); list != nil {
-		if syncOff {
-			return mergeEnabledSyntheticMissing(b, nil)
-		}
-		return h.liveOrCached(b, h.catalogInventory(ctx, b, list), nil)
-	}
-	if syncOff {
+	if !syncsModels(b) {
 		return mergeEnabledSyntheticMissing(b, nil)
+	}
+	if client, ok, err := h.liveCatalogClient(b); ok {
+		if err != nil {
+			h.log.Warn("polypus: models catalog client failed", "backend", b.ID, "err", err)
+			return h.liveOrCached(b, nil, nil)
+		}
+		return h.liveOrCached(b, h.catalogInventory(ctx, b, client), nil)
 	}
 	live := h.fetchBackendModelsProtected(ctx, inboundAuth, b)
 	if isOpenRouterHost(b.BaseURL) {
@@ -373,15 +389,11 @@ func (h modelsHandler) refreshBackend(ctx context.Context, inboundAuth string, b
 func (h modelsHandler) liveOrCached(b config.BackendDef, live, fallback []openaiModel) []openaiModel {
 	if len(live) > 0 {
 		live = mergeEnabledSyntheticMissing(b, live)
-		if h.invCache != nil {
-			h.invCache.put(b.ID, live)
-		}
+		h.cache.put(b.ID, live)
 		return live
 	}
-	if h.invCache != nil {
-		if cached, ok := h.invCache.get(b.ID); ok {
-			return cached
-		}
+	if cached, ok := h.cache.get(b.ID); ok {
+		return cached
 	}
 	return mergeEnabledSyntheticMissing(b, fallback)
 }
@@ -392,7 +404,7 @@ func syntheticModels(backendID string, allow []string) []openaiModel {
 	for _, id := range ids {
 		out = append(out, openaiModel{
 			ID:      id,
-			Object:  keyModel,
+			Object:  objectModel,
 			Created: 0,
 			OwnedBy: backendID,
 		})
@@ -402,7 +414,7 @@ func syntheticModels(backendID string, allow []string) []openaiModel {
 
 func (h modelsHandler) fetchBackendModelsProtected(ctx context.Context, inboundAuth string, b config.BackendDef) []openaiModel {
 	var out []openaiModel
-	if execErr := h.upstreams.Execute(b.ID, func() error {
+	if execErr := h.upstreams.Execute(ctx, b.ID, func() error {
 		models, err := h.fetchBackendModels(ctx, inboundAuth, b)
 		if err != nil {
 			return err
@@ -415,10 +427,17 @@ func (h modelsHandler) fetchBackendModelsProtected(ctx context.Context, inboundA
 	return out
 }
 
-func (s *shared) mergeOpenRouterDecisionModels(ctx context.Context, inboundAuth string, b config.BackendDef, live []openaiModel) []openaiModel {
-	decisions, err := s.fetchBackendModelsAtURL(ctx, inboundAuth, b, openRouterModelsListURL(b.BaseURL, "decisions"))
+// mergeOpenRouterDecisionModels adds OpenRouter's decision models to live. The
+// fetch runs under the backend's breaker, like the list fetch to the same host.
+func (h modelsHandler) mergeOpenRouterDecisionModels(ctx context.Context, inboundAuth string, b config.BackendDef, live []openaiModel) []openaiModel {
+	var decisions []openaiModel
+	err := h.upstreams.Execute(ctx, b.ID, func() error {
+		var fetchErr error
+		decisions, fetchErr = h.fetchBackendModelsAtURL(ctx, inboundAuth, b, openRouterModelsListURL(b.BaseURL, "decisions"))
+		return fetchErr
+	})
 	if err != nil {
-		s.log.Warn("polypus: openrouter decision models fetch failed", "backend", b.ID, "err", err)
+		h.log.Warn("polypus: openrouter decision models fetch failed", "backend", b.ID, "err", err)
 		return live
 	}
 	if len(decisions) == 0 {
@@ -443,28 +462,29 @@ func openRouterModelsListURL(base string, modality string) string {
 	return withOutputModalities(openAIModelsURL(base), modality)
 }
 
-func (s *shared) fetchBackendModelsAtURL(ctx context.Context, inboundAuth string, b config.BackendDef, target string) ([]openaiModel, error) {
+func (h modelsHandler) fetchBackendModelsAtURL(ctx context.Context, inboundAuth string, b config.BackendDef, target string) ([]openaiModel, error) {
 	const op = "gateway.fetchBackendModels"
 	// A remote backend gets its own credential or nothing: the caller's
 	// Authorization header never leaves for a third-party provider.
 	auth, err := bearerAuthHeader(b)
 	if err != nil {
-		return nil, err
+		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), op, "backend credential").
+			With("backend", b.ID)
 	}
 	if auth == "" && !b.Remote {
 		auth = inboundAuth
 	}
 	// ctx carries the models pass budget (withModelsBudget); the client fails closed
 	// without a deadline.
-	models, err := s.compat.ListModels(ctx, target, auth)
+	models, err := h.compat.ListModels(ctx, target, auth)
 	if err != nil {
 		return nil, gatewayErr(err, op, "list").With("backend", b.ID)
 	}
 	return publicModels(models, b.ID), nil
 }
 
-func (s *shared) fetchBackendModels(ctx context.Context, inboundAuth string, b config.BackendDef) ([]openaiModel, error) {
-	return s.fetchBackendModelsAtURL(ctx, inboundAuth, b, openAIModelsListURL(b.BaseURL))
+func (h modelsHandler) fetchBackendModels(ctx context.Context, inboundAuth string, b config.BackendDef) ([]openaiModel, error) {
+	return h.fetchBackendModelsAtURL(ctx, inboundAuth, b, openAIModelsListURL(b.BaseURL))
 }
 
 // publicModels turns a backend's model list into public ids under the backend.
@@ -473,7 +493,7 @@ func publicModels(models []openaicompat.Model, backendID string) []openaiModel {
 	for _, m := range models {
 		out = append(out, openaiModel{
 			ID:      prefixModelID(backendID, m.ID),
-			Object:  keyModel,
+			Object:  objectModel,
 			Created: m.Created,
 			OwnedBy: firstNonEmpty(m.OwnedBy, backendID),
 		})
@@ -588,7 +608,7 @@ func seedModelsFromEnv(cfg config.RouterConfig) []openaiModel {
 		seen[id] = struct{}{}
 		out = append(out, openaiModel{
 			ID:      id,
-			Object:  keyModel,
+			Object:  objectModel,
 			Created: 0,
 			OwnedBy: backendID,
 		})
@@ -597,7 +617,7 @@ func seedModelsFromEnv(cfg config.RouterConfig) []openaiModel {
 				seen[modelID] = struct{}{}
 				out = append(out, openaiModel{
 					ID:      modelID,
-					Object:  keyModel,
+					Object:  objectModel,
 					Created: 0,
 					OwnedBy: backendID,
 				})
@@ -638,8 +658,8 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-func (s *shared) writeModelNotAllowed(w http.ResponseWriter, model string) {
-	s.writeJSON(w, http.StatusBadRequest, openaiErrorBody{Error: openaiError{
+func (rs responder) writeModelNotAllowed(w http.ResponseWriter, model string) {
+	rs.writeJSON(w, http.StatusBadRequest, openaiErrorBody{Error: openaiError{
 		Message: fmt.Sprintf("The model `%s` is not enabled on this gateway (models.allow)", model),
 		Type:    errTypeInvalidRequest,
 		Param:   keyModel,
@@ -647,14 +667,11 @@ func (s *shared) writeModelNotAllowed(w http.ResponseWriter, model string) {
 	}})
 }
 
-// ensureModelAllowed is the models.allow gate. It fails closed: with no registry,
-// or a backend id the config does not hold, nothing is allowed, and the caller
-// answers with the not-allowed error.
-func (s *shared) ensureModelAllowed(backendID, model string) bool {
-	if s == nil || s.registry == nil {
-		return false
-	}
-	b, ok := s.registry.Config().Backends[backendID]
+// ensureModelAllowed is the models.allow gate. It fails closed: with a backend id
+// the config does not hold nothing is allowed, and the caller answers with the
+// not-allowed error.
+func ensureModelAllowed(reg *router.Registry, backendID, model string) bool {
+	b, ok := reg.Config().Backends[backendID]
 	if !ok {
 		return false
 	}
@@ -664,16 +681,13 @@ func (s *shared) ensureModelAllowed(backendID, model string) bool {
 // ensureSystemOneAllowed is the SystemOne gate (models.systemone_allow for a
 // systemone backend, models.allow otherwise). It fails closed like
 // ensureModelAllowed.
-func (s *shared) ensureSystemOneAllowed(backendID, publicModel, downstream string) bool {
-	if s == nil || s.registry == nil {
-		return false
-	}
-	b, ok := s.registry.Config().Backends[backendID]
+func ensureSystemOneAllowed(reg *router.Registry, backendID, publicModel, downstream string) bool {
+	b, ok := reg.Config().Backends[backendID]
 	if !ok {
 		return false
 	}
 	if !b.HasCapability(config.CapSystemOne) {
-		return s.ensureModelAllowed(backendID, publicModel)
+		return ensureModelAllowed(reg, backendID, publicModel)
 	}
 	down := strings.TrimSpace(downstream)
 	if down == "" {

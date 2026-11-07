@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,15 +16,12 @@ func TestLoadProcessFlagsMLXTrue(t *testing.T) {
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
 
-	flags, err := LoadProcessFlags()
+	flags, err := LoadProcessFlagsFrom("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !flags.MLXSet() || flags.MLX == nil || !*flags.MLX {
 		t.Fatalf("want mlx=true set, got %+v", flags)
-	}
-	if !flags.MLXEnabled(false) {
-		t.Fatal("MLXEnabled(false) should be true when set")
 	}
 }
 
@@ -36,15 +34,12 @@ func TestLoadProcessFlagsMLXFalse(t *testing.T) {
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
 
-	flags, err := LoadProcessFlags()
+	flags, err := LoadProcessFlagsFrom("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !flags.MLXSet() || flags.MLX == nil || *flags.MLX {
 		t.Fatalf("want mlx=false set, got %+v", flags)
-	}
-	if flags.MLXEnabled(true) {
-		t.Fatal("MLXEnabled(true) should be false when set false")
 	}
 }
 
@@ -57,15 +52,25 @@ func TestLoadProcessFlagsOmitted(t *testing.T) {
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
 
-	flags, err := LoadProcessFlags()
+	flags, err := LoadProcessFlagsFrom("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if flags.MLXSet() {
 		t.Fatalf("want mlx unset, got %+v", flags)
 	}
-	if !flags.MLXEnabled(true) {
-		t.Fatal("fallback true expected when unset")
+}
+
+// TestLoadProcessFlagsExplicitPathMustExist keeps --config strict and the error
+// free of repeated "process flags" prefixes.
+func TestLoadProcessFlagsExplicitPathMustExist(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent.yaml")
+	_, err := LoadProcessFlagsFrom(missing)
+	if err == nil || !strings.Contains(err.Error(), "not found") || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("want a not-found error naming %s, got %v", missing, err)
+	}
+	if n := strings.Count(err.Error(), "process flags"); n != 1 {
+		t.Fatalf("\"process flags\" appears %d times: %v", n, err)
 	}
 }
 
@@ -74,7 +79,7 @@ func TestLoadProcessFlagsNoConfig(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("POLYPUS_ROOT", t.TempDir())
 
-	flags, err := LoadProcessFlags()
+	flags, err := LoadProcessFlagsFrom("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,13 +122,13 @@ backends:
 }
 
 func TestParseBoolishEnv(t *testing.T) {
-	if _, ok := ParseBoolishEnv(""); ok {
+	if _, ok := parseBoolishEnv(""); ok {
 		t.Fatal("empty should be unset")
 	}
-	if v, ok := ParseBoolishEnv("1"); !ok || !v {
+	if v, ok := parseBoolishEnv("1"); !ok || !v {
 		t.Fatal("1")
 	}
-	if v, ok := ParseBoolishEnv("off"); !ok || v {
+	if v, ok := parseBoolishEnv("off"); !ok || v {
 		t.Fatal("off")
 	}
 }

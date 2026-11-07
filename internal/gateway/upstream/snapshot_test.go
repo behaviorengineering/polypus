@@ -2,15 +2,16 @@ package upstream
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func TestBoardSnapshotAfterTrip(t *testing.T) {
 	b := NewBoard()
-	fail := errors.New("dial failed")
+	fail := derrors.New(derrors.CodeUnavailable, "router.bifrost", "dial failed")
 	for i := 0; i < 3; i++ {
-		_ = b.Execute("cf_local", func() error { return fail })
+		_ = b.Execute(t.Context(), "cf_local", func() error { return fail })
 	}
 	snap := b.Snapshot()
 	if len(snap) != 1 {
@@ -26,9 +27,9 @@ func TestBoardSnapshotAfterTrip(t *testing.T) {
 
 func TestSnapshotReportsFailsafeMetrics(t *testing.T) {
 	b := NewBoard()
-	fail := errors.New("dial failed")
-	_ = b.Execute("lm_studio", func() error { return nil })
-	_ = b.Execute("lm_studio", func() error { return fail })
+	fail := derrors.New(derrors.CodeUnavailable, "router.bifrost", "dial failed")
+	_ = b.Execute(t.Context(), "lm_studio", func() error { return nil })
+	_ = b.Execute(t.Context(), "lm_studio", func() error { return fail })
 	snap := b.Snapshot()
 	if len(snap) != 1 {
 		t.Fatalf("len=%d", len(snap))

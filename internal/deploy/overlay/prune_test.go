@@ -10,9 +10,9 @@ func yamlAllowGraniteOnly() map[string][]string {
 	}
 }
 
-func windowsOverlayDump() File {
-	return File{
-		Backends: map[string]Backend{
+func windowsOverlayDump() file {
+	return file{
+		Backends: map[string]backend{
 			"deepinfra":  {Allow: []string{"ibm-granite/granite-4.2-8b"}},
 			"openrouter": {Allow: []string{"meta-llama/llama-3.3-70b-instruct"}},
 		},
@@ -20,7 +20,7 @@ func windowsOverlayDump() File {
 }
 
 func TestPruneRemovesGitDuplicateKeepsOverlayOnly(t *testing.T) {
-	out, removed := Prune(windowsOverlayDump(), yamlAllowGraniteOnly())
+	out, removed := prune(windowsOverlayDump(), yamlAllowGraniteOnly())
 	if len(removed) != 1 || removed[0].Backend != "deepinfra" {
 		t.Fatalf("removed %v", removed)
 	}
@@ -36,7 +36,7 @@ func TestPruneRemovesGitDuplicateKeepsOverlayOnly(t *testing.T) {
 func TestPruneRemovesBothWhenYamlHasLlama(t *testing.T) {
 	yaml := yamlAllowGraniteOnly()
 	yaml["openrouter"] = []string{"meta-llama/llama-3.3-70b-instruct"}
-	out, removed := Prune(windowsOverlayDump(), yaml)
+	out, removed := prune(windowsOverlayDump(), yaml)
 	if len(removed) != 2 {
 		t.Fatalf("removed %v", removed)
 	}
@@ -46,7 +46,7 @@ func TestPruneRemovesBothWhenYamlHasLlama(t *testing.T) {
 }
 
 func TestPruneEmptyOverlay(t *testing.T) {
-	out, removed := Prune(File{}, yamlAllowGraniteOnly())
+	out, removed := prune(file{}, yamlAllowGraniteOnly())
 	if len(removed) != 0 {
 		t.Fatalf("removed %v", removed)
 	}
@@ -56,12 +56,12 @@ func TestPruneEmptyOverlay(t *testing.T) {
 }
 
 func TestPruneKeepsUnknownBackend(t *testing.T) {
-	overlay := File{
-		Backends: map[string]Backend{
+	overlay := file{
+		Backends: map[string]backend{
 			"stale_backend": {Allow: []string{"some/model"}},
 		},
 	}
-	out, removed := Prune(overlay, yamlAllowGraniteOnly())
+	out, removed := prune(overlay, yamlAllowGraniteOnly())
 	if len(removed) != 0 {
 		t.Fatalf("removed %v", removed)
 	}
@@ -74,12 +74,12 @@ func TestCanonicalPreservesCase(t *testing.T) {
 	yaml := map[string][]string{
 		"deepinfra": {"google/gemma-3-27b-it"},
 	}
-	overlay := File{
-		Backends: map[string]Backend{
+	overlay := file{
+		Backends: map[string]backend{
 			"deepinfra": {Allow: []string{"google/gemma-3-27B-it"}},
 		},
 	}
-	out, removed := Prune(overlay, yaml)
+	out, removed := prune(overlay, yaml)
 	if len(removed) != 0 {
 		t.Fatalf("case mismatch must not prune: removed %v out %v", removed, out.Backends)
 	}

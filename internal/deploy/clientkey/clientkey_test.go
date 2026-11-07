@@ -110,23 +110,23 @@ func gateway(t *testing.T, key string, lockedStatus int) *httptest.Server {
 	return srv
 }
 
-func TestVerify(t *testing.T) {
+func TestVerifyChecksBothAnswers(t *testing.T) {
 	srv := gateway(t, "pk_secret", http.StatusUnauthorized)
-	if err := Verify(ctx(t), srv.Client(), srv.URL, "pk_secret"); err != nil {
+	if err := verify(ctx(t), srv.Client(), srv.URL, "pk_secret"); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestVerifyGatewayStillOpen(t *testing.T) {
 	srv := gateway(t, "pk_secret", http.StatusOK)
-	if err := Verify(ctx(t), srv.Client(), srv.URL, "pk_secret"); err == nil || !strings.Contains(err.Error(), "want 401") {
+	if err := verify(ctx(t), srv.Client(), srv.URL, "pk_secret"); err == nil || !strings.Contains(err.Error(), "want 401") {
 		t.Fatalf("err = %v, want an open gateway reported", err)
 	}
 }
 
 func TestVerifyWrongKey(t *testing.T) {
 	srv := gateway(t, "pk_secret", http.StatusUnauthorized)
-	if err := Verify(ctx(t), srv.Client(), srv.URL, "pk_other"); err == nil || !strings.Contains(err.Error(), "want 200") {
+	if err := verify(ctx(t), srv.Client(), srv.URL, "pk_other"); err == nil || !strings.Contains(err.Error(), "want 200") {
 		t.Fatalf("err = %v, want the key rejected", err)
 	}
 }
@@ -196,5 +196,44 @@ func TestLockNeedsHealthURLToVerify(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "health URL required") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestLockShellKeyThatDiffersIsAConflict checks a POLYPUS_API_KEY exported for
+// another gateway is never used silently to verify this one.
+func TestLockShellKeyThatDiffersIsAConflict(t *testing.T) {
+	t.Setenv(secrets.ClientKeyName, "pk_other_gateway")
+	srv := gateway(t, "pk_secret", http.StatusUnauthorized)
+	var calls [][]string
+	res, err := Lock(ctx(t), Config{
+		Project:   "polypus-work",
+		Keyring:   operatorconfig.NewMemKeyring(),
+		Docker:    fakeDocker("c\n", `{"name":"client","key":"pk_secret"}`, nil, &calls),
+		HealthURL: srv.URL,
+		HTTP:      srv.Client(),
+	})
+	var c *secrets.Conflict
+	if !errors.As(err, &c) || c.Name != secrets.ClientKeyName {
+		t.Fatalf("err = %v, want a *secrets.Conflict for the client key", err)
+	}
+	if res.Name != "client" {
+		t.Fatalf("result = %+v, want the stored key named", res)
+	}
+}
+
+func TestLockVerifiesWithTheKeyringWhenChosen(t *testing.T) {
+	t.Setenv(secrets.ClientKeyName, "pk_other_gateway")
+	srv := gateway(t, "pk_secret", http.StatusUnauthorized)
+	var calls [][]string
+	res, err := Lock(ctx(t), Config{
+		Project:   "polypus-work",
+		Keyring:   operatorconfig.NewMemKeyring(),
+		Secrets:   &secrets.Resolver{Prefer: secrets.SourceKeyring},
+		Docker:    fakeDocker("c\n", `{"name":"client","key":"pk_secret"}`, nil, &calls),
+		HealthURL: srv.URL,
+		HTTP:      srv.Client(),
+	})
+	if err != nil || res.VerifiedURL != srv.URL {
+		t.Fatalf("Lock = %+v, %v; want verified with the stored key", res, err)
 	}
 }

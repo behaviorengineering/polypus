@@ -1,7 +1,10 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -9,6 +12,27 @@ import (
 
 // TimeoutHeader is the optional client override (Go duration or integer seconds).
 const TimeoutHeader = "X-Polypus-Timeout"
+
+// callerBudgetKey marks a context whose deadline the caller chose.
+type callerBudgetKey struct{}
+
+// WithCallerBudget marks ctx as running on a budget the caller chose: its
+// TimeoutHeader is shorter than the hop timeout the gateway would set by itself. A
+// deadline that ends such a call is the caller's choice, not a slow backend, so the
+// backend's circuit breaker does not count it.
+func WithCallerBudget(ctx context.Context) context.Context {
+	return context.WithValue(ctx, callerBudgetKey{}, true)
+}
+
+// CallerBudgetFrom reports whether WithCallerBudget marked ctx. A nil ctx is not
+// marked.
+func CallerBudgetFrom(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	marked, ok := ctx.Value(callerBudgetKey{}).(bool)
+	return ok && marked
+}
 
 // InterventionHeader labels Polypus-owned rewrites or refuses on the response.
 const InterventionHeader = "X-Polypus-Intervention"
@@ -21,7 +45,9 @@ const (
 	defaultTimeoutVision       = 300 * time.Second
 	defaultTimeoutEmbed        = 15 * time.Second
 	defaultTimeoutSpeech       = 180 * time.Second
-	defaultTimeoutChatCF       = 60 * time.Second
+	// defaultTimeoutChatCF is the chat budget of every Cloudflare backend that sets
+	// none of its own (fillCloudflareChatTimeouts).
+	defaultTimeoutChatCF = 60 * time.Second
 	// defaultStreamIdle is the longest gap allowed between chunks of a chat stream.
 	// Generous, so a long thinking pause is not cut off; Anthropic pings reset it.
 	defaultStreamIdle = 5 * time.Minute
@@ -67,7 +93,9 @@ type backendTOFile struct {
 	StreamIdle   string `yaml:"stream_idle"`
 }
 
-// DefaultTimeouts returns hang ceilings for chat (thinking off), vision, embed, and speech.
+// DefaultTimeouts returns hang ceilings for chat (thinking off), vision, embed, and
+// speech. Per-backend defaults depend on the backends, so the config load fills
+// them (fillCloudflareChatTimeouts).
 func DefaultTimeouts() Timeouts {
 	return Timeouts{
 		Min:          defaultTimeoutMin,
@@ -78,9 +106,7 @@ func DefaultTimeouts() Timeouts {
 		Embed:        defaultTimeoutEmbed,
 		Speech:       defaultTimeoutSpeech,
 		StreamIdle:   defaultStreamIdle,
-		Backends: map[string]BackendTimeouts{
-			"cf_local": {Chat: defaultTimeoutChatCF},
-		},
+		Backends:     map[string]BackendTimeouts{},
 	}
 }
 
@@ -118,11 +144,9 @@ func parseTimeoutsFile(file timeoutsFile) (Timeouts, error) {
 	}); err != nil {
 		return Timeouts{}, err
 	}
-	if len(file.Backends) > 0 && out.Backends == nil {
-		out.Backends = map[string]BackendTimeouts{}
-	}
-	for id, entry := range file.Backends {
-		id = strings.TrimSpace(id)
+	for _, rawID := range slices.Sorted(maps.Keys(file.Backends)) {
+		entry := file.Backends[rawID]
+		id := strings.TrimSpace(rawID)
 		if id == "" {
 			continue
 		}
@@ -148,15 +172,15 @@ func overlayDuration(raw string, cur time.Duration) (time.Duration, error) {
 	if raw == "" {
 		return cur, nil
 	}
-	d, err := ParseTimeoutValue(raw)
+	d, err := parseTimeoutValue(raw)
 	if err != nil {
 		return 0, err
 	}
 	return d, nil
 }
 
-// ParseTimeoutValue accepts a Go duration ("120s") or integer seconds ("120").
-func ParseTimeoutValue(raw string) (time.Duration, error) {
+// parseTimeoutValue accepts a Go duration ("120s") or integer seconds ("120").
+func parseTimeoutValue(raw string) (time.Duration, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return 0, fmt.Errorf("empty timeout")
@@ -174,8 +198,8 @@ func ParseTimeoutValue(raw string) (time.Duration, error) {
 	return time.Duration(sec) * time.Second, nil
 }
 
-// Clamp bounds d to Min..Max.
-func (t Timeouts) Clamp(d time.Duration) time.Duration {
+// clamp bounds d to Min..Max.
+func (t Timeouts) clamp(d time.Duration) time.Duration {
 	lo := t.Min
 	hi := t.Max
 	if lo <= 0 {
@@ -233,11 +257,11 @@ func ChatKindOf(vision, thinking bool) ChatKind {
 // headerOr is the caller's timeout header when it parses, else fallback, clamped.
 func (t Timeouts) headerOr(header string, fallback time.Duration) time.Duration {
 	if raw := strings.TrimSpace(header); raw != "" {
-		if d, err := ParseTimeoutValue(raw); err == nil {
-			return t.Clamp(d)
+		if d, err := parseTimeoutValue(raw); err == nil {
+			return t.clamp(d)
 		}
 	}
-	return t.Clamp(fallback)
+	return t.clamp(fallback)
 }
 
 func firstPositive(ds ...time.Duration) time.Duration {
@@ -271,11 +295,6 @@ func (t Timeouts) ResolveSpeech(header string) time.Duration {
 	return t.headerOr(header, t.Speech)
 }
 
-// SpeechSeconds is the Bifrost per-provider request timeout for speech-only configs.
-func (t Timeouts) SpeechSeconds() int {
-	return t.seconds(t.Speech, defaultTimeoutSpeech)
-}
-
 // ProviderSeconds is the Bifrost network timeout covering chat/embed/speech hops.
 func (t Timeouts) ProviderSeconds() int {
 	return t.seconds(t.Max, defaultTimeoutMax)
@@ -286,5 +305,23 @@ func (t Timeouts) seconds(d, def time.Duration) int {
 	if d <= 0 {
 		d = def
 	}
-	return max(1, int(t.Clamp(d).Seconds()))
+	return max(1, int(t.clamp(d).Seconds()))
+}
+
+// fillCloudflareChatTimeouts gives each Cloudflare backend the Cloudflare chat
+// budget unless the config set its own chat timeout. It keys on the extension, not
+// on a backend id such as cf_local.
+func fillCloudflareChatTimeouts(cfg *RouterConfig) {
+	for id, b := range cfg.Backends {
+		if !b.IsCloudflareExtension() {
+			continue
+		}
+		if cfg.Timeouts.Backends == nil {
+			cfg.Timeouts.Backends = map[string]BackendTimeouts{}
+		}
+		if bt := cfg.Timeouts.Backends[id]; bt.Chat == 0 {
+			bt.Chat = defaultTimeoutChatCF
+			cfg.Timeouts.Backends[id] = bt
+		}
+	}
 }

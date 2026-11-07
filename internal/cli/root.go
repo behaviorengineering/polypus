@@ -77,9 +77,7 @@ func addUsedGroups(root *cobra.Command) {
 }
 
 func newServeCmd() *cobra.Command {
-	var host string
-	var port int
-	var backend string
+	var o serveOpts
 	cmd := &cobra.Command{
 		Use:     "serve",
 		Short:   "Start gateway (see --host, --port, --backend)",
@@ -87,18 +85,26 @@ func newServeCmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		Long: `Start the Polypus OpenAI-compatible gateway on loopback.
 
-Environment: POLYPUS_HOST, POLYPUS_PORT, POLYPUS_BACKEND_URL, POLYPUS_MLX_HOST, POLYPUS_MLX_PORT
+Config: POLYPUS_CONFIG, else ~/.config/polypus/config.yaml, $POLYPUS_ROOT/config.yaml,
+./config.yaml. None found serves the env-only MLX default. A POLYPUS_CONFIG path
+that does not exist is an error.
+Access keys: POLYPUS_ADMIN_KEYS, else $XDG_STATE_HOME/polypus/admin-api-keys.json
+(~/.local/state/polypus/admin-api-keys.json).
+
+Environment: POLYPUS_HOST, POLYPUS_PORT, POLYPUS_BASE_URL (the URL Switchyard calls back on)
+POLYPUS_BACKEND_URL (or POLYPUS_MLX_URL, POLYPUS_MLX_HOST, POLYPUS_MLX_PORT) replaces the
+config's backends.mlx_local.base_url only when set; --backend does the same.
 POLYPUS_OTEL, POLYPUS_OTLP_ENDPOINT, POLYPUS_FAILURE_DUMP_DIR, POLYPUS_SERVICE_NAME
 POLYPUS_OTEL_SKIP_PATHS (comma list; default /health; "none" traces all paths)
 
 config processes.mlx (bool) drives whether go tool task serve starts the MLX process.
 POLYPUS_ENABLE_MLX still overrides when set.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return exitStatus(runServeWithOpts(cmd.Context(), cmd.ErrOrStderr(), host, port, backend))
+			return runServe(ioFor(cmd), o)
 		},
 	}
-	cmd.Flags().StringVar(&host, "host", "", "gateway listen host (default POLYPUS_HOST or 127.0.0.1)")
-	cmd.Flags().IntVar(&port, "port", 0, "gateway listen port (default POLYPUS_PORT or 1320)")
-	cmd.Flags().StringVar(&backend, "backend", "", "speech backend base URL (default POLYPUS_BACKEND_URL)")
+	cmd.Flags().StringVar(&o.host, "host", "", "gateway listen host (default POLYPUS_HOST or 127.0.0.1)")
+	cmd.Flags().IntVar(&o.port, "port", 0, "gateway listen port (default POLYPUS_PORT or 1320)")
+	cmd.Flags().StringVar(&o.backend, "backend", "", "MLX speech backend base URL; replaces the config's mlx_local base_url (default POLYPUS_BACKEND_URL)")
 	return cmd
 }

@@ -5,20 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/admin/keys"
 	"github.com/behaviorengineering/polypus/internal/batch"
-	"github.com/behaviorengineering/polypus/internal/clients/anthropic"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
-	"github.com/behaviorengineering/polypus/internal/clients/gemini"
 	"github.com/behaviorengineering/polypus/internal/clients/openaicompat"
 	"github.com/behaviorengineering/polypus/internal/clients/openrouter"
 	"github.com/behaviorengineering/polypus/internal/config"
@@ -28,78 +26,107 @@ import (
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
-
-// shared holds dependencies used by capability handlers.
-type shared struct {
-	routerParts
-	opts          config.ServeOptions
-	proxy         http.Handler
-	invCache      *modelsInventoryCache
-	timeouts      config.Timeouts
-	upstreams     *upstream.Board
-	cfGet         cloudflareClientGet
-	geminiGet     geminiClientGet
-	anthropicGet  anthropicClientGet
-	openRouterGet func(config.BackendDef) (*openrouter.Client, error)
-	batchStore    *batch.DiskStore
-	batches       *batches.Service
-	claudeBatches batches.ClaudeBatches
-	// clock is the gateway's job clock: batch stamps, cache entries, dump names.
-	clock       func() time.Time
-	overlayPath string
-	adminKeys   *keys.Store
-	uiMounts    []uiProxyMount
-	log         *slog.Logger
-	compat      openaicompat.Client
-	models      config.ModelsInventory
-	// dumpDir receives failure dumps the debug route serves; empty turns them off.
-	dumpDir string
-	// traceSkipPaths are HTTP paths that get no SERVER span.
-	traceSkipPaths []string
-}
 
 // gatewayHandler is the Polypus HTTP mux (controller) over capability handlers.
+// Each capability handler holds only the dependencies its routes use;
+// createShared builds them all from config.
 type gatewayHandler struct {
-	*shared
+	responder
+	registry *router.Registry
+	// proxy serves the voices list from the proxy backend.
+	proxy    http.Handler
+	uiMounts []uiProxyMount
+	// clients is for the startup credential probe.
+	clients backendClients
+	// closeRouter releases a router the gateway built itself; nil when injected.
+	closeRouter func()
+	// closeOnce makes Close safe to call more than once.
+	closeOnce sync.Once
+	// traceSkipPaths are HTTP paths that get no SERVER span.
+	traceSkipPaths []string
+
+	chat      chatHandler
+	speech    speechHandler
+	systemOne systemOneHandler
+	models    modelsHandler
+	health    healthHandler
+	catalog   apiCatalogHandler
+	files     filesHandler
+	batches   batchesHandler
+	admin     adminHandler
 }
 
-type (
-	chatHandler   struct{ *shared }
-	modelsHandler struct{ *shared }
-	healthHandler struct{ *shared }
-	speechHandler struct{ *shared }
-)
-
-func (s *shared) cloudflareClient(b config.BackendDef) (*cloudflare.Client, error) {
-	return s.cfGet(b)
+// chatHandler serves chat completions, named routers and embeddings.
+type chatHandler struct {
+	responder
+	registry  *router.Registry
+	chat      chatRouter
+	upstreams *upstream.Board
+	timeouts  config.Timeouts
+	// dumps is where streams dump the chunks they drop.
+	dumps chunkDumpSink
 }
 
-func (s *shared) geminiClient(b config.BackendDef) (*gemini.Client, error) {
-	return s.geminiGet(b)
+// speechHandler serves text to speech and transcription.
+type speechHandler struct {
+	responder
+	registry  *router.Registry
+	speech    speechRouter
+	upstreams *upstream.Board
+	timeouts  config.Timeouts
 }
 
-func (s *shared) anthropicClient(b config.BackendDef) (*anthropic.Client, error) {
-	return s.anthropicGet(b)
+// modelsHandler serves the model lists and keeps the inventory cache.
+type modelsHandler struct {
+	responder
+	registry *router.Registry
+	cache    *modelsInventoryCache
+	// inventory is the models warm-up, refresh and cache settings.
+	inventory config.ModelsInventory
+	clients   backendClients
+	upstreams *upstream.Board
+	compat    openaicompat.Client
 }
 
-// chunkDumps is where this gateway's streams dump the chunks they drop.
-func (s *shared) chunkDumps() chunkDumpSink {
-	return chunkDumpSink{dir: s.dumpDir, log: s.log, now: s.clock}
+// healthHandler serves the health probes and the failure dumps.
+type healthHandler struct {
+	responder
+	registry  *router.Registry
+	upstreams *upstream.Board
+	compat    openaicompat.Client
+	clients   backendClients
+	// dumpDir receives failure dumps the debug route serves; empty turns them off.
+	dumpDir string
+	// switchyardEnabled is POLYPUS_SWITCHYARD, read once when the gateway is built.
+	switchyardEnabled bool
+	// probeTimeout bounds one round of backend probes.
+	probeTimeout time.Duration
 }
 
-// NewHandler returns the public Polypus HTTP handler (*Gateway).
-// It does not write Switchyard TOML; ListenAndServe (process startup) does.
-// Tests pass withRouter to inject a fake and skip bifrost.Init.
+// Handler is the public Polypus HTTP handler. Close releases the router it built
+// (Bifrost workers and pooled connections): call it once the server that serves the
+// handler has shut down, or when the host replaces the handler, for example on a
+// config reload. Requests still in flight when Close runs may fail.
+type Handler interface {
+	http.Handler
+	io.Closer
+}
+
+// NewHandler returns the public Polypus HTTP handler. The caller owns it and calls
+// Close when done with it. It does not write Switchyard TOML; ListenAndServe
+// (process startup) does. Tests pass withRouter to inject a fake and skip
+// bifrost.Init.
 //
 // NewHandler is a process entry for hosts that only want the handler, so it starts
 // the router with a fresh context; ListenAndServe passes its own startup context.
-func NewHandler(opts config.ServeOptions, options ...HandlerOption) (http.Handler, error) {
+func NewHandler(opts config.ServeOptions, options ...HandlerOption) (Handler, error) {
 	return newHandler(context.Background(), opts, options...)
 }
 
 // newHandler is NewHandler with the startup context the router's Bifrost runs under.
-func newHandler(ctx context.Context, opts config.ServeOptions, options ...HandlerOption) (http.Handler, error) {
+func newHandler(ctx context.Context, opts config.ServeOptions, options ...HandlerOption) (Handler, error) {
 	const op = "gateway.NewHandler"
 	var ho handlerOptions
 	for _, opt := range options {
@@ -118,12 +145,10 @@ func newHandler(ctx context.Context, opts config.ServeOptions, options ...Handle
 	if err != nil {
 		return nil, err
 	}
-	s, err := sharedConfig{
-		serve:     opts,
+	g, err := sharedConfig{
 		options:   ho,
 		router:    parts,
 		routerCfg: rcfg,
-		adminKeys: adminKeys,
 	}.createShared()
 	if err != nil {
 		if parts.closeRouter != nil {
@@ -131,7 +156,7 @@ func newHandler(ctx context.Context, opts config.ServeOptions, options ...Handle
 		}
 		return nil, err
 	}
-	return wrapGatewayAccess(adminKeys, &gatewayHandler{shared: s}), nil
+	return wrapGatewayAccess(adminKeys, g), nil
 }
 
 // openRouter returns the injected router, or loads the router config, applies the
@@ -154,11 +179,10 @@ func openRouter(ctx context.Context, opts config.ServeOptions, ho handlerOptions
 	for _, s := range skipped {
 		ho.logger.Warn("polypus: allow overlay backend skipped", "backend", s.Backend, "reason", s.Reason)
 	}
-	clientOpts := []router.ClientOption{router.WithLogger(ho.logger)}
-	if ho.cfGet != nil {
-		clientOpts = append(clientOpts, router.WithCloudflareClientGet(router.CloudflareClientGet(ho.cfGet)))
-	}
-	client, err := router.NewClient(ctx, loaded, clientOpts...)
+	// fillDefaults always sets cfGet, so the router's speech plugin shares the
+	// gateway's Cloudflare client cache.
+	client, err := router.NewClient(ctx, loaded, router.WithLogger(ho.logger),
+		router.WithCloudflareClientGet(router.CloudflareClientGet(ho.cfGet)))
 	if err != nil {
 		return routerParts{}, config.RouterConfig{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), op, "bifrost client")
 	}
@@ -167,19 +191,18 @@ func openRouter(ctx context.Context, opts config.ServeOptions, ho handlerOptions
 	return parts, loaded, nil
 }
 
-// sharedConfig is everything createShared needs to build one gateway's state.
+// sharedConfig is everything createShared needs to build one gateway.
 type sharedConfig struct {
-	serve     config.ServeOptions
 	options   handlerOptions
 	router    routerParts
 	routerCfg config.RouterConfig
-	adminKeys *keys.Store
 }
 
-// createShared builds the per-gateway state: fallback proxy, timeouts, batch store
-// and UI mounts. The caller closes an owned router when it fails. options must have
-// been through fillDefaults.
-func (c sharedConfig) createShared() (*shared, error) {
+// createShared is the one assembly point: it builds the state the handlers share
+// (breakers, timeouts, client getters, batch store, models cache, fallback proxy and
+// UI mounts) and hands each capability handler the part it uses. The caller closes
+// an owned router when it fails. options must have been through fillDefaults.
+func (c sharedConfig) createShared() (*gatewayHandler, error) {
 	const op = "gateway.createShared"
 	ho := c.options
 	if ho.clock == nil || ho.logger == nil || ho.policies == nil || c.router.registry == nil {
@@ -197,73 +220,100 @@ func (c sharedConfig) createShared() (*shared, error) {
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), op, "batch store")
 	}
-	models, err := config.LoadModelsInventory()
+	inventory, err := config.LoadModelsInventory()
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), op, "models inventory")
 	}
-	sh := &shared{
-		routerParts:    c.router,
-		models:         models,
-		opts:           c.serve,
-		invCache:       newModelsInventoryCache(ho.logger, models.CacheTTL, ho.clock),
-		timeouts:       timeouts,
-		upstreams:      upstream.NewBoard(),
-		cfGet:          ho.cfGet,
-		geminiGet:      ho.geminiGet,
-		anthropicGet:   ho.anthropicGet,
-		openRouterGet:  ho.openRouterGet,
-		batchStore:     batchStore,
-		clock:          ho.clock,
-		overlayPath:    ho.overlayPath,
-		adminKeys:      c.adminKeys,
-		log:            ho.logger,
-		dumpDir:        ho.dumpDir,
-		traceSkipPaths: ho.traceSkipPaths,
-		compat:         openaicompat.Client{HTTP: tracedProbeClient, Policies: ho.policies},
-	}
-	if sh.proxy, err = sh.newFallbackProxy(sh.registry.ProxyBackendURL()); err != nil {
+	rs := responder{log: ho.logger}
+	reg := c.router.registry
+	upstreams := upstream.NewBoard()
+	clients := backendClients{cf: ho.cfGet, gemini: ho.geminiGet, anthropic: ho.anthropicGet, openRouter: ho.openRouterGet}
+	compat := openaicompat.Client{HTTP: tracedProbeClient, Policies: ho.policies}
+
+	proxy, err := newFallbackProxy(rs, reg.ProxyBackendURL())
+	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, op, "fallback proxy")
 	}
-	if sh.uiMounts, err = sh.buildUIMounts(c.routerCfg.UIProxies); err != nil {
+	uiMounts, err := buildUIMounts(rs, c.routerCfg.UIProxies)
+	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, op, "ui proxies")
 	}
-	sh.claudeBatches = ho.claudeBatches
-	if c.router.bifrost != nil && sh.claudeBatches == nil {
-		sh.claudeBatches = router.NewClaudeBatches(c.router.bifrost)
+	submitters := batchSubmitters{claude: ho.claudeBatches, clients: clients, clock: ho.clock}
+	if c.router.bifrost != nil && submitters.claude == nil {
+		submitters.claude = router.NewClaudeBatches(c.router.bifrost)
 	}
-	sh.batches, err = batches.Config{
+	batchService, err := batches.Config{
 		Store:     batchStore,
-		Breakers:  sh.upstreams,
+		Breakers:  upstreams,
 		Now:       ho.clock,
-		Submitter: sh.batchSubmitter,
+		Submitter: submitters.submitter,
 		Logger:    ho.logger,
 	}.CreateService()
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInternal), op, "batch service")
 	}
-	return sh, nil
+
+	models := modelsHandler{
+		responder: rs, registry: reg, cache: newModelsInventoryCache(ho.logger, inventory.CacheTTL, ho.clock),
+		inventory: inventory, clients: clients, upstreams: upstreams, compat: compat,
+	}
+	return &gatewayHandler{
+		responder:      rs,
+		registry:       reg,
+		proxy:          proxy,
+		uiMounts:       uiMounts,
+		clients:        clients,
+		closeRouter:    c.router.closeRouter,
+		traceSkipPaths: ho.traceSkipPaths,
+		chat: chatHandler{
+			responder: rs, registry: reg, chat: c.router.chat, upstreams: upstreams, timeouts: timeouts,
+			dumps: chunkDumpSink{preview: ho.streamChunkPreview, dir: ho.dumpDir, log: ho.logger, now: ho.clock},
+		},
+		speech: speechHandler{responder: rs, registry: reg, speech: c.router.speech, upstreams: upstreams, timeouts: timeouts},
+		systemOne: systemOneHandler{
+			responder: rs, registry: reg, systemOne: c.router.systemOne, clients: clients, upstreams: upstreams, timeouts: timeouts,
+		},
+		models: models,
+		health: healthHandler{
+			responder: rs, registry: reg, upstreams: upstreams, compat: compat, clients: clients,
+			dumpDir: ho.dumpDir, switchyardEnabled: config.SwitchyardEnabled(), probeTimeout: ho.probeTimeout,
+		},
+		catalog: apiCatalogHandler{responder: rs, registry: reg},
+		files:   filesHandler{responder: rs, batchStore: batchStore},
+		batches: batchesHandler{responder: rs, registry: reg, batchStore: batchStore, batches: batchService, timeouts: timeouts},
+		admin:   adminHandler{responder: rs, registry: reg, overlayPath: ho.overlayPath, models: models},
+	}, nil
 }
 
-// batchSubmitter picks the batch submitter for a backend.
-func (s *shared) batchSubmitter(b config.BackendDef) (batches.Submitter, error) {
+// batchSubmitters picks the batch submitter for a backend.
+type batchSubmitters struct {
+	// claude is the Anthropic Message Batches surface; nil without a Bifrost router.
+	claude  batches.ClaudeBatches
+	clients backendClients
+	// clock is the gateway's job clock.
+	clock func() time.Time
+}
+
+func (s batchSubmitters) submitter(b config.BackendDef) (batches.Submitter, error) {
 	switch {
 	case b.IsAnthropicExtension():
-		if s.claudeBatches == nil {
+		if s.claude == nil {
 			return nil, derrors.New(derrors.CodeNotReady, "gateway.batchSubmitter", "claude batches need the bifrost router").
 				With("backend", b.ID)
 		}
-		return batches.NewClaudeSubmitter(s.claudeBatches, b), nil
+		return batches.NewClaudeSubmitter(s.claude, b), nil
 	case b.IsOpenRouter():
-		return batches.NewOpenRouterSubmitter(func() (*openrouter.Client, error) { return s.openRouterGet(b) }), nil
+		return batches.NewOpenRouterSubmitter(func() (*openrouter.Client, error) { return s.clients.openRouterClient(b) }), nil
 	case b.IsCloudflareExtension():
-		return batches.NewCloudflareSubmitter(func() (*cloudflare.Client, error) { return s.cloudflareClient(b) }, s.clock), nil
+		return batches.NewCloudflareSubmitter(func() (*cloudflare.Client, error) { return s.clients.cloudflareClient(b) }, s.clock), nil
 	default:
 		return nil, derrors.New(derrors.CodeFailedPrecondition, "gateway.batchSubmitter",
 			"batch only supported for cloudflare, openrouter and anthropic backends").With("backend", b.ID)
 	}
 }
 
-func (s *shared) newFallbackProxy(backendURL string) (http.Handler, error) {
+// newFallbackProxy proxies to the proxy backend, answering a failed dial through rs.
+func newFallbackProxy(rs responder, backendURL string) (http.Handler, error) {
 	target, err := url.Parse(backendURL)
 	if err != nil {
 		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gateway.newFallbackProxy", "backend url").
@@ -275,7 +325,7 @@ func (s *shared) newFallbackProxy(backendURL string) (http.Handler, error) {
 			pr.Out.Host = target.Host
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			s.writeErrorJSON(w, http.StatusBadGateway,
+			rs.writeErrorJSON(w, r, http.StatusBadGateway,
 				derrors.Wrap(err, derrors.CodeUnavailable, "gateway.backendProxy", "polypus backend unavailable"), "")
 		},
 	}
@@ -340,74 +390,70 @@ var gatewayRoutes = []gatewayRoute{
 	{path: "/", methods: methodsAny, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) { g.serveLanding(w, r) }},
 	{path: bannerAssetPath, methods: methodsAny, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) { g.serveBannerWebP(w, r) }},
 	{path: pathHealth, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		healthHandler{g.shared}.serveHealth(w, r)
+		g.health.serveHealth(w, r)
 	}},
 	{path: pathHealthBackends, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		healthHandler{g.shared}.serveBackendHealth(w, r)
+		g.health.serveBackendHealth(w, r)
 	}},
 	{path: pathHealthUpstreams, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		healthHandler{g.shared}.serveUpstreamHealth(w, r)
+		g.health.serveUpstreamHealth(w, r)
 	}},
 	{path: pathDebugFailures, prefix: true, methods: methodsGet, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		healthHandler{g.shared}.serveFailureDump(w, r)
+		g.health.serveFailureDump(w, r)
 	}},
 	{path: pathAPIs, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		apiCatalogHandler{g.shared}.serveCatalog(w, r)
+		g.catalog.serveCatalog(w, r)
 	}},
 	{path: pathOpenAISpec, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) { g.serveOpenAPISpec(w, r) }},
 	{path: pathSystemOneSchema, methods: methodsRead, serve: (*gatewayHandler).serveSystemOneSchemaRoute},
 	{path: pathOpenAIModels, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		modelsHandler{g.shared}.serveModelsListForSurface(surfaceOpenAI, w, r)
+		g.models.serveModelsListForSurface(surfaceOpenAI, w, r)
 	}},
 	{path: pathOpenAIModels + "/", prefix: true, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		modelsHandler{g.shared}.serveModelRetrieveForSurface(surfaceOpenAI, pathOpenAIModels+"/", w, r)
+		g.models.serveModelRetrieveForSurface(surfaceOpenAI, pathOpenAIModels+"/", w, r)
 	}},
 	{path: pathSystemOneModels, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		modelsHandler{g.shared}.serveModelsListForSurface(surfaceSystemOne, w, r)
+		g.models.serveModelsListForSurface(surfaceSystemOne, w, r)
 	}},
 	{path: pathSystemOneModels + "/", prefix: true, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		modelsHandler{g.shared}.serveModelRetrieveForSurface(surfaceSystemOne, pathSystemOneModels+"/", w, r)
+		g.models.serveModelRetrieveForSurface(surfaceSystemOne, pathSystemOneModels+"/", w, r)
 	}},
 	{path: pathModels, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		modelsHandler{g.shared}.serveModelsList(w, r)
+		g.models.serveModelsList(w, r)
 	}},
 	{path: pathModelsPrefix, prefix: true, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		modelsHandler{g.shared}.serveModelRetrieve(w, r)
+		g.models.serveModelRetrieve(w, r)
 	}},
 	{path: pathChatCompletions, methods: methodsPost, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		chatHandler{g.shared}.serveChatCompletions(w, r)
+		g.chat.serveChatCompletions(w, r)
 	}},
 	{path: pathEmbeddings, methods: methodsPost, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		chatHandler{g.shared}.serveEmbeddings(w, r)
+		g.chat.serveEmbeddings(w, r)
 	}},
 	{path: pathAudioSpeech, methods: methodsPost, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		speechHandler{g.shared}.serveSpeech(w, r)
+		g.speech.serveSpeech(w, r)
 	}},
 	{path: pathAudioTranscriptions, methods: methodsPost, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		speechHandler{g.shared}.serveTranscription(w, r)
+		g.speech.serveTranscription(w, r)
 	}},
 	{path: pathAudioVoices, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) { g.proxy.ServeHTTP(w, r) }},
 	{path: pathSystemOne, methods: methodsPost, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		systemOneHandler{g.shared}.serveSystemOne(w, r)
+		g.systemOne.serveSystemOne(w, r)
 	}},
 	{path: pathFiles, prefix: true, methods: methodsAny, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		filesHandler{g.shared}.serveFiles(w, r)
+		g.files.serveFiles(w, r)
 	}},
 	{path: pathBatches, methods: methodsAny, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		batchesHandler{g.shared}.serveBatches(w, r)
+		g.batches.serveBatches(w, r)
 	}},
 	{path: pathBatchesPrefix, prefix: true, methods: methodsAny, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
-		batchesHandler{g.shared}.serveBatchByID(w, r)
+		g.batches.serveBatchByID(w, r)
 	}},
 	{path: pathAdminModelsAllow, methods: methodsAny, serve: (*gatewayHandler).serveModelsAllowRoute},
 }
 
 func (g *gatewayHandler) serveSystemOneSchemaRoute(w http.ResponseWriter, r *http.Request) {
-	cfg := config.RouterConfig{}
-	if g.registry != nil {
-		cfg = g.registry.Config()
-	}
-	if !systemOneAPIEnabled(cfg) {
+	if !systemOneAPIEnabled(g.registry.Config()) {
 		g.writeAPINotConfigured(w)
 		return
 	}
@@ -415,7 +461,7 @@ func (g *gatewayHandler) serveSystemOneSchemaRoute(w http.ResponseWriter, r *htt
 }
 
 func (g *gatewayHandler) serveModelsAllowRoute(w http.ResponseWriter, r *http.Request) {
-	h := adminHandler{g.shared}
+	h := g.admin
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		h.serveModelsAllowOverlay(w, r)
@@ -429,12 +475,12 @@ func (g *gatewayHandler) serveModelsAllowRoute(w http.ResponseWriter, r *http.Re
 func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, chatMaxBody))
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "read body"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "read body"))
 		return
 	}
 	req, err := parseChatRequest(body)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	model := req.model
@@ -452,22 +498,22 @@ func (h chatHandler) serveChatCompletions(w http.ResponseWriter, r *http.Request
 		backendID, downstream, err = reg.ResolveVision(model)
 	} else {
 		if cfg.EffectiveChatBackend() == "" {
-			h.writeHandlerError(w, derrors.New(derrors.CodeNotReady, "gateway.serveChatCompletions", "no chat backend configured"))
+			h.writeHandlerError(w, r, derrors.New(derrors.CodeNotReady, "gateway.serveChatCompletions", "no chat backend configured"))
 			return
 		}
 		backendID, downstream, err = reg.ResolveChat(model)
 	}
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveChatCompletions", "resolve backend"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "gateway.serveChatCompletions", "resolve backend"))
 		return
 	}
-	if !h.ensureModelAllowed(backendID, model) {
+	if !ensureModelAllowed(h.registry, backendID, model) {
 		h.writeModelNotAllowed(w, model)
 		return
 	}
-	t, err := h.resolveTarget("gateway.serveChatCompletions", backendID, downstream)
+	t, err := resolveTarget(h.registry, "gateway.serveChatCompletions", backendID, downstream)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	h.dialChat(w, r, req, t)
@@ -479,13 +525,13 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 	cfg := reg.Config()
 	nr, ok := cfg.LookupNamedRouter(routerName)
 	if !ok {
-		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unknown router").
+		h.writeHandlerError(w, r, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unknown router").
 			With(keyModel, model).
 			With("router", routerName))
 		return
 	}
 	if msg := validateNamedRouterForChat(nr, model, req.vision); msg != "" {
-		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", msg))
+		h.writeHandlerError(w, r, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", msg))
 		return
 	}
 
@@ -498,7 +544,7 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 	case dispatchUnknown:
 		fallthrough
 	default:
-		h.writeHandlerError(w, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unsupported route type").
+		h.writeHandlerError(w, r, derrors.New(derrors.CodeInvalid, "gateway.serveNamedRouterChat", "unsupported route type").
 			With(keyModel, model).
 			With("router", routerName))
 	}
@@ -507,16 +553,16 @@ func (h chatHandler) serveNamedRouterChat(w http.ResponseWriter, r *http.Request
 func (h chatHandler) servePassthroughRouterChat(w http.ResponseWriter, r *http.Request, req chatRequest, target string) {
 	backendID, downstream, err := h.registry.ResolveChat(target)
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.servePassthroughRouterChat", "resolve target"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "gateway.servePassthroughRouterChat", "resolve target"))
 		return
 	}
-	if !h.ensureModelAllowed(backendID, target) {
+	if !ensureModelAllowed(h.registry, backendID, target) {
 		h.writeModelNotAllowed(w, target)
 		return
 	}
-	t, err := h.resolveTarget("gateway.servePassthroughRouterChat", backendID, downstream)
+	t, err := resolveTarget(h.registry, "gateway.servePassthroughRouterChat", backendID, downstream)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
 	h.dialChat(w, r, req, t)
@@ -542,7 +588,7 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 		recordRouterSelectedModel: true,
 	}
 	if err = h.requireBifrost("gateway.serveSwitchyardRouterChat", router.ProviderSwitchyard); err == nil {
-		err = h.upstreams.Execute(upstream.NameSwitchyard, func() error { return h.bifrostChat(w, r, c) })
+		err = h.upstreams.Execute(r.Context(), upstream.NameSwitchyard, func() error { return h.bifrostChat(w, r, c) })
 	}
 	if err != nil {
 		// A 4xx is Switchyard's answer about the request, not an outage.
@@ -550,7 +596,7 @@ func (h chatHandler) serveSwitchyardRouterChat(w http.ResponseWriter, r *http.Re
 		if derrors.HTTPStatus(err) < http.StatusInternalServerError {
 			prefix = ""
 		}
-		h.writeUpstreamDialError(w, dialFailure{
+		h.writeUpstreamDialError(w, r, dialFailure{
 			err:         err,
 			prefix:      prefix,
 			upstream:    upstream.NameSwitchyard,
@@ -567,17 +613,17 @@ func isSwitchyardUnreachable(err error) bool {
 }
 
 // writeHandlerError writes a domain error (or any error) using HTTPStatus.
-func (s *shared) writeHandlerError(w http.ResponseWriter, err error) {
+func (rs responder) writeHandlerError(w http.ResponseWriter, r *http.Request, err error) {
 	if err == nil || upstream.ResponseWritten(err) {
 		return
 	}
-	if s.writeRateLimitError(w, err) {
+	if rs.writeRateLimitError(w, err) {
 		return
 	}
 	if upstream.Unavailable(err) {
 		name := upstream.ResolveUpstreamName(err, "")
-		s.log.Warn("polypus: upstream unavailable", "upstream", name, "err", err)
-		s.writeUnavailableError(w, err, derrors.PublicMessage(err), name)
+		rs.log.WarnContext(r.Context(), "polypus: upstream unavailable", requestLogAttrs(r, "upstream", name, "err", err)...)
+		rs.writeUnavailableError(w, err, derrors.PublicMessage(err), name)
 		return
 	}
 	status := derrors.HTTPStatus(err)
@@ -585,14 +631,14 @@ func (s *shared) writeHandlerError(w http.ResponseWriter, err error) {
 	if errors.As(err, &tooLarge) {
 		status = http.StatusRequestEntityTooLarge
 	}
-	s.writeErrorJSON(w, status, err, "")
+	rs.writeErrorJSON(w, r, status, err, "")
 }
 
 // writeErrorJSON answers with an OpenAI-shaped error body. The client sees the
 // public message; the full chain (ops, upstream URLs, causes) goes to the log.
-func (s *shared) writeErrorJSON(w http.ResponseWriter, status int, err error, prefix string) {
+func (rs responder) writeErrorJSON(w http.ResponseWriter, r *http.Request, status int, err error, prefix string) {
 	if status >= http.StatusInternalServerError {
-		s.log.Warn("polypus: request failed", "status", status, "err", err)
+		rs.log.WarnContext(r.Context(), "polypus: request failed", requestLogAttrs(r, "status", status, "err", err)...)
 	}
 	body := openaiErrorBody{Error: openaiError{
 		Message: prefix + derrors.PublicMessage(err),
@@ -603,7 +649,18 @@ func (s *shared) writeErrorJSON(w http.ResponseWriter, status int, err error, pr
 		joinInterventionHeader(w, intervention)
 		body.Polypus = &polypusFailureBody{Intervention: intervention}
 	}
-	s.writeJSON(w, status, body)
+	rs.writeJSON(w, status, body)
+}
+
+// requestLogAttrs puts the request's method, path and trace id before attrs, so an
+// operator can tie a failure log line to its route and its trace.
+func requestLogAttrs(r *http.Request, attrs ...any) []any {
+	out := make([]any, 0, len(attrs)+6)
+	out = append(out, "method", r.Method, "path", r.URL.Path)
+	if sc := trace.SpanContextFromContext(r.Context()); sc.HasTraceID() {
+		out = append(out, "trace_id", sc.TraceID().String())
+	}
+	return append(out, attrs...)
 }
 
 // openaiErrorType maps a status to the OpenAI error type clients switch on.
@@ -633,17 +690,17 @@ type dialFailure struct {
 
 // writeUpstreamDialError writes a dial failure unless the upstream body was already sent.
 // Typed domain errors use HTTPStatus; other errors stay 502 unless the breaker or unreachable hook says 503.
-func (s *shared) writeUpstreamDialError(w http.ResponseWriter, f dialFailure) {
+func (rs responder) writeUpstreamDialError(w http.ResponseWriter, r *http.Request, f dialFailure) {
 	err, prefix, upstreamName, unreachable := f.err, f.prefix, f.upstream, f.unreachable
 	if err == nil || upstream.ResponseWritten(err) {
 		return
 	}
-	if s.writeRateLimitError(w, err) {
+	if rs.writeRateLimitError(w, err) {
 		return
 	}
 	if upstream.Unavailable(err) || (unreachable != nil && unreachable(err)) {
-		s.log.Warn("polypus: upstream unavailable", "upstream", upstreamName, "err", err)
-		s.writeUnavailableError(w, err, prefix+derrors.PublicMessage(err), upstreamName)
+		rs.log.WarnContext(r.Context(), "polypus: upstream unavailable", requestLogAttrs(r, "upstream", upstreamName, "err", err)...)
+		rs.writeUnavailableError(w, err, prefix+derrors.PublicMessage(err), upstreamName)
 		return
 	}
 	code := http.StatusBadGateway
@@ -651,84 +708,112 @@ func (s *shared) writeUpstreamDialError(w http.ResponseWriter, f dialFailure) {
 	if errors.As(err, &de) {
 		code = derrors.HTTPStatus(err)
 	}
-	s.writeErrorJSON(w, code, err, prefix)
+	rs.writeErrorJSON(w, r, code, err, prefix)
 }
 
 func (h chatHandler) serveEmbeddings(w http.ResponseWriter, r *http.Request) {
-	var dialUpstream string
+	const op = "gateway.serveEmbeddings"
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, embedMaxBody))
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "read body"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, op, "read body"))
 		return
 	}
-	model, err := bodyModel("gateway.serveEmbeddings", body, true)
+	model, err := bodyModel(op, body, true)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
-
-	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", observability.LLMSpanAttrs{
-		Model: model,
-	})
+	ctx, span := observability.StartLLMSpan(r.Context(), "polypus.embeddings", observability.LLMSpanAttrs{Model: model})
+	var dialUpstream string
+	// Every exit below sets err, so the span ends as what the client got.
 	defer func() { endDialSpan(span, err, dialUpstream) }()
 	r = r.WithContext(ctx)
 
-	reg := h.registry
-	cfg := reg.Config()
-	if cfg.EffectiveEmbedBackend() == "" {
-		err = derrors.New(derrors.CodeNotReady, "gateway.serveEmbeddings", "no embed backend configured").
-			With(derrors.FieldIntervention, string(observability.InterventionEmbedCapabilityMissing))
-		recordInterventionFromError(ctx, err)
-		h.writeHandlerError(w, err)
-		return
-	}
-	backendID, downstream, err := reg.ResolveEmbed(model)
-	if err != nil {
-		recordInterventionFromError(ctx, err)
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveEmbeddings", "resolve backend"))
-		return
-	}
-	if !h.ensureModelAllowed(backendID, model) {
+	call, err := h.resolveEmbeddings(r, model, body)
+	if errors.Is(err, errModelNotAllowed) {
 		h.writeModelNotAllowed(w, model)
 		return
 	}
-	t, err := h.resolveTarget("gateway.serveEmbeddings", backendID, downstream)
 	if err != nil {
-		h.writeHandlerError(w, err)
+		recordInterventionFromError(ctx, err)
+		h.writeHandlerError(w, r, err)
 		return
 	}
-	backendURL := t.url
 	span.SetAttributes(
-		attribute.String("polypus.backend_id", backendID),
-		attribute.String("polypus.backend_url", backendURL),
-		attribute.String("polypus.downstream_model", downstream),
+		attribute.String("polypus.backend_id", call.target.id),
+		attribute.String("polypus.backend_url", call.target.url),
+		attribute.String("polypus.downstream_model", call.target.downstream),
 	)
-	rewritten, err := withBodyModel("gateway.serveEmbeddings", body, downstream)
-	if err != nil {
-		h.writeHandlerError(w, err)
-		return
+	dialUpstream = call.target.id
+	if err = h.dialEmbeddings(w, r, call); err != nil {
+		h.writeUpstreamDialError(w, r, dialFailure{err: err, upstream: call.target.id})
 	}
-	dialUpstream = backendID
+}
+
+// errModelNotAllowed marks a request the models.allow gate refused; the handler
+// answers it with the OpenAI not-allowed body.
+var errModelNotAllowed = errors.New("model not allowed")
+
+// embedCall is one resolved embeddings request.
+type embedCall struct {
+	target backendTarget
+	body   []byte
+	hop    time.Duration
+	// callerShorter is set when the caller's X-Polypus-Timeout cut the hop budget.
+	callerShorter bool
+}
+
+// resolveEmbeddings picks the backend for model, applies the allow gate and encodes
+// the body for the backend.
+func (h chatHandler) resolveEmbeddings(r *http.Request, model string, body []byte) (embedCall, error) {
+	const op = "gateway.resolveEmbeddings"
+	if h.registry.Config().EffectiveEmbedBackend() == "" {
+		return embedCall{}, derrors.New(derrors.CodeNotReady, op, "no embed backend configured").
+			With(derrors.FieldIntervention, string(observability.InterventionEmbedCapabilityMissing))
+	}
+	backendID, downstream, err := h.registry.ResolveEmbed(model)
+	if err != nil {
+		return embedCall{}, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), op, "resolve backend")
+	}
+	if !ensureModelAllowed(h.registry, backendID, model) {
+		return embedCall{}, derrors.Wrap(errModelNotAllowed, derrors.CodeInvalid, op, "model not allowed").With(keyModel, model)
+	}
+	t, err := resolveTarget(h.registry, op, backendID, downstream)
+	if err != nil {
+		return embedCall{}, err
+	}
+	rewritten, err := withBodyModel(op, body, downstream)
+	if err != nil {
+		return embedCall{}, err
+	}
 	hop := hopBudget(h.timeouts.ResolveEmbed(r.Header.Get(config.TimeoutHeader)), config.DefaultTimeouts().Embed)
-	if err = h.requireBifrost("gateway.serveEmbeddings", backendID); err == nil {
-		err = h.upstreams.Execute(backendID, func() error {
-			raw, bifrostErr := h.chat.EmbeddingRaw(r.Context(), router.Call{BackendID: backendID, Model: downstream, Body: rewritten, Timeout: hop})
-			if bifrostErr != nil {
-				return bifrostErr
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, writeErr := w.Write(raw)
-			if writeErr != nil {
-				return afterHeaders(r.Context(), writeErr, true, "gateway.serveEmbeddings", "write response")
-			}
-			return nil
-		})
+	configured := hopBudget(h.timeouts.ResolveEmbed(""), config.DefaultTimeouts().Embed)
+	return embedCall{target: t, body: rewritten, hop: hop, callerShorter: hop < configured}, nil
+}
+
+// dialEmbeddings sends c through Bifrost under its backend's breaker and writes the
+// answer.
+func (h chatHandler) dialEmbeddings(w http.ResponseWriter, r *http.Request, c embedCall) error {
+	const op = "gateway.dialEmbeddings"
+	if err := h.requireBifrost(op, c.target.id); err != nil {
+		return err
 	}
-	if err != nil {
-		h.writeUpstreamDialError(w, dialFailure{err: err, upstream: string(backendID)})
-		return
+	ctx := r.Context()
+	if c.callerShorter {
+		ctx = config.WithCallerBudget(ctx)
 	}
+	return h.upstreams.Execute(ctx, c.target.id, func() error {
+		raw, err := h.chat.EmbeddingRaw(ctx, router.Call{BackendID: c.target.id, Model: c.target.downstream, Body: c.body, Timeout: c.hop})
+		if err != nil {
+			return gatewayErr(err, op, "embedding").With("backend", c.target.id)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write(raw); err != nil {
+			return afterHeaders(r.Context(), err, true, op, "write response")
+		}
+		return nil
+	})
 }
 
 // transcriptionMaxMemory is how much of a multipart upload stays in memory; the rest
@@ -746,7 +831,7 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, speechMaxBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "read body"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "read body"))
 		return
 	}
 	var req struct {
@@ -757,16 +842,16 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 		Speed          *float64 `json:"speed"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "invalid json"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveSpeech", "invalid json"))
 		return
 	}
 	backendID, downstream, resolveErr := h.registry.ResolveTTS(req.Model)
 	if resolveErr != nil {
-		h.writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.serveSpeech", "resolve backend").
+		h.writeHandlerError(w, r, derrors.Wrap(resolveErr, derrors.CodeOr(resolveErr, derrors.CodeInvalid), "gateway.serveSpeech", "resolve backend").
 			With(keyModel, req.Model))
 		return
 	}
-	if strings.TrimSpace(req.Model) != "" && !h.ensureModelAllowed(string(backendID), req.Model) {
+	if strings.TrimSpace(req.Model) != "" && !ensureModelAllowed(h.registry, string(backendID), req.Model) {
 		h.writeModelNotAllowed(w, req.Model)
 		return
 	}
@@ -787,19 +872,19 @@ func (h speechHandler) serveSpeech(w http.ResponseWriter, r *http.Request) {
 
 func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, transcriptionMaxBody)
-	if err := r.ParseMultipartForm(transcriptionMaxMemory); err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "multipart"))
+	if err := r.ParseMultipartForm(transcriptionMaxMemory); err != nil { //nolint:gosec // G120: MaxBytesReader above caps the body
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "multipart"))
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "file required"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "file required"))
 		return
 	}
 	defer func() { _ = file.Close() }()
 	audio, err := io.ReadAll(file)
 	if err != nil {
-		h.writeHandlerError(w, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "read file"))
+		h.writeHandlerError(w, r, derrors.Wrap(err, derrors.CodeInvalid, "gateway.serveTranscription", "read file"))
 		return
 	}
 	filename := "audio.wav"
@@ -813,11 +898,11 @@ func (h speechHandler) serveTranscription(w http.ResponseWriter, r *http.Request
 	sttModel := r.FormValue(keyModel)
 	backendID, downstream, resolveErr := h.registry.ResolveSTT(sttModel)
 	if resolveErr != nil {
-		h.writeHandlerError(w, derrors.Wrap(resolveErr, derrors.CodeInvalid, "gateway.serveTranscription", "resolve backend").
+		h.writeHandlerError(w, r, derrors.Wrap(resolveErr, derrors.CodeOr(resolveErr, derrors.CodeInvalid), "gateway.serveTranscription", "resolve backend").
 			With(keyModel, sttModel))
 		return
 	}
-	if strings.TrimSpace(sttModel) != "" && !h.ensureModelAllowed(string(backendID), sttModel) {
+	if strings.TrimSpace(sttModel) != "" && !ensureModelAllowed(h.registry, string(backendID), sttModel) {
 		h.writeModelNotAllowed(w, sttModel)
 		return
 	}
@@ -856,17 +941,18 @@ func (h speechHandler) speechDial(w http.ResponseWriter, r *http.Request, hop sp
 	})
 	defer func() { endDialSpan(span, err, hop.backendID) }()
 	budget := hopBudget(h.timeouts.ResolveSpeech(r.Header.Get(config.TimeoutHeader)), config.DefaultTimeouts().Speech)
+	ctx = callerBudget(ctx, budget, hopBudget(h.timeouts.ResolveSpeech(""), config.DefaultTimeouts().Speech))
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	var body []byte
 	var contentType string
-	err = h.upstreams.Execute(hop.backendID, func() error {
+	err = h.upstreams.Execute(ctx, hop.backendID, func() error {
 		var callErr error
 		body, contentType, callErr = call(ctx)
 		return callErr
 	})
 	if err != nil {
-		h.writeUpstreamDialError(w, dialFailure{err: err, upstream: hop.backendID})
+		h.writeUpstreamDialError(w, r, dialFailure{err: err, upstream: hop.backendID})
 		return
 	}
 	w.Header().Set("Content-Type", contentType)
@@ -889,6 +975,17 @@ func speechContentType(format string) string {
 	default:
 		return "audio/mpeg"
 	}
+}
+
+// callerBudget marks ctx with config.WithCallerBudget when the caller's
+// X-Polypus-Timeout cut hop below configured, the budget the gateway sets without
+// the header. A deadline the caller chose then never counts against the backend's
+// breaker.
+func callerBudget(ctx context.Context, hop, configured time.Duration) context.Context {
+	if hop < configured {
+		return config.WithCallerBudget(ctx)
+	}
+	return ctx
 }
 
 // hopBudget returns the outbound budget for one request: hop, or fallback when the

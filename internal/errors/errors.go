@@ -30,13 +30,16 @@ const (
 	CodeTimeout Code = "timeout"
 	// CodeCanceled is a caller cancel.
 	CodeCanceled Code = "canceled"
-	// CodeFailedPrecondition is a required bound or state missing (for example no deadline).
+	// CodeFailedPrecondition is a request-side bound or state missing (for example no
+	// deadline, or a backend without the capability asked for). A server missing its
+	// own dependency is CodeNotReady instead.
 	CodeFailedPrecondition Code = "failed_precondition"
 	// CodeUnavailable is a downstream hop that failed or is unreachable.
 	CodeUnavailable Code = "unavailable"
 	// CodeRateLimited is an upstream throttle (HTTP 429), including quota and capacity.
 	CodeRateLimited Code = "rate_limited"
-	// CodeNotReady is local config or dependency not ready to serve (HTTP 503).
+	// CodeNotReady is local config or dependency not ready to serve (HTTP 503), such
+	// as a gateway without Bifrost or a batch store.
 	CodeNotReady Code = "not_ready"
 	// CodeInternal is an unexpected local failure.
 	CodeInternal Code = "internal"
@@ -222,11 +225,7 @@ func CodeOr(err error, fallback Code) Code {
 // CodeOf returns the outermost domain Code, or CodeInternal if err holds no *Error.
 // errors.As also follows multi-%w wraps such as fmt.Errorf("%w: %w", de, sentinel).
 func CodeOf(err error) Code {
-	var de *Error
-	if stderrors.As(err, &de) && de != nil {
-		return de.code
-	}
-	return CodeInternal
+	return CodeOr(err, CodeInternal)
 }
 
 // PublicMessage is the error text safe to return to an HTTP client: the domain

@@ -5,6 +5,7 @@
 package execx
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -120,10 +121,18 @@ func OutputContext(ctx context.Context, name string, args []string, env []string
 // returns its stdout alone, so machine output (JSON, YAML) is not mixed with
 // warnings. On failure the error carries the stderr tail.
 func StdoutContext(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+	return StdoutInputContext(ctx, name, args, env, nil)
+}
+
+// StdoutInputContext is StdoutContext with stdin fed to the command (nil for none).
+func StdoutInputContext(ctx context.Context, name string, args, env []string, stdin []byte) ([]byte, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("execx: context required")
 	}
 	cmd := command(ctx, name, args, env)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	tail := &tailBuffer{limit: stderrTail}
 	cmd.Stderr = tail
 	out, err := cmd.Output()

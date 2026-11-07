@@ -2,9 +2,10 @@ package secrets
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"strings"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // NonEmptyDotenvKeys reads a dotenv file and returns env names with non-empty values.
@@ -14,12 +15,13 @@ func NonEmptyDotenvKeys(path string) (map[string]bool, error) {
 	if path == "" {
 		return map[string]bool{}, nil
 	}
+	const op = "secrets.NonEmptyDotenvKeys"
 	f, err := os.Open(path) //nolint:gosec // G304: operator-supplied deploy env path
 	if err != nil {
 		if os.IsNotExist(err) {
 			return map[string]bool{}, nil
 		}
-		return nil, fmt.Errorf("secrets: read dotenv %q: %w", path, err)
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, op, "read dotenv "+path)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -39,7 +41,7 @@ func NonEmptyDotenvKeys(path string) (map[string]bool, error) {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("secrets: scan dotenv %q: %w", path, err)
+		return nil, derrors.Wrap(err, derrors.CodeInternal, op, "scan dotenv "+path)
 	}
 	return out, nil
 }

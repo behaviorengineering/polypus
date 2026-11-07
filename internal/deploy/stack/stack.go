@@ -6,9 +6,10 @@ package stack
 
 import (
 	_ "embed"
-	"fmt"
 	"os"
 	"path/filepath"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // Compose services of the stack that deploy code addresses by name.
@@ -21,8 +22,8 @@ const (
 	ServiceHyperDX    = "hyperdx"
 )
 
-// ComposeFileName is the stack's compose file, written into each environment's folder.
-const ComposeFileName = "docker-compose.deploy.yml"
+// composeFileName is the stack's compose file, written into each environment's folder.
+const composeFileName = "docker-compose.deploy.yml"
 
 //go:embed docker-compose.deploy.yml
 var composeFile []byte
@@ -39,7 +40,7 @@ var imagePins []byte
 // files are written beside each other: the compose file mounts the two configs by
 // relative path.
 var files = map[string][]byte{
-	ComposeFileName:              composeFile,
+	composeFileName:              composeFile,
 	"hyperdx.custom.config.yaml": hyperdxConfig,
 	"otelcol.config.yaml":        otelcolConfig,
 }
@@ -70,20 +71,21 @@ func ImagePins() []byte {
 // Write writes the stack into dir (created if missing) and returns the compose
 // file's path. It overwrites what an earlier deploy wrote there.
 func Write(dir string) (string, error) {
+	const op = "stack.Write"
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return "", fmt.Errorf("stack: mkdir %q: %w", dir, err)
+		return "", derrors.Wrap(err, derrors.CodeInternal, op, "mkdir "+dir)
 	}
 	for name, data := range files {
 		path := filepath.Join(dir, name)
 		mode := fileMode(name)
 		if err := os.WriteFile(path, data, mode); err != nil {
-			return "", fmt.Errorf("stack: write %s: %w", name, err)
+			return "", derrors.Wrap(err, derrors.CodeInternal, op, "write "+name)
 		}
 		// WriteFile keeps the mode of a file an earlier deploy wrote, and the umask
 		// trims a new one; set it outright.
 		if err := os.Chmod(path, mode); err != nil {
-			return "", fmt.Errorf("stack: chmod %s: %w", name, err)
+			return "", derrors.Wrap(err, derrors.CodeInternal, op, "chmod "+name)
 		}
 	}
-	return filepath.Join(dir, ComposeFileName), nil
+	return filepath.Join(dir, composeFileName), nil
 }

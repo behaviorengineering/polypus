@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
 
@@ -194,5 +196,38 @@ func TestAdminAllowOverlayHead(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("content-type %q", ct)
+	}
+}
+
+func TestAdminAllowOversizedBodyIs413(t *testing.T) {
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	reg, err := router.NewRegistry(gatedAdminBackendConfig("http://127.0.0.1:1/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newTestGateway(t, config.ServeOptions{}, &fakeRouter{reg: reg}, WithAdminStateDir(t.TempDir()))
+	body := `{"backend":"cf","model":"` + strings.Repeat("x", adminAllowMaxBody) + `"}`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, adminAllowJSONPost(body))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminAllowUnknownBackendUsesTheDomainCode(t *testing.T) {
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	reg, err := router.NewRegistry(gatedAdminBackendConfig("http://127.0.0.1:1/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newTestGateway(t, config.ServeOptions{}, &fakeRouter{reg: reg}, WithAdminStateDir(t.TempDir()))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, adminAllowJSONPost(`{"backend":"nope","model":"m"}`))
+	var got openaiErrorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusNotFound || got.Error.Code != string(derrors.CodeNotFound) {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
 }

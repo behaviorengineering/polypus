@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func TestSystemOneUnwrapsEnvelope(t *testing.T) {
@@ -257,5 +259,18 @@ func TestStripModelField(t *testing.T) {
 	}
 	if _, ok := m["state"]; !ok {
 		t.Fatal("state missing")
+	}
+}
+
+func TestUnwrapRunResultRejectsAPayloadWithoutAnswers(t *testing.T) {
+	for _, raw := range []string{
+		`{}`,
+		`{"success":true,"result":{}}`,
+		`{"state":"done","model":"jev"}`,
+		`{"result":{"result":{"result":{"result":{"answers":{"x":1}}}}}}`,
+	} {
+		if _, err := unwrapRunResult([]byte(raw)); derrors.CodeOf(err) != derrors.CodeUnavailable {
+			t.Fatalf("%s: err %v, want no answers as unavailable", raw, err)
+		}
 	}
 }

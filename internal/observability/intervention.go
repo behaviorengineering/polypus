@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -41,8 +42,24 @@ func JoinInterventions(existing string, code Intervention) string {
 
 type interventionAccKey struct{}
 
+// interventionAcc is one request's joined codes. A stream goroutine and the handler
+// can record on the same context, so joined is read and written under mu.
 type interventionAcc struct {
+	mu     sync.Mutex
 	joined string
+}
+
+func (a *interventionAcc) add(code Intervention) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.joined = JoinInterventions(a.joined, code)
+	return a.joined
+}
+
+func (a *interventionAcc) get() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.joined
 }
 
 // InterventionJoined returns comma-joined codes recorded on ctx, if any.
@@ -54,7 +71,7 @@ func InterventionJoined(ctx context.Context) string {
 	if !ok || acc == nil {
 		return ""
 	}
-	return acc.joined
+	return acc.get()
 }
 
 // WithInterventionState attaches an accumulator for comma-joined intervention codes.
@@ -76,8 +93,7 @@ func RecordIntervention(ctx context.Context, code Intervention) {
 	}
 	joined := string(code)
 	if acc, ok := ctx.Value(interventionAccKey{}).(*interventionAcc); ok && acc != nil {
-		acc.joined = JoinInterventions(acc.joined, code)
-		joined = acc.joined
+		joined = acc.add(code)
 	}
 	span := trace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {

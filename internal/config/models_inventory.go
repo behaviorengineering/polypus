@@ -56,7 +56,7 @@ func envDurationOrOff(key string, fallback time.Duration) (time.Duration, error)
 	if raw == "" {
 		return fallback, nil
 	}
-	if on, ok := ParseBoolishEnv(raw); ok && !on {
+	if on, ok := parseBoolishEnv(raw); ok && !on {
 		return 0, nil
 	}
 	const op = "config.envDurationOrOff"

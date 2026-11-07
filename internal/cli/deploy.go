@@ -10,9 +10,8 @@ import (
 	"github.com/behaviorengineering/polypus/internal/buildinfo"
 	"github.com/behaviorengineering/polypus/internal/deploy"
 	"github.com/behaviorengineering/polypus/internal/deploy/envconfig"
-	"github.com/behaviorengineering/polypus/internal/deploy/paths"
 	"github.com/behaviorengineering/polypus/internal/deploy/secrets"
-	"github.com/behaviorengineering/polypus/internal/deploy/smoke"
+	deploysmoke "github.com/behaviorengineering/polypus/internal/deploy/smoke"
 	"github.com/spf13/cobra"
 )
 
@@ -75,7 +74,8 @@ and points at its gateway YAML. polypus deploy init writes a starting one under
 Each environment is its own compose project, Tailscale host and keyring service,
 all named polypus-<identifier>. Nothing publishes host ports: the gateway is reached
 at https://polypus-<identifier>.<tailnet>, so this machine must be on that tailnet.
-Secrets come from that keyring service, never from files in a repo.
+Secrets come from this shell, then that keyring service, then the optional SOPS
+file ~/.config/polypus-<identifier>/secrets.enc.yaml; never from files in a repo.
 Images default to this build's release; pass --images to pin others.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -141,66 +141,90 @@ Next
 	return err
 }
 
+// deployRunFlags are deploy run's own flags. apply copies them onto the
+// environment's options in one place, so a flag cannot be bound and then dropped.
+type deployRunFlags struct {
+	dryRun, skipPull, skipSmoke, skipOverlayPrune bool
+	healthURL, smokeChatModel                     string
+	healthTimeout, smokeTimeout                   time.Duration
+}
+
+func (f deployRunFlags) apply(opts *deploy.Options) {
+	opts.DryRun = f.dryRun
+	opts.SkipPull = f.skipPull
+	if url := strings.TrimRight(f.healthURL, "/"); url != "" {
+		// An explicit URL is reached however the operator chose; skip the tailnet check.
+		opts.HealthURL = url
+		opts.Tailnet = ""
+	}
+	opts.HealthTimeout = f.healthTimeout
+	opts.SkipSmoke = f.skipSmoke
+	opts.SkipOverlayPrune = f.skipOverlayPrune
+	opts.SmokeTimeout = f.smokeTimeout
+	opts.SmokeChatModel = f.smokeChatModel
+}
+
 func newDeployRunCmd() *cobra.Command {
 	var t deployTarget
-	var o deploy.Options
+	var f deployRunFlags
+	var from secretsFrom
 	cmd := &cobra.Command{
 		Use:     "run",
 		Short:   "Deploy the stack, then check health and smoke",
 		GroupID: groupMutate,
 		Args:    cobra.NoArgs,
 		PreRunE: envBoolDefaults(
-			envBoolFlag{name: "skip-smoke", env: "POLYPUS_DEPLOY_SKIP_SMOKE", dst: &o.SkipSmoke},
-			envBoolFlag{name: "skip-overlay-prune", env: "POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE", dst: &o.SkipOverlayPrune},
+			envBoolFlag{name: "skip-smoke", env: "POLYPUS_DEPLOY_SKIP_SMOKE", dst: &f.skipSmoke},
+			envBoolFlag{name: "skip-overlay-prune", env: "POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE", dst: &f.skipOverlayPrune},
 		),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts, err := t.options()
 			if err != nil {
 				return err
 			}
-			opts.SkipPull = o.SkipPull
-			opts.DryRun = o.DryRun
-			if url := strings.TrimRight(o.HealthURL, "/"); url != "" {
-				// An explicit URL is reached however the operator chose; skip the tailnet check.
-				opts.HealthURL = url
-				opts.Tailnet = ""
-			}
-			opts.HealthTimeout = o.HealthTimeout
-			opts.SkipSmoke = o.SkipSmoke
-			opts.SkipOverlayPrune = o.SkipOverlayPrune
-			opts.SmokeTimeout = o.SmokeTimeout
-			opts.SmokeChatModel = o.SmokeChatModel
+			f.apply(&opts)
 			opts.Out = cmd.OutOrStdout()
-			return withTracing(cmd, func(ctx context.Context) error {
+			if opts.Secrets, err = from.resolver(cmd); err != nil {
+				return err
+			}
+			return secretsConflictExit(cmd, withTracing(cmd, func(ctx context.Context) error {
 				ctx, cancel := context.WithTimeout(ctx, opts.Budget())
 				defer cancel()
 				return deploy.Run(ctx, opts)
-			})
+			}))
 		},
 	}
 	t.bind(cmd)
-	f := cmd.Flags()
-	f.BoolVar(&o.DryRun, "dry-run", false, "resolve and print the plan; write nothing and change no containers")
-	f.BoolVar(&o.SkipPull, "skip-pull", false, "skip docker compose pull")
-	f.StringVar(&o.HealthURL, "health-url", "", healthURLHelp)
-	f.DurationVar(&o.HealthTimeout, "health-timeout", 120*time.Second, "health poll timeout")
-	f.BoolVar(&o.SkipSmoke, "skip-smoke", false, "skip the inference smoke after health (env POLYPUS_DEPLOY_SKIP_SMOKE=1)")
-	f.BoolVar(&o.SkipOverlayPrune, "skip-overlay-prune", false, "skip the models allow overlay prune before the gateway is recreated (env POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE=1)")
-	bindSmokeModelFlags(cmd, &o.SmokeTimeout, &o.SmokeChatModel)
+	from.bind(cmd)
+	fl := cmd.Flags()
+	fl.BoolVar(&f.dryRun, "dry-run", false, "resolve and print the plan; write nothing and change no containers")
+	fl.BoolVar(&f.skipPull, "skip-pull", false, "skip docker compose pull")
+	fl.StringVar(&f.healthURL, "health-url", "", healthURLHelp)
+	fl.DurationVar(&f.healthTimeout, "health-timeout", 120*time.Second, "health poll timeout")
+	fl.BoolVar(&f.skipSmoke, "skip-smoke", false, "skip the inference smoke after health (env POLYPUS_DEPLOY_SKIP_SMOKE=1)")
+	fl.BoolVar(&f.skipOverlayPrune, "skip-overlay-prune", false, "skip the models allow overlay prune before the gateway is recreated (env POLYPUS_DEPLOY_SKIP_OVERLAY_PRUNE=1)")
+	bindSmokeModelFlags(cmd, &f.smokeTimeout, &f.smokeChatModel)
 	return cmd
 }
 
 func bindSmokeModelFlags(cmd *cobra.Command, timeout *time.Duration, chat *string) {
 	f := cmd.Flags()
-	f.DurationVar(timeout, "smoke-timeout", smoke.DefaultSmokeTimeout, "inference smoke timeout")
-	f.StringVar(chat, "smoke-chat-model", "", "direct chat smoke model")
+	f.DurationVar(timeout, "smoke-timeout", deploysmoke.DefaultSmokeTimeout, "inference smoke timeout")
+	f.StringVar(chat, "smoke-chat-model", "", "direct chat smoke model (default: the first chat model in the gateway YAML)")
+}
+
+// deploySmokeFlags are deploy smoke's flags. The With* values hold the env
+// default when the flag is not passed (see PreRunE).
+type deploySmokeFlags struct {
+	healthURL, chatModel, envDeploy          string
+	withRouter, withSystemOne, withProviders bool
+	timeout                                  time.Duration
 }
 
 func newDeploySmokeCmd() *cobra.Command {
 	var t deployTarget
-	var o smoke.Options
-	var timeout time.Duration
-	var envDeploy string
+	var f deploySmokeFlags
+	var from secretsFrom
 	cmd := &cobra.Command{
 		Use:   "smoke",
 		Short: "Chat inference smoke against a deployed gateway",
@@ -213,18 +237,23 @@ that. Without an environment, smoke sends one chat to --smoke-chat-model.`,
 		GroupID: groupInspect,
 		Args:    cobra.NoArgs,
 		PreRunE: envBoolDefaults(
-			envBoolFlag{name: "with-router", env: "POLYPUS_SWITCHYARD", dst: &o.WithRouter},
-			envBoolFlag{name: "with-systemone", env: "POLYPUS_SMOKE_SYSTEMONE", dst: &o.WithSystemOne},
-			envBoolFlag{name: "with-providers", env: "POLYPUS_SMOKE_PROVIDERS", dst: &o.WithProviders},
+			envBoolFlag{name: "with-router", env: "POLYPUS_SWITCHYARD", dst: &f.withRouter},
+			envBoolFlag{name: "with-systemone", env: "POLYPUS_SMOKE_SYSTEMONE", dst: &f.withSystemOne},
+			envBoolFlag{name: "with-providers", env: "POLYPUS_SMOKE_PROVIDERS", dst: &f.withProviders},
 		),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := resolveDeploySmoke(cmd, &t, &o, envDeploy); err != nil {
+			req, err := deploySmokeRequest(cmd, &t, f, &from)
+			if err != nil {
 				return err
 			}
+			o, err := deploy.ResolveSmoke(req)
+			if err != nil {
+				return secretsConflictExit(cmd, err)
+			}
 			return withTracing(cmd, func(ctx context.Context) error {
-				ctx, cancel := context.WithTimeout(ctx, timeout)
+				ctx, cancel := context.WithTimeout(ctx, f.timeout)
 				defer cancel()
-				if err := smoke.Run(ctx, o); err != nil {
+				if err := deploysmoke.Run(ctx, o); err != nil {
 					return err
 				}
 				_, err := fmt.Fprintln(cmd.OutOrStdout(), "smoke: ok")
@@ -233,93 +262,63 @@ that. Without an environment, smoke sends one chat to --smoke-chat-model.`,
 		},
 	}
 	t.bind(cmd)
-	f := cmd.Flags()
-	f.StringVar(&o.BaseURL, "health-url", "", healthURLHelp)
+	from.bind(cmd)
+	fl := cmd.Flags()
+	fl.StringVar(&f.healthURL, "health-url", "", healthURLHelp)
 	// POLYPUS_SWITCHYARD is read with the same parser serve uses (see PreRunE).
 	// Unset means off here: a router smoke needs an environment's gateway YAML, and
 	// with one the deploy run checks decide instead.
-	f.BoolVar(&o.WithRouter, "with-router", false, "also smoke each chat router in the gateway YAML, reporting the model that answered (default with an environment: as deploy run)")
-	f.BoolVar(&o.WithSystemOne, "with-systemone", false, "also smoke /v1/systemone for the gateway YAML's SystemOne backends (default with an environment: as deploy run)")
-	f.BoolVar(&o.WithProviders, "with-providers", false, "smoke chat per backend in the gateway YAML whose secrets are set, in place of --smoke-chat-model (default with an environment: as deploy run)")
-	f.StringVar(&envDeploy, "env-deploy", "", "dotenv with secret names for --with-providers (default: .env.deploy in the environment's state folder)")
-	bindSmokeModelFlags(cmd, &timeout, &o.ChatModel)
+	fl.BoolVar(&f.withRouter, "with-router", false, "also smoke each chat router in the gateway YAML, reporting the model that answered (default with an environment: as deploy run)")
+	fl.BoolVar(&f.withSystemOne, "with-systemone", false, "also smoke /v1/systemone for the gateway YAML's SystemOne backends (default with an environment: as deploy run)")
+	fl.BoolVar(&f.withProviders, "with-providers", false, "smoke chat per backend in the gateway YAML whose secrets are set, in place of --smoke-chat-model (default with an environment: as deploy run)")
+	fl.StringVar(&f.envDeploy, "env-deploy", "", "dotenv with secret names for --with-providers (default: .env.deploy in the environment's state folder)")
+	bindSmokeModelFlags(cmd, &f.timeout, &f.chatModel)
 	return cmd
 }
 
-// resolveDeploySmoke fills the smoke options from the environment, resolving it
-// once: the client key, the deploy run checks, the gateway YAML and the base URL.
-// Without an environment the options stay as the flags set them, and only a check
-// that needs one fails.
-func resolveDeploySmoke(cmd *cobra.Command, t *deployTarget, o *smoke.Options, envDeploy string) error {
-	o.SystemOneRequested = cmd.Flags().Changed("with-systemone") && o.WithSystemOne
-	env, found, err := discoverOptional(t.config)
+// deploySmokeRequest maps deploy smoke's flags onto a deploy.SmokeRequest. With an
+// environment, a --with-* flag the operator did not pass is left unset, so the
+// deploy run checks decide it; without one, it keeps its env default.
+func deploySmokeRequest(cmd *cobra.Command, t *deployTarget, f deploySmokeFlags, from *secretsFrom) (deploy.SmokeRequest, error) {
+	req := deploy.SmokeRequest{
+		BaseURL:   f.healthURL,
+		EnvDeploy: f.envDeploy,
+		ChatModel: f.chatModel,
+		Out:       cmd.OutOrStdout(),
+	}
+	env, err := envconfig.Discover(t.config)
+	found := err == nil
+	switch {
+	case errors.Is(err, envconfig.ErrNotFound):
+		req.NoEnvironment = err
+	case err != nil:
+		return req, err
+	}
+	flag := func(name string, v bool) *bool {
+		if found && !cmd.Flags().Changed(name) {
+			return nil
+		}
+		return &v
+	}
+	req.WithRouter = flag("with-router", f.withRouter)
+	req.WithSystemOne = flag("with-systemone", f.withSystemOne)
+	req.WithProviders = flag("with-providers", f.withProviders)
+	if !found {
+		return req, nil
+	}
+	opts, err := t.optionsFor(env)
 	if err != nil {
-		return err
+		return req, err
 	}
-	var opts deploy.Options
-	if found {
-		// Env POLYPUS_API_KEY wins, then the environment's keyring service.
-		if o.APIKey, err = secrets.Lookup(nil, env.Name(), secrets.ClientKeyName); err != nil {
-			return err
-		}
-		if opts, err = t.optionsFor(env); err != nil {
-			return err
-		}
-		if err := applyDeploySmokeChecks(cmd, opts, o); err != nil {
-			return err
-		}
+	if opts.Secrets, err = from.resolver(cmd); err != nil {
+		return req, err
 	}
-	needsEnv := o.WithProviders || o.WithSystemOne || o.WithRouter || o.BaseURL == ""
-	if needsEnv && !found {
-		// No environment: the error names what is missing.
-		if opts, err = t.options(); err != nil {
-			return err
-		}
-	}
-	if o.WithProviders || o.WithSystemOne || o.WithRouter {
-		if o.GatewayConfig, err = paths.ResolveGatewayConfig(opts.GatewayConfig); err != nil {
-			return err
-		}
-		if strings.TrimSpace(envDeploy) == "" {
-			envDeploy = opts.EnvDeployPath()
-		}
-	}
-	o.EnvDeploy = envDeploy
-	if o.BaseURL == "" {
-		o.BaseURL = opts.HealthURL
-	}
-	o.BaseURL = strings.TrimRight(o.BaseURL, "/")
-	return nil
-}
-
-// applyDeploySmokeChecks gives each smoke check the operator left unset the value
-// deploy run uses for the environment, so a re-test only reaches backends it has
-// keys for. An explicit --smoke-chat-model keeps the direct chat in place of the
-// provider probes.
-func applyDeploySmokeChecks(cmd *cobra.Command, opts deploy.Options, o *smoke.Options) error {
-	gatewayPath, err := paths.ResolveGatewayConfig(opts.GatewayConfig)
-	if err != nil {
-		return err
-	}
-	checks, err := deploy.ResolveSmokeChecks(gatewayPath)
-	if err != nil {
-		return err
-	}
-	f := cmd.Flags()
-	if !f.Changed("with-providers") && !f.Changed("smoke-chat-model") {
-		o.WithProviders = checks.Providers
-	}
-	if !f.Changed("with-router") {
-		o.WithRouter = checks.Routers
-	}
-	if !f.Changed("with-systemone") {
-		o.WithSystemOne = checks.SystemOne
-	}
-	return nil
+	req.Deploy = &opts
+	return req, nil
 }
 
 func newDeploySmokeCollectorCmd() *cobra.Command {
-	var o smoke.CollectorOptions
+	var o deploysmoke.CollectorOptions
 	var timeout time.Duration
 	var withHyperDX bool
 	var cfgPath string
@@ -341,14 +340,14 @@ func newDeploySmokeCollectorCmd() *cobra.Command {
 					o.HyperDXContainer = env.Name() + "-hyperdx-1"
 				}
 			}
-			opts := smoke.ResolveCollectorOptions(o, gatewayURL)
+			opts := deploysmoke.ResolveCollectorOptions(o, gatewayURL)
 			if withHyperDX {
 				opts.SkipHyperDXVerify = false
 			}
 			return withTracing(cmd, func(ctx context.Context) error {
 				ctx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
-				if err := smoke.RunCollector(ctx, opts); err != nil {
+				if err := deploysmoke.RunCollector(ctx, opts); err != nil {
 					return err
 				}
 				_, err := fmt.Fprintln(cmd.OutOrStdout(), "smoke-collector: ok")
@@ -357,7 +356,7 @@ func newDeploySmokeCollectorCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.DurationVar(&timeout, "timeout", smoke.DefaultCollectorSmokeTimeout, "collector smoke timeout")
+	f.DurationVar(&timeout, "timeout", deploysmoke.DefaultCollectorSmokeTimeout, "collector smoke timeout")
 	f.StringVar(&o.OTLPEndpoint, "otlp", "", "OTLP endpoint (http://host:4318 or grpc host:4317)")
 	f.StringVar(&o.PhoenixBaseURL, "phoenix-url", "", "Phoenix base URL")
 	f.StringVar(&o.PhoenixProject, "phoenix-project", "", "Phoenix project name")
@@ -412,6 +411,7 @@ func newDeployExportEnvCmd() *cobra.Command {
 	var t deployTarget
 	var app, out, secretCSV string
 	var dryRun bool
+	var from secretsFrom
 	cmd := &cobra.Command{
 		Use:     "export-env",
 		Short:   "Write keyring secrets named by the gateway YAML to .env.deploy and .env.gateway",
@@ -439,8 +439,12 @@ func newDeployExportEnvCmd() *cobra.Command {
 			if app == "" {
 				app = opts.Name
 			}
-			if err := secrets.Export(app, names, out); err != nil {
+			r, err := from.resolver(cmd)
+			if err != nil {
 				return err
+			}
+			if err := secrets.Export(r, app, names, out); err != nil {
+				return secretsConflictExit(cmd, err)
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "export-env: wrote %s and %s beside it\n", out, secrets.GatewayEnvFileName)
 			return err
@@ -452,5 +456,6 @@ func newDeployExportEnvCmd() *cobra.Command {
 	f.StringVar(&out, "out", "", "dotenv path (default: .env.deploy in the environment's state folder)")
 	f.StringVar(&secretCSV, "secrets", "", "comma-separated env names (default: from the gateway YAML)")
 	f.BoolVar(&dryRun, "dry-run", false, "print the path and secret names; write nothing")
+	from.bind(cmd)
 	return cmd
 }

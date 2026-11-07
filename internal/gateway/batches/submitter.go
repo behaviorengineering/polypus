@@ -2,6 +2,7 @@ package batches
 
 import (
 	"context"
+	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 )
@@ -45,4 +46,13 @@ type Submitter interface {
 	Poll(ctx context.Context, meta batch.Meta) (Poll, error)
 	// Cancel asks the provider to cancel; CodeUnimplemented when it cannot.
 	Cancel(ctx context.Context, meta batch.Meta) error
+}
+
+// orDefault is v trimmed, or fallback when v is blank: a provider's line error text,
+// or Polypus's own when the provider gave none.
+func orDefault(v, fallback string) string {
+	if s := strings.TrimSpace(v); s != "" {
+		return s
+	}
+	return fallback
 }

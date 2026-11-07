@@ -2,48 +2,46 @@ package overlay
 
 import (
 	"strings"
+
+	"github.com/behaviorengineering/polypus/internal/config"
 )
 
-// File is the on-disk models-allow-overlay.yaml shape.
-type File struct {
-	Backends map[string]Backend `yaml:"backends"`
-}
+// file is the gateway's own overlay type, so both readers agree on its shape.
+type file = config.AllowOverlayFile
 
-// Backend lists extra downstream model ids for one backend.
-type Backend struct {
-	Allow []string `yaml:"allow"`
-}
+// backend lists extra downstream model ids for one backend.
+type backend = config.AllowOverlayBackend
 
-// Removal records one pruned overlay slug.
-type Removal struct {
+// removal records one pruned overlay slug.
+type removal struct {
 	Backend string
 	Model   string
 }
 
-// Prune drops overlay slugs that already appear in yamlAllow for the same backend.
-func Prune(overlay File, yamlAllow map[string][]string) (out File, removed []Removal) {
+// prune drops overlay slugs that already appear in yamlAllow for the same backend.
+func prune(overlay file, yamlAllow map[string][]string) (out file, removed []removal) {
 	if overlay.Backends == nil {
-		return File{}, nil
+		return file{}, nil
 	}
-	outBackends := make(map[string]Backend, len(overlay.Backends))
+	outBackends := make(map[string]backend, len(overlay.Backends))
 	for backendID, ob := range overlay.Backends {
 		yamlSlugs := yamlAllow[backendID]
 		var kept []string
 		for _, slug := range ob.Allow {
 			if slugInYAML(backendID, slug, yamlSlugs) {
-				removed = append(removed, Removal{Backend: backendID, Model: slug})
+				removed = append(removed, removal{Backend: backendID, Model: slug})
 				continue
 			}
 			kept = append(kept, slug)
 		}
 		if len(kept) > 0 {
-			outBackends[backendID] = Backend{Allow: kept}
+			outBackends[backendID] = backend{Allow: kept}
 		}
 	}
 	if len(outBackends) == 0 {
-		return File{}, removed
+		return file{}, removed
 	}
-	return File{Backends: outBackends}, removed
+	return file{Backends: outBackends}, removed
 }
 
 func slugInYAML(backendID, overlaySlug string, yamlSlugs []string) bool {

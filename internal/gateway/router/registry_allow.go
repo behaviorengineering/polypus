@@ -1,6 +1,8 @@
 package router
 
 import (
+	"slices"
+
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
@@ -64,14 +66,14 @@ func withAllowedModel(snap config.RouterConfig, backendID, model string) (config
 	for id, def := range snap.Backends {
 		newBackends[id] = def
 	}
+	// Copy the whole struct so a field added to BackendModels carries over; only the
+	// slices need their own backing arrays.
+	m := *b.Models
+	m.AllowConfigured = true
+	m.Allow = append(slices.Clone(b.Models.Allow), down)
+	m.SystemOneAllow = slices.Clone(b.Models.SystemOneAllow)
 	nb := b
-	nb.Models = &config.BackendModels{
-		Sync:                     b.Models.Sync,
-		AllowConfigured:          true,
-		Allow:                    append(append([]string(nil), b.Models.Allow...), down),
-		SystemOneAllowConfigured: b.Models.SystemOneAllowConfigured,
-		SystemOneAllow:           append([]string(nil), b.Models.SystemOneAllow...),
-	}
+	nb.Models = &m
 	newBackends[backendID] = nb
 	snap.Backends = newBackends
 	return snap, true, nil

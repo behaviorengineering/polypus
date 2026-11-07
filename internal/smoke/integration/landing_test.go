@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/behaviorengineering/polypus/media"
+	"github.com/behaviorengineering/polypus/internal/gateway/assets"
 )
 
 func TestGatewayLanding(t *testing.T) {
@@ -65,7 +65,7 @@ func TestGatewayLanding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(banner) != len(media.BannerWebP) {
-		t.Fatalf("banner len: got %d want %d", len(banner), len(media.BannerWebP))
+	if len(banner) != len(assets.BannerWebP()) {
+		t.Fatalf("banner len: got %d want %d", len(banner), len(assets.BannerWebP()))
 	}
 }

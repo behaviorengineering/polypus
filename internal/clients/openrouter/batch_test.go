@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 func testCtx(t *testing.T) context.Context {
@@ -119,6 +121,8 @@ func TestBatchErrorCodes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// A retrieve retries 429 and 5xx; a millisecond backoff keeps that out of real time.
+		c.policies = outbound.NewPoliciesWith(outbound.Backoff{Min: time.Millisecond, Max: time.Millisecond})
 		_, err = c.GetBatch(testCtx(t), "x")
 		srv.Close()
 		var de *derrors.Error
@@ -156,5 +160,76 @@ func TestDoKeepsTheOutboundCode(t *testing.T) {
 	_, err = c.GetBatch(context.Background(), "x")
 	if derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
 		t.Fatalf("a call without a deadline keeps the outbound code, got %v", err)
+	}
+}
+
+func TestNilClientsGetIsAnError(t *testing.T) {
+	var cs *Clients
+	_, err := cs.Get(config.BackendDef{ID: "openrouter"})
+	if derrors.CodeOf(err) != derrors.CodeInternal {
+		t.Fatalf("err = %v, want an internal error instead of a panic", err)
+	}
+}
+
+func TestGetBatchRequiresAnID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("an empty id must not reach the list endpoint")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := newClient(srv.URL+"/api/v1", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.GetBatch(testCtx(t), "  "); derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("err = %v, want invalid", err)
+	}
+}
+
+// trackedBody records whether the caller closed the response body.
+type trackedBody struct {
+	io.Reader
+	closed atomic.Bool
+}
+
+func (b *trackedBody) Close() error {
+	b.closed.Store(true)
+	return nil
+}
+
+type busyTransport struct{ body *trackedBody }
+
+func (b busyTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: b.body, Request: r}, nil
+}
+
+// TestGetBatchClosesTheResponseADeadlineInterrupts: a retrieve retries a 503, the
+// deadline ends the backoff, and outbound.Do hands back the last answer with the
+// error. The client must close it, or the connection leaks.
+func TestGetBatchClosesTheResponseADeadlineInterrupts(t *testing.T) {
+	body := &trackedBody{Reader: strings.NewReader("busy")}
+	c, err := newClient("https://openrouter.invalid/api/v1", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.httpClient = &http.Client{Transport: busyTransport{body: body}}
+	c.policies = outbound.NewPolicies()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if _, err := c.GetBatch(ctx, "batch_1"); derrors.CodeOf(err) != derrors.CodeTimeout {
+		t.Fatalf("err = %v, want the deadline during retries", err)
+	}
+	if !body.closed.Load() {
+		t.Fatal("the response Do returned with the error was not closed")
+	}
+}
+
+func TestNilClientIsNotReady(t *testing.T) {
+	var c *Client
+	if _, err := c.GetBatch(testCtx(t), "b"); derrors.CodeOf(err) != derrors.CodeNotReady {
+		t.Fatalf("GetBatch: %v", err)
+	}
+	if _, err := c.SubmitBatch(testCtx(t), "m", "", nil); derrors.CodeOf(err) != derrors.CodeNotReady {
+		t.Fatalf("SubmitBatch: %v", err)
 	}
 }

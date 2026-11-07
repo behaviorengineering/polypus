@@ -3,6 +3,7 @@ package smoke
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func TestRunSystemOne(t *testing.T) {
@@ -32,7 +35,7 @@ func TestRunSystemOne(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := Run(ctx, Options{BaseURL: srv.URL, WithSystemOne: true}); err != nil {
+	if err := Run(ctx, Options{BaseURL: srv.URL, ChatModel: testChatModel, WithSystemOne: true}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -90,6 +93,7 @@ func TestRunSystemOneFromGateway(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := Run(ctx, Options{
+		ChatModel:     testChatModel,
 		BaseURL:       srv.URL,
 		WithSystemOne: true,
 		GatewayConfig: gw,
@@ -179,6 +183,7 @@ func TestSystemOneSmokeSkipsMissingSecret(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	err := Run(ctx, Options{
+		ChatModel:     testChatModel,
 		BaseURL:       srv.URL,
 		WithSystemOne: true,
 		GatewayConfig: gw,
@@ -207,6 +212,7 @@ func TestSystemOneSmokeSaysWhenRequestedButAllSkipped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	err := Run(ctx, Options{
+		ChatModel:          testChatModel,
 		BaseURL:            srv.URL,
 		WithSystemOne:      true,
 		SystemOneRequested: true,
@@ -241,7 +247,7 @@ func TestRunChatOnly(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := Run(ctx, Options{BaseURL: srv.URL, WithRouter: false}); err != nil {
+	if err := Run(ctx, Options{BaseURL: srv.URL, ChatModel: testChatModel, WithRouter: false}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -305,7 +311,7 @@ func TestRunRoutersFromGateway(t *testing.T) {
 	srv := routerServer(t, "cf_local/big", &models)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := Run(ctx, Options{BaseURL: srv.URL, WithRouter: true, GatewayConfig: routerGateway(t)}); err != nil {
+	if err := Run(ctx, Options{BaseURL: srv.URL, ChatModel: testChatModel, WithRouter: true, GatewayConfig: routerGateway(t)}); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"router/investigator", "router/turno"}; !slices.Equal(models, want) {
@@ -318,7 +324,7 @@ func TestRunRouterFailsWrongLeaf(t *testing.T) {
 	srv := routerServer(t, "cf_local/wrong", &models)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	err := Run(ctx, Options{BaseURL: srv.URL, WithRouter: true, GatewayConfig: routerGateway(t)})
+	err := Run(ctx, Options{BaseURL: srv.URL, ChatModel: testChatModel, WithRouter: true, GatewayConfig: routerGateway(t)})
 	if err == nil || !strings.Contains(err.Error(), "not in allow-list") {
 		t.Fatalf("expected allow-list error, got %v", err)
 	}
@@ -333,7 +339,7 @@ func TestRunRouterNeedsRouters(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	err := Run(ctx, Options{BaseURL: srv.URL, WithRouter: true, GatewayConfig: path})
+	err := Run(ctx, Options{BaseURL: srv.URL, ChatModel: testChatModel, WithRouter: true, GatewayConfig: path})
 	if err == nil || !strings.Contains(err.Error(), "no chat routers") {
 		t.Fatalf("expected no-routers error, got %v", err)
 	}
@@ -362,4 +368,68 @@ func readBody(r *http.Request) (string, error) {
 	}
 	buf.Write(b)
 	return buf.String(), nil
+}
+
+// testChatModel is the direct chat probe's model in tests that do not exercise it.
+const testChatModel = "cf_local/@cf/ibm-granite/granite-4.0-h-micro"
+
+// TestRunDirectChatTakesTheGatewaysModel checks a run with provider probes off
+// and no chat model probes the first chat model the gateway YAML defines, not a
+// compiled-in one.
+func TestRunDirectChatTakesTheGatewaysModel(t *testing.T) {
+	t.Setenv("POLYPUS_CHAT_SMOKE_MODEL", "")
+	var models []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		body, _ := readBody(r)
+		models = append(models, body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	gw := filepath.Join(t.TempDir(), "gw.yaml")
+	if err := os.WriteFile(gw, []byte("backends:\n  work:\n    base_url: https://example.com/v1\n    capabilities: [chat]\n    models:\n      allow: [acme/small]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := Run(ctx, Options{BaseURL: srv.URL, GatewayConfig: gw}); err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || !strings.Contains(models[0], `"model":"work/acme/small"`) {
+		t.Fatalf("chat bodies %q, want one to work/acme/small", models)
+	}
+}
+
+func TestRunDirectChatWithoutAModelFails(t *testing.T) {
+	t.Setenv("POLYPUS_CHAT_SMOKE_MODEL", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := Run(ctx, Options{BaseURL: "http://127.0.0.1:1"})
+	if err == nil || !strings.Contains(err.Error(), "--smoke-chat-model") {
+		t.Fatalf("err = %v, want the missing model named", err)
+	}
+}
+
+// TestRunProbeKeepsTheTypedCause checks a failed probe returns the smoke's error
+// chain, so a refused key is not flattened into text.
+func TestRunProbeKeepsTheTypedCause(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"bad key"}}`, http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var out strings.Builder
+	err := Run(ctx, Options{BaseURL: srv.URL, ChatModel: testChatModel, Out: &out})
+	var de *derrors.Error
+	if err == nil || !errors.As(err, &de) || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("err = %v, want the probe's error chain with the 401", err)
+	}
+	if !strings.Contains(out.String(), "status=fail") {
+		t.Fatalf("output %q, want the failed result printed", out.String())
+	}
 }

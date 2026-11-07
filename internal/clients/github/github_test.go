@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
@@ -118,5 +119,22 @@ func TestGetNeedsDeadline(t *testing.T) {
 	c := testClient(t, http.NotFound)
 	if _, err := c.RunJobs(context.Background(), 1); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
 		t.Fatalf("err = %v, want a missing deadline refused", err)
+	}
+}
+
+func TestRunJobsRejectsAnOversizedBody(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"jobs":[` + strings.Repeat(" ", maxBody) + `]}`))
+	})
+	_, err := c.RunJobs(testContext(t), 7)
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("err = %v, want a too-large error rather than a truncated parse", err)
+	}
+}
+
+func TestStatusErrorCutsOnRunes(t *testing.T) {
+	err := statusError("op", "u", http.StatusBadGateway, []byte(strings.Repeat("é", maxErrorBody+5)))
+	if !utf8.ValidString(err.Error()) {
+		t.Fatalf("error text is not valid UTF-8: %q", err)
 	}
 }

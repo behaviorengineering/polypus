@@ -10,7 +10,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/buildinfo"
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/media"
+	"github.com/behaviorengineering/polypus/internal/gateway/assets"
 )
 
 const bannerAssetPath = "/media/banner.webp"
@@ -31,7 +31,7 @@ type landingPageData struct {
 	Version    string
 }
 
-// The Polypus mark: the eye from media/banner.webp, as drawn for the site (site/assets/polypus-eye.svg).
+// The Polypus mark: the eye from internal/gateway/assets/banner.webp, as drawn for the site (site/assets/polypus-eye.svg).
 const landingEyeSVG = `<svg viewBox="-54 -54 108 108" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true">` +
 	`<ellipse cx="0" cy="0" rx="41" ry="44.5" stroke-width="13"/><circle cx="0" cy="4" r="10" fill="currentColor" stroke="none"/>` +
 	`<path d="M7.3 -22.3A23.5 23.5 0 0 1 20.8 -11" stroke-width="7"/></svg>`
@@ -159,7 +159,7 @@ footer.version-footer a { color: var(--muted); text-decoration: underline; }
     var fd = new FormData(form);
     var payload = { backend: String(fd.get('backend') || '').trim(), model: String(fd.get('model') || '').trim() };
     out.textContent = 'Sending…';
-    fetch('/v1/admin/models/allow', {
+    fetch('` + pathAdminModelsAllow + `', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
@@ -276,17 +276,16 @@ const (
 	schemeHTTPS = "https"
 )
 
+// requestScheme is the scheme the client used: the proxy's X-Forwarded-Proto, else
+// TLS, else http. The landing page, the UI proxies and the admin same-origin check
+// all read it here.
 func requestScheme(r *http.Request) string {
 	if r == nil {
 		return schemeHTTP
 	}
-	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
-		if i := strings.Index(proto, ","); i >= 0 {
-			proto = strings.TrimSpace(proto[:i])
-		}
-		if proto == schemeHTTPS || proto == schemeHTTP {
-			return proto
-		}
+	// The first X-Forwarded-Proto value wins, and only http or https counts.
+	if proto := strings.ToLower(firstForwarded(r.Header.Get("X-Forwarded-Proto"))); proto == schemeHTTPS || proto == schemeHTTP {
+		return proto
 	}
 	if r.TLS != nil {
 		return schemeHTTPS
@@ -339,10 +338,7 @@ func (g *gatewayHandler) serveLanding(w http.ResponseWriter, r *http.Request) {
 		g.writeMethodNotAllowed(w, allowRead...)
 		return
 	}
-	cfg := config.RouterConfig{}
-	if g.registry != nil {
-		cfg = g.registry.Config()
-	}
+	cfg := g.registry.Config()
 	// Render before the status goes out, so a template error is a 500, not a cut-off 200.
 	var page bytes.Buffer
 	if err := landingPageTemplate.Execute(&page, landingPageDataForRequest(r, cfg)); err != nil {
@@ -366,14 +362,15 @@ func (g *gatewayHandler) serveBannerWebP(w http.ResponseWriter, r *http.Request)
 		g.writeMethodNotAllowed(w, allowRead...)
 		return
 	}
+	banner := assets.BannerWebP()
 	w.Header().Set("Content-Type", "image/webp")
 	if r.Method == http.MethodHead {
-		w.Header().Set("Content-Length", strconv.Itoa(len(media.BannerWebP)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(banner)))
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(media.BannerWebP); err != nil {
+	if _, err := w.Write(banner); err != nil {
 		g.log.Debug("polypus: banner write failed", "err", err)
 	}
 }

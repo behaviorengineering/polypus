@@ -3,7 +3,6 @@
 package gatewayconfig
 
 import (
-	"fmt"
 	"maps"
 	"os"
 	"regexp"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -70,7 +70,7 @@ func RequireBackends(path string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("gatewayconfig: config file %s has no backends", path)
+	return derrors.New(derrors.CodeInvalid, "gatewayconfig.RequireBackends", "config file "+path+" has no backends")
 }
 
 // SecretEnvNames returns deploy keyring env vars required for backends in gateway YAML
@@ -142,7 +142,7 @@ func AllowLists(path string) (map[string][]string, error) {
 func readGatewayYAML(path string) ([]byte, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // G304: path is operator-supplied gateway config from deploy
 	if err != nil {
-		return nil, fmt.Errorf("gatewayconfig: read %q: %w", path, err)
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gatewayconfig.read", "read "+path)
 	}
 	return data, nil
 }
@@ -154,7 +154,7 @@ func loadGatewayYAML(path string) (*gatewayYAML, error) {
 	}
 	var cfg gatewayYAML
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("gatewayconfig: parse %q: %w", path, err)
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "gatewayconfig.read", "parse "+path)
 	}
 	return &cfg, nil
 }

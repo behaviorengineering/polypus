@@ -47,7 +47,10 @@ func runInit(cio cmdIO, o initOpts) int {
 			cio.errorf("polypus init: %v\n", statErr)
 			return 1
 		}
-		cio.errorf("polypus init: dry-run: %s %s (and refresh config.yaml.example beside it)\n", action, path)
+		if err := cio.printf("polypus init: dry-run: %s %s (and refresh config.yaml.example beside it)\n", action, path); err != nil {
+			cio.errorf("polypus init: write: %v\n", err)
+			return 1
+		}
 		return 0
 	}
 	written, err := config.InitPolypusUserConfig(config.ConfigYAMLExample, o.force)

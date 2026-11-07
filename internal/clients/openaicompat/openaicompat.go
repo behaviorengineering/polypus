@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/behaviorengineering/polypus/internal/clients/catalog"
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
@@ -59,10 +59,10 @@ func (c Client) ListModels(ctx context.Context, target, auth string) ([]Model, e
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// A rejected key or unknown path is the caller's to fix, not a 502 to retry.
-		return nil, derrors.New(catalog.StatusCode(resp.StatusCode), op, "models list status").
+		return nil, derrors.New(httpx.StatusCode(resp.StatusCode), op, "models list status").
 			With("status", strconv.Itoa(resp.StatusCode))
 	}
-	raw, err := catalog.ReadCapped(resp.Body, modelsMaxBody, op)
+	raw, err := httpx.ReadCapped(resp.Body, modelsMaxBody, op)
 	if err != nil {
 		return nil, err
 	}

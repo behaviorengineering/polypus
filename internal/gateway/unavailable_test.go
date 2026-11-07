@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -17,7 +20,7 @@ import (
 func TestWriteUnavailableErrorBreakerOpen(t *testing.T) {
 	err := upstream.UnavailableError("cf_local", upstream.ErrOpen)
 	rec := httptest.NewRecorder()
-	testShared.writeUnavailableError(rec, err, err.Error(), "cf_local")
+	testResponder.writeUnavailableError(rec, err, err.Error(), "cf_local")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d", rec.Code)
 	}
@@ -42,7 +45,7 @@ func TestWriteUnavailableErrorBreakerOpen(t *testing.T) {
 func TestWriteUnavailableErrorHalfOpen(t *testing.T) {
 	err := upstream.UnavailableError("leaf", upstream.ErrHalfOpen)
 	rec := httptest.NewRecorder()
-	testShared.writeUnavailableError(rec, err, err.Error(), "leaf")
+	testResponder.writeUnavailableError(rec, err, err.Error(), "leaf")
 	var body openaiErrorBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
@@ -71,7 +74,7 @@ func refusedDial(t *testing.T) error {
 func TestWriteUpstreamDialErrorSwitchyardUnreachableNoRetryAfter(t *testing.T) {
 	err := refusedDial(t)
 	rec := httptest.NewRecorder()
-	testShared.writeUpstreamDialError(rec, dialFailure{err: err, prefix: "polypus: switchyard unavailable: ", upstream: upstream.NameSwitchyard, unreachable: isSwitchyardUnreachable})
+	testResponder.writeUpstreamDialError(rec, testRequest, dialFailure{err: err, prefix: "polypus: switchyard unavailable: ", upstream: upstream.NameSwitchyard, unreachable: isSwitchyardUnreachable})
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d", rec.Code)
 	}
@@ -99,7 +102,7 @@ func TestWriteUpstreamDialErrorRateLimitPrecedence(t *testing.T) {
 		"provider rate limited",
 	)
 	rec := httptest.NewRecorder()
-	testShared.writeUpstreamDialError(rec, dialFailure{err: err, prefix: "", upstream: "cf_local", unreachable: nil})
+	testResponder.writeUpstreamDialError(rec, testRequest, dialFailure{err: err, prefix: "", upstream: "cf_local", unreachable: nil})
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -119,7 +122,7 @@ func TestWriteUpstreamDialErrorResponseWrittenNoOp(t *testing.T) {
 	err := fmt.Errorf("stream: %w", upstream.ErrResponseWritten)
 	rec := httptest.NewRecorder()
 	rec.WriteHeader(http.StatusOK)
-	testShared.writeUpstreamDialError(rec, dialFailure{err: err, prefix: "", upstream: "cf_local", unreachable: nil})
+	testResponder.writeUpstreamDialError(rec, testRequest, dialFailure{err: err, prefix: "", upstream: "cf_local", unreachable: nil})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d", rec.Code)
 	}
@@ -131,7 +134,7 @@ func TestWriteUpstreamDialErrorResponseWrittenNoOp(t *testing.T) {
 func TestWriteHandlerErrorBreakerResolvesUpstream(t *testing.T) {
 	err := upstream.UnavailableError("cf_local", upstream.ErrOpen)
 	rec := httptest.NewRecorder()
-	testShared.writeHandlerError(rec, err)
+	testResponder.writeHandlerError(rec, testRequest, err)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -151,5 +154,22 @@ func TestSwitchyardUnreachableMatchesRealDialFailures(t *testing.T) {
 	}
 	if isSwitchyardUnreachable(errors.New("connection refused, said a body")) {
 		t.Fatal("text alone is not a dial failure")
+	}
+}
+
+func TestBreakerRefusalSendsOnlyThePublicMessage(t *testing.T) {
+	var logs bytes.Buffer
+	s := responder{log: slog.New(slog.NewTextHandler(&logs, nil))}
+	err := derrors.Wrap(upstream.UnavailableError("leaf", upstream.ErrOpen), derrors.CodeUnavailable, "gateway.secretOp", "dial")
+	rec := httptest.NewRecorder()
+	s.writeHandlerError(rec, testRequest, err)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "gateway.secretOp") || strings.Contains(body, "upstream.Execute") {
+		t.Fatalf("op chain leaked to the client: %s", body)
+	}
+	if !strings.Contains(logs.String(), "gateway.secretOp") {
+		t.Fatalf("the full chain must reach the log: %s", logs.String())
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/deploy/execx"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // status is the part of `tailscale status --json` the check reads.
@@ -27,35 +28,42 @@ type status struct {
 // StatusFunc returns `tailscale status --json` output.
 type StatusFunc func(ctx context.Context) ([]byte, error)
 
-// ErrNoCLI means no tailscale command was found on this machine.
-var ErrNoCLI = errors.New("tailscale CLI not found")
+// errNoCLI means no tailscale command was found on this machine.
+var errNoCLI = errors.New("tailscale CLI not found")
 
 // Check fails unless this machine's Tailscale is running on the tailnet whose
 // MagicDNS suffix is want, with MagicDNS on. A nil statusFn runs the tailscale CLI.
+// Every failure is CodeFailedPrecondition: the operator must connect this machine.
 func Check(ctx context.Context, want string, statusFn StatusFunc) error {
+	const op = "tailnet.Check"
 	if statusFn == nil {
 		statusFn = cliStatus
 	}
 	out, err := statusFn(ctx)
 	if err != nil {
-		return fmt.Errorf("tailnet: this machine must be on tailnet %s: %w", want, err)
+		return derrors.Wrap(err, derrors.CodeFailedPrecondition, op, "this machine must be on tailnet "+want).
+			With("tailnet", want)
 	}
 	var st status
 	if err := json.Unmarshal(out, &st); err != nil {
-		return fmt.Errorf("tailnet: parse tailscale status: %w", err)
+		return derrors.Wrap(err, derrors.CodeFailedPrecondition, op, "parse tailscale status")
 	}
 	if st.BackendState != "Running" {
-		return fmt.Errorf("tailnet: Tailscale on this machine is %q, not Running; connect it to tailnet %s", st.BackendState, want)
+		return derrors.New(derrors.CodeFailedPrecondition, op,
+			fmt.Sprintf("Tailscale on this machine is %q, not Running; connect it to tailnet %s", st.BackendState, want)).
+			With("backend_state", st.BackendState)
 	}
 	if st.CurrentTailnet == nil {
-		return fmt.Errorf("tailnet: tailscale status names no current tailnet; connect this machine to %s", want)
+		return derrors.New(derrors.CodeFailedPrecondition, op, "tailscale status names no current tailnet; connect this machine to "+want)
 	}
 	got := strings.TrimSuffix(st.CurrentTailnet.MagicDNSSuffix, ".")
 	if !strings.EqualFold(got, want) {
-		return fmt.Errorf("tailnet: this machine is on tailnet %s, but the environment's tailnet is %s", got, want)
+		return derrors.New(derrors.CodeFailedPrecondition, op,
+			fmt.Sprintf("this machine is on tailnet %s, but the environment's tailnet is %s", got, want))
 	}
 	if !st.CurrentTailnet.MagicDNSEnabled {
-		return fmt.Errorf("tailnet: MagicDNS is off on %s; turn it on in the Tailscale admin console under DNS", want)
+		return derrors.New(derrors.CodeFailedPrecondition, op,
+			fmt.Sprintf("MagicDNS is off on %s; turn it on in the Tailscale admin console under DNS", want))
 	}
 	return nil
 }
@@ -86,5 +94,5 @@ func findCLI() (string, error) {
 			return c, nil
 		}
 	}
-	return "", fmt.Errorf("%w: install Tailscale, or put tailscale on PATH", ErrNoCLI)
+	return "", fmt.Errorf("%w: install Tailscale, or put tailscale on PATH", errNoCLI)
 }

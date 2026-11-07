@@ -46,6 +46,7 @@ func TestBackendHealthOKWhenBackendUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/health/backends", nil)
 	rec := httptest.NewRecorder()
@@ -78,6 +79,7 @@ func TestBackendHealthDegradedWhenBackendDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/health/backends", nil)
 	rec := httptest.NewRecorder()
@@ -98,6 +100,7 @@ func TestHealthNamesNoBackendOrSwitchyard(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = handler.Close() })
 
 		req := httptest.NewRequest(http.MethodGet, "/health", nil)
 		rec := httptest.NewRecorder()
@@ -124,6 +127,7 @@ func TestBackendHealthSkipsSwitchyardWhenDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/health/backends", nil)
 	rec := httptest.NewRecorder()
@@ -156,6 +160,7 @@ func TestBackendHealthHonorsRequestCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -213,6 +218,14 @@ func TestProbeRemoteCredentialsFailsOnMissingGeminiKey(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "gemini_studio") {
 		t.Fatalf("error %v", err)
+	}
+}
+
+func TestProbeRemoteBackendNeedsTheGatewayCloudflareGetter(t *testing.T) {
+	b := config.BackendDef{ID: "cf", Remote: true, Extension: config.ExtensionCloudflare}
+	err := probeRemoteBackend(context.Background(), b, nil)
+	if derrors.CodeOf(err) != derrors.CodeInternal || !strings.Contains(err.Error(), "getter required") {
+		t.Fatalf("a nil getter must fail as a gateway bug, not build a client: %v", err)
 	}
 }
 
@@ -285,5 +298,22 @@ func TestProbeCloudflareCredentialsFailsOnGetError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cf_local") {
 		t.Fatalf("error %v", err)
+	}
+}
+
+func TestBackendHealthReadsTheSwitchyardSettingOnce(t *testing.T) {
+	t.Setenv("POLYPUS_SWITCHYARD", "0")
+	leaf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(leaf.Close)
+	cfg := scriptedRouterConfig()
+	b := cfg.Backends["leaf"]
+	b.BaseURL = leaf.URL
+	cfg.Backends["leaf"] = b
+	h := newScriptedGateway(t, &scriptedRouter{}, cfg)
+	t.Setenv("POLYPUS_SWITCHYARD", "1") // Too late: the gateway read it when built.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, pathHealthBackends, nil))
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "switchyard") {
+		t.Fatalf("the health page must follow the setting the gateway started with: %d %s", rec.Code, rec.Body.String())
 	}
 }

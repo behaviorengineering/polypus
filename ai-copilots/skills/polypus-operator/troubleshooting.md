@@ -37,6 +37,8 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 | Smoke chat/TTS/STT fail in ~1–3 ms with `circuit breaker is open` on `cf_local` | Breaker still open in a long-lived gateway after earlier CF/auth failures | Fix credentials (`polypus secret set` / env), then `go tool task serve-down && go tool task serve` (breaker state is in-process only). `/health/backends` no longer trips the production breaker. Compare `/health/upstreams` (`state=open`) vs Cloudflare throttle in dump (`polypus.failure.layer=cloudflare`). |
 | `POST /v1/chat/completions` returns **429** JSON (`error.type=rate_limit_error`) | Cloudflare Workers AI throttled the account or model (quota 3036, capacity 3040, edge 1015) | Use `curl -i` on the failing request: honor `Retry-After`, `Cf-Ray`, and any `x-ratelimit-*` on the **HTTP response** (not only success `extra_fields`). `error.code` may be `3036`/`3040`/`1015` when Workers JSON survived classification; otherwise `rate_limited`. Do not treat as Polypus breaker. |
 | Same path returns **503** JSON (`error.code=polypus_breaker`, `polypus.failure.layer=polypus_breaker`) | The Polypus circuit breaker (failsafe-go) refused the dial: `open`, or `half-open` while its one trial call is in flight | Polypus will not dial until the open window ends; honor `Retry-After: 30`. `/health/upstreams` is a live snapshot only, not the response body: per upstream `state`, `executions`, `successes`, `failures` and `failure_rate`, counted for the current state (or, while open, the closed run that tripped it). |
+| Deployed gateway or Switchyard logs `permission denied` under `/var/lib/polypus` or `/var/lib/switchyard` | The images run as non-root uid 10001; a volume an older root image created was not handed over | Check `docker compose -p polypus-<identifier> ps -a volume-owner` exited 0 and read its logs; `polypus deploy run` runs it before the gateway and Switchyard start |
+| Deploy stops with `<NAME> is set in this shell and differs from keyring service polypus-<identifier>` | A shell variable and the keyring hold different values | `unset <NAME>`, or choose with `--secrets-from env\|keyring` (or `POLYPUS_SECRETS_FROM`); a terminal run asks instead |
 | `router/…` returns 502 | Switchyard up but chat hop failed | Check Switchyard logs; upstream leaf error (distinct from 503 unavailable) |
 | `router/…` unknown / 400 | Router not in `routers:` or typo | Check `config.yaml` `routers:`; probe `GET /v1/apis/openai/models` for `router/<name>` |
 | Passthrough router fails, composed OK | Leaf allow-list or backend | Validate `route.target` leaf in `models.allow` |
@@ -45,7 +47,7 @@ curl -sf http://127.0.0.1:1234/v1/models | jq '.data | length'   # LM Studio
 
 Agent decision order when a job fails:
 
-1. `GET http://127.0.0.1:1320/debug/failures/<trace_id>` (or read `logs/inference-failures/<trace_id>.json` on the gateway host)
+1. `GET http://127.0.0.1:1320/debug/failures/<trace_id>` (or read `logs/inference-failures/<trace_id>.json` on the gateway host). A trace with only a failure dump returns that dump as it is. A trace whose stream also dropped chunks returns `{"trace_id", "failure", "stream_chunks": [{"file", "dump"}]}`: `failure` is the failure dump (left out when there is none) and `stream_chunks` lists the dropped chunks in chunk order
 2. On child spans, read `polypus.failure.layer` (`cloudflare`, `polypus_breaker`, `switchyard`, `leaf`)
 3. For `router/…` models, also `GET http://127.0.0.1:4000/debug/failures/<trace_id>` for Switchyard retry attempts
 4. `GET /health/upstreams` when layer is `polypus_breaker` but `/health/backends` is green
@@ -54,7 +56,7 @@ Agent decision order when a job fails:
 | Resource | Location |
 |----------|----------|
 | Phoenix UI | http://127.0.0.1:6006 |
-| Polypus failure dump API | `GET :1320/debug/failures/<trace_id>` |
+| Polypus failure dump API | `GET :1320/debug/failures/<trace_id>` (the dump, or `{trace_id, failure, stream_chunks[]}` with dropped stream chunks) |
 | Switchyard failure dump API | `GET :4000/debug/failures/<trace_id>` |
 | Inference failure JSON (disk) | `POLYPUS_FAILURE_DUMP_DIR` / `SWITCHYARD_FAILURE_DUMP_DIR` (default `logs/inference-failures/`) |
 | Gateway trace noise | Set `POLYPUS_OTEL_SKIP_PATHS=/health,/health/backends,/health/upstreams,/v1/models,/v1/apis,/v1/apis/openai/models,/v1/apis/systemone/models` |

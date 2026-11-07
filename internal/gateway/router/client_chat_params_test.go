@@ -121,7 +121,7 @@ func TestChatParamsFromOpenAIBodyConflictingReasoning(t *testing.T) {
 func TestBifrostChatRequestNonRawCarriesTools(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"}`)
-	req, err := bifrostChatRequest("gemini_paid", "gemini-3-flash", nil, body, false)
+	req, err := bifrostChatRequest(Call{BackendID: "gemini_paid", Model: "gemini-3-flash", Body: body}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestBifrostChatRequestNonRawCarriesTools(t *testing.T) {
 func TestBifrostChatRequestRawSkipsParams(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"messages":[],"tools":[{"type":"function","function":{"name":"f"}}]}`)
-	req, err := bifrostChatRequest("openrouter", "m", nil, body, true)
+	req, err := bifrostChatRequest(Call{BackendID: "openrouter", Model: "m", Body: body}, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}

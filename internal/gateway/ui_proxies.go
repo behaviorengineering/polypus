@@ -14,10 +14,9 @@ import (
 type uiProxyMount struct {
 	prefix  string
 	handler http.Handler
-	meta    config.UIProxy
 }
 
-func (s *shared) buildUIMounts(proxies []config.UIProxy) ([]uiProxyMount, error) {
+func buildUIMounts(rs responder, proxies []config.UIProxy) ([]uiProxyMount, error) {
 	if len(proxies) == 0 {
 		return nil, nil
 	}
@@ -29,14 +28,14 @@ func (s *shared) buildUIMounts(proxies []config.UIProxy) ([]uiProxyMount, error)
 		}
 		mounts = append(mounts, uiProxyMount{
 			prefix:  p.Path,
-			handler: s.newUIReverseProxy(p.Path, target, p.StripPrefix),
-			meta:    p,
+			handler: newUIReverseProxy(rs, p.Path, target, p.StripPrefix),
 		})
 	}
 	return mounts, nil
 }
 
-func (s *shared) newUIReverseProxy(prefix string, target *url.URL, stripPrefix bool) http.Handler {
+// newUIReverseProxy proxies prefix to target, answering a failed dial through rs.
+func newUIReverseProxy(rs responder, prefix string, target *url.URL, stripPrefix bool) http.Handler {
 	prefix = strings.TrimSuffix(prefix, "/")
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -66,14 +65,14 @@ func (s *shared) newUIReverseProxy(prefix string, target *url.URL, stripPrefix b
 			}
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			s.writeErrorJSON(w, http.StatusBadGateway,
+			rs.writeErrorJSON(w, r, http.StatusBadGateway,
 				derrors.Wrap(err, derrors.CodeUnavailable, "gateway.uiProxy", "polypus ui proxy unavailable"), "")
 		},
 	}
 }
 
 func (g *gatewayHandler) matchUIProxy(r *http.Request) *uiProxyMount {
-	if g == nil || g.shared == nil || len(g.uiMounts) == 0 || r == nil {
+	if g == nil || len(g.uiMounts) == 0 || r == nil {
 		return nil
 	}
 	path := r.URL.Path

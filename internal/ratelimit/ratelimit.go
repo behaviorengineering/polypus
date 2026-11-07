@@ -1,8 +1,9 @@
 // Package ratelimit is the provider-neutral shape of an upstream rate limit. Each client
 // classifies its throttled responses into a CodeRateLimited error carrying these
 // fields, and the gateway turns the fields back into response headers. Cloudflare is
-// the one upstream that also signals throttles by code in the body (3036, 3040, 1015),
-// so Classify recognises those codes whichever backend relayed them.
+// the one upstream that also signals throttles by code in the body (3036, 3040, 1015):
+// Classify treats a structured code (errors[].code) as a rate limit at any status,
+// and reads a code in free text only to label an answer that is already a 429.
 package ratelimit
 
 import (
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
@@ -49,34 +51,40 @@ type workersErrorEnvelope struct {
 	} `json:"errors"`
 }
 
-// Classify returns a CodeRateLimited error when the status is 429, or the JSON body
-// or hints carry a Cloudflare throttle code. It returns nil when the response is not
-// a rate limit. op names the caller (and so the backend) that saw the response. Use
-// it for Cloudflare and for paths that may relay Cloudflare (Switchyard, proxies).
-func Classify(op string, status int, header http.Header, body []byte, hints ...string) *derrors.Error {
-	blob := strings.Join(hints, "\n")
-	if len(body) > 0 {
-		blob += "\n" + string(body)
+// Classify returns a CodeRateLimited error when the status is 429, or when the
+// Cloudflare error body carries a throttle code in its structured errors[].code field
+// (or a hint is exactly such a code, as a provider error code is). A throttle code
+// that only appears in free text (a message, an HTML page) labels a 429 but never
+// turns another status into a rate limit, so a 5xx that mentions 3040 stays an
+// upstream failure. ok is false, with a nil error, when the response is not a rate
+// limit. op names
+// the caller (and so the backend) that saw the response. Use it for Cloudflare and
+// for paths that may relay Cloudflare (Switchyard, proxies).
+func Classify(op string, status int, header http.Header, body []byte, hints ...string) (*derrors.Error, bool) {
+	env := decodeWorkersEnvelope(body)
+	cfCode := structuredCode(env, hints)
+	if cfCode == "" && status == http.StatusTooManyRequests {
+		cfCode = workersCodeFromText(strings.Join(hints, "\n") + "\n" + string(body))
 	}
-	cfCode := workersCodeFromEnvelope(body)
-	if cfCode == "" {
-		cfCode = workersCodeFromText(blob)
-	}
-	return classify(op, response{status: status, header: header, body: body, hints: hints}, &cloudflareSignal{code: cfCode})
+	return classify(op, response{status: status, header: header, env: env, hints: hints}, &cloudflareSignal{code: cfCode})
 }
 
 // ClassifyStatus is Classify for a backend that is not Cloudflare: only a 429 is a
 // rate limit, Cloudflare codes in the body mean nothing, and the error carries none
 // of the Cloudflare fields (limit_kind, cf_ray) that mark a failure as Cloudflare's.
-func ClassifyStatus(op string, status int, header http.Header, body []byte, hints ...string) *derrors.Error {
-	return classify(op, response{status: status, header: header, body: body, hints: hints}, nil)
+// ok is false, with a nil error, for any other status.
+func ClassifyStatus(op string, status int, header http.Header, body []byte, hints ...string) (*derrors.Error, bool) {
+	if status != http.StatusTooManyRequests {
+		return nil, false
+	}
+	return classify(op, response{status: status, header: header, env: decodeWorkersEnvelope(body), hints: hints}, nil)
 }
 
-// response is the upstream answer classify reads.
+// response is the upstream answer classify reads, with its body decoded once.
 type response struct {
 	status int
 	header http.Header
-	body   []byte
+	env    workersErrorEnvelope
 	hints  []string
 }
 
@@ -86,7 +94,7 @@ type cloudflareSignal struct {
 	code string
 }
 
-func classify(op string, r response, cf *cloudflareSignal) *derrors.Error {
+func classify(op string, r response, cf *cloudflareSignal) (*derrors.Error, bool) {
 	if strings.TrimSpace(op) == "" {
 		op = "ratelimit.Classify"
 	}
@@ -98,13 +106,13 @@ func classify(op string, r response, cf *cloudflareSignal) *derrors.Error {
 	status, header := r.status, r.header
 
 	if status != http.StatusTooManyRequests && cfCode == "" {
-		return nil
+		return nil, false
 	}
 	if status == 0 {
 		status = http.StatusTooManyRequests
 	}
 
-	msg := firstWorkersMessage(r.body, r.hints...)
+	msg := firstWorkersMessage(r.env, r.hints...)
 	kind := KindRequest
 	switch cfCode {
 	case WorkersQuotaCode:
@@ -150,7 +158,7 @@ func classify(op string, r response, cf *cloudflareSignal) *derrors.Error {
 			}
 		}
 	}
-	return err
+	return err, true
 }
 
 func firstHeaderValue(vals []string) string {
@@ -162,16 +170,29 @@ func firstHeaderValue(vals []string) string {
 	return ""
 }
 
-func workersCodeFromEnvelope(body []byte) string {
+// decodeWorkersEnvelope decodes a Cloudflare error body; a body that is not one
+// decodes to the zero envelope.
+func decodeWorkersEnvelope(body []byte) workersErrorEnvelope {
 	var env workersErrorEnvelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		return ""
+	if len(body) == 0 {
+		return env
 	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return workersErrorEnvelope{}
+	}
+	return env
+}
+
+// structuredCode is the first Cloudflare throttle code in env's errors[].code, or a
+// hint that is exactly a throttle code; "" when there is none.
+func structuredCode(env workersErrorEnvelope, hints []string) string {
 	for _, e := range env.Errors {
 		if c := parseCFCode(e.Code); c != "" {
 			return c
 		}
-		if c := workersCodeFromText(e.Message); c != "" {
+	}
+	for _, h := range hints {
+		if c := knownCFCode(h); c != "" {
 			return c
 		}
 	}
@@ -195,7 +216,8 @@ func parseCFCode(raw json.RawMessage) string {
 }
 
 func knownCFCode(code string) string {
-	switch strings.TrimSpace(code) {
+	code = strings.TrimSpace(code)
+	switch code {
 	case WorkersQuotaCode, WorkersCapacityCode, EdgeBlockCode:
 		return code
 	default:
@@ -216,13 +238,10 @@ func workersCodeFromText(s string) string {
 	}
 }
 
-func firstWorkersMessage(body []byte, hints ...string) string {
-	var env workersErrorEnvelope
-	if err := json.Unmarshal(body, &env); err == nil {
-		for _, e := range env.Errors {
-			if msg := strings.TrimSpace(e.Message); msg != "" {
-				return msg
-			}
+func firstWorkersMessage(env workersErrorEnvelope, hints ...string) string {
+	for _, e := range env.Errors {
+		if msg := strings.TrimSpace(e.Message); msg != "" {
+			return msg
 		}
 	}
 	for _, h := range hints {
@@ -270,3 +289,33 @@ func firstHeader(h http.Header, names ...string) string {
 	}
 	return ""
 }
+
+// RetryAfter reads the Retry-After header in h as a wait measured from now. The
+// header is either delay-seconds or an HTTP date (RFC 9110 section 10.2.3). ok is
+// false when the header is absent or unparsable; a date already past is a zero
+// wait.
+func RetryAfter(h http.Header, now time.Time) (time.Duration, bool) {
+	if h == nil {
+		return 0, false
+	}
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if v == "" {
+		return 0, false
+	}
+	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
+		if secs < 0 {
+			return 0, false
+		}
+		// Cap before converting so a huge value cannot overflow the Duration.
+		return time.Duration(min(secs, maxRetryAfterSeconds)) * time.Second, true
+	}
+	at, err := http.ParseTime(v)
+	if err != nil {
+		return 0, false
+	}
+	return max(at.Sub(now), 0), true
+}
+
+// maxRetryAfterSeconds caps a delay-seconds Retry-After at about a year, far past
+// any request deadline and well inside time.Duration.
+const maxRetryAfterSeconds = 366 * 24 * 60 * 60

@@ -49,7 +49,7 @@ routers:
 		t.Fatal(err)
 	}
 	r := cfg.Routers["turno"]
-	if !r.IsComposed() || r.Route.Type != RouteFallback {
+	if !r.isComposed() || r.Route.Type != RouteFallback {
 		t.Fatalf("route: %+v", r)
 	}
 	want := []string{"claude_team/claude-sonnet-5-5", "openrouter/anthropic/claude-sonnet-5.5"}

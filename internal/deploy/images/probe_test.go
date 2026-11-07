@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/behaviorengineering/polypus/internal/clients/registry"
 )
 
 func TestProbeManifestOK(t *testing.T) {
@@ -20,7 +22,7 @@ func TestProbeManifestOK(t *testing.T) {
 	host := srv.URL[len("http://"):]
 	ref := host + "/acme/widget:1.2.3"
 
-	if err := ProbeManifest(testContext(t), ref, ""); err != nil {
+	if err := probeManifest(testContext(t), ref, ""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -33,7 +35,7 @@ func TestProbeManifest404(t *testing.T) {
 	host := srv.URL[len("http://"):]
 	ref := host + "/acme/widget:9.9.9"
 
-	err := ProbeManifest(testContext(t), ref, "")
+	err := probeManifest(testContext(t), ref, "")
 	if !errors.Is(err, ErrManifestNotFound) {
 		t.Fatalf("expected ErrManifestNotFound, got %v", err)
 	}
@@ -47,9 +49,9 @@ func TestProbeManifest401WithoutToken(t *testing.T) {
 	host := srv.URL[len("http://"):]
 	ref := host + "/acme/widget:1.0.0"
 
-	err := ProbeManifest(testContext(t), ref, "")
-	if !errors.Is(err, ErrRegistryUnauthorized) {
-		t.Fatalf("expected ErrRegistryUnauthorized, got %v", err)
+	err := probeManifest(testContext(t), ref, "")
+	if !errors.Is(err, registry.ErrUnauthorized) {
+		t.Fatalf("expected registry.ErrUnauthorized, got %v", err)
 	}
 }
 
@@ -67,7 +69,7 @@ func TestProbeManifest503Retries(t *testing.T) {
 	host := srv.URL[len("http://"):]
 	ref := host + "/acme/widget:1.0.0"
 
-	if err := ProbeManifest(testContext(t), ref, ""); err != nil {
+	if err := probeManifest(testContext(t), ref, ""); err != nil {
 		t.Fatal(err)
 	}
 	if hits < 2 {
@@ -94,7 +96,7 @@ func TestProbeManifestKeepsGitHubTokenFromOtherRegistries(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	ref := srv.URL[len("http://"):] + "/acme/widget:1.0.0"
-	if err := ProbeManifest(testContext(t), ref, ""); err != nil {
+	if err := probeManifest(testContext(t), ref, ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(leaked) > 0 {

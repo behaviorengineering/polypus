@@ -124,6 +124,34 @@ type geminiClientGet func(config.BackendDef) (*gemini.Client, error)
 // anthropicClientGet returns Anthropic catalog clients (defaults to the gateway's anthropic.Clients.Get).
 type anthropicClientGet func(config.BackendDef) (*anthropic.Client, error)
 
+// openRouterClientGet returns OpenRouter clients (defaults to the gateway's openrouter.Clients.Get).
+type openRouterClientGet func(config.BackendDef) (*openrouter.Client, error)
+
+// backendClients builds the provider clients a backend needs, one getter per
+// provider, each over the gateway's own client cache and outbound policies.
+type backendClients struct {
+	cf         cloudflareClientGet
+	gemini     geminiClientGet
+	anthropic  anthropicClientGet
+	openRouter openRouterClientGet
+}
+
+func (c backendClients) cloudflareClient(b config.BackendDef) (*cloudflare.Client, error) {
+	return c.cf(b)
+}
+
+func (c backendClients) geminiClient(b config.BackendDef) (*gemini.Client, error) {
+	return c.gemini(b)
+}
+
+func (c backendClients) anthropicClient(b config.BackendDef) (*anthropic.Client, error) {
+	return c.anthropic(b)
+}
+
+func (c backendClients) openRouterClient(b config.BackendDef) (*openrouter.Client, error) {
+	return c.openRouter(b)
+}
+
 // HandlerOption configures NewHandler.
 type HandlerOption func(*handlerOptions)
 
@@ -137,10 +165,14 @@ type handlerOptions struct {
 	clock          func() time.Time
 	claudeBatches  batches.ClaudeBatches
 	policies       *outbound.Policies
-	openRouterGet  func(config.BackendDef) (*openrouter.Client, error)
+	openRouterGet  openRouterClientGet
 	logger         *slog.Logger
 	dumpDir        string
 	traceSkipPaths []string
+	// probeTimeout bounds the backend probes; 0 means backendProbeTimeout.
+	probeTimeout time.Duration
+	// streamChunkPreview adds redacted chunk previews to stream chunk span events.
+	streamChunkPreview bool
 }
 
 // withRouter injects a router so tests can avoid bifrost.Init. The gateway uses the
@@ -151,6 +183,38 @@ func withRouter(r registryProvider) HandlerOption {
 	}
 	return func(o *handlerOptions) {
 		o.router = r
+	}
+}
+
+// WithStreamChunkDebug adds redacted, capped previews of each streamed chat chunk
+// to its span event (observability.Config.StreamChunkDebug). Off by default.
+func WithStreamChunkDebug(on bool) HandlerOption {
+	return func(o *handlerOptions) {
+		o.streamChunkPreview = on
+	}
+}
+
+// withPolicies sets the outbound policies (breakers and retry backoff) the gateway's
+// clients share, so tests can retry on a millisecond backoff. By default the gateway
+// builds its own production set. Panics if p is nil.
+func withPolicies(p *outbound.Policies) HandlerOption {
+	if p == nil {
+		panic("gateway: withPolicies(nil)")
+	}
+	return func(o *handlerOptions) {
+		o.policies = p
+	}
+}
+
+// withBackendProbeTimeout sets the budget for the backend probes (/health/backends
+// and the startup credential probe), so tests need not wait out the production
+// budget against a backend that never answers. Panics if d is not positive.
+func withBackendProbeTimeout(d time.Duration) HandlerOption {
+	if d <= 0 {
+		panic("gateway: withBackendProbeTimeout(non-positive)")
+	}
+	return func(o *handlerOptions) {
+		o.probeTimeout = d
 	}
 }
 
@@ -238,6 +302,9 @@ func (o *handlerOptions) fillDefaults() error {
 	// and the router's speech plugin shares the Cloudflare cache.
 	if o.policies == nil {
 		o.policies = outbound.NewPolicies()
+	}
+	if o.probeTimeout <= 0 {
+		o.probeTimeout = backendProbeTimeout
 	}
 	if o.cfGet == nil {
 		o.cfGet = (&cloudflare.Clients{Policies: o.policies, Logger: o.logger, Now: o.clock, Speech: cloudflare.SpeechDefaultsFromEnv()}).Get

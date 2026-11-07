@@ -56,7 +56,7 @@ func (c Client) Pull(ctx context.Context) error {
 		if pullManifestMissing(err) {
 			return outbound.Abort(err)
 		}
-		if dockerExecRetryable(err) {
+		if DockerExecRetryable(err) {
 			return outbound.Retry(err)
 		}
 		return outbound.Abort(err)
@@ -80,10 +80,6 @@ func pullManifestMissing(err error) bool {
 // DockerExecRetryable reports a transient docker CLI failure: docker itself failed
 // (exit 125), or its stderr names a registry or network blip. It never reads argv.
 func DockerExecRetryable(err error) bool {
-	return dockerExecRetryable(err)
-}
-
-func dockerExecRetryable(err error) bool {
 	if err == nil {
 		return false
 	}

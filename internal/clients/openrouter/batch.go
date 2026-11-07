@@ -14,7 +14,8 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
-	"github.com/behaviorengineering/polypus/internal/clients/catalog"
+	"github.com/behaviorengineering/polypus/internal/clients/clientcache"
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
@@ -140,24 +141,23 @@ func apiBase(base string) string {
 // it. A gateway owns one; its clients share the gateway's outbound policies.
 type Clients struct {
 	Policies *outbound.Policies
-	reg      catalog.Registry[Client]
+	reg      clientcache.Registry[Client]
 }
 
 // Get returns the cached client for b, building it on first use. b must be an
 // OpenRouter backend: its bearer token goes to the OpenRouter Batch API.
 func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
+	if cs == nil {
+		return nil, derrors.New(derrors.CodeInternal, opGet, "clients not configured").With("backend", b.ID)
+	}
 	if !b.IsOpenRouter() {
 		return nil, derrors.New(derrors.CodeInvalid, opGet, "backend is not openrouter").With("backend", b.ID)
 	}
-	token, err := b.Auth.ResolveBearerToken()
-	if err != nil {
-		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "resolve token").With("backend", b.ID)
-	}
 	base := apiBase(b.BaseURL)
-	return cs.reg.Get(b.ID, token+"\x00"+base, func() (*Client, error) {
+	return cs.reg.ForBackend(opGet, b, base, func(token string) (*Client, error) {
 		c, err := newClient(base, token)
 		if err != nil {
-			return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), opGet, "build client").With("backend", b.ID)
+			return nil, err
 		}
 		c.backendID = b.ID
 		c.policies = cs.Policies
@@ -170,7 +170,7 @@ func (cs *Clients) Get(b config.BackendDef) (*Client, error) {
 // do not stream. A create is not retried, so it can never submit the same batch twice.
 func (c *Client) SubmitBatch(ctx context.Context, model, endpoint string, lines []batch.InputLine) (string, error) {
 	if c == nil {
-		return "", derrors.New(derrors.CodeFailedPrecondition, "openrouter.SubmitBatch", "not configured")
+		return "", derrors.New(derrors.CodeNotReady, "openrouter.SubmitBatch", "not configured")
 	}
 	items := make([]submitItem, 0, len(lines))
 	for _, line := range lines {
@@ -202,9 +202,15 @@ func (c *Client) SubmitBatch(ctx context.Context, model, endpoint string, lines 
 // GetBatch returns the batch, with inline results once it has completed.
 func (c *Client) GetBatch(ctx context.Context, id string) (Batch, error) {
 	if c == nil {
-		return Batch{}, derrors.New(derrors.CodeFailedPrecondition, "openrouter.GetBatch", "not configured")
+		return Batch{}, derrors.New(derrors.CodeNotReady, "openrouter.GetBatch", "not configured")
 	}
-	raw, err := c.do(ctx, http.MethodGet, c.apiBase+"/batches/"+url.PathEscape(strings.TrimSpace(id)), nil)
+	id = strings.TrimSpace(id)
+	if id == "" {
+		// An empty id would GET /batches/, the list endpoint, and decode it as a batch
+		// in no known state.
+		return Batch{}, derrors.New(derrors.CodeInvalid, "openrouter.GetBatch", "batch id required")
+	}
+	raw, err := c.do(ctx, http.MethodGet, c.apiBase+"/batches/"+url.PathEscape(id), nil)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -249,16 +255,18 @@ func (c *Client) do(ctx context.Context, method, target string, payload []byte) 
 	}
 	resp, err := send(ctx, outbound.Scoped(outbound.DepOpenRouter, c.backendID), c.httpClient, req)
 	if err != nil {
+		// Do can hand back the last answer with a deadline error; close it here.
+		outbound.CloseResponse(resp)
 		return nil, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), opDo, strings.ToLower(method)).
 			With("target", target)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := catalog.ReadCapped(resp.Body, batchMaxBody, opDo)
+	raw, err := httpx.ReadCapped(resp.Body, batchMaxBody, opDo)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, derrors.New(catalog.StatusCode(resp.StatusCode), opDo, errorMessage(raw, resp.StatusCode)).
+		return nil, derrors.New(httpx.StatusCode(resp.StatusCode), opDo, errorMessage(raw, resp.StatusCode)).
 			With("status", strconv.Itoa(resp.StatusCode))
 	}
 	return raw, nil
@@ -273,5 +281,5 @@ func errorMessage(raw []byte, status int) string {
 	if err := json.Unmarshal(raw, &env); err == nil && strings.TrimSpace(env.Error.Message) != "" {
 		return env.Error.Message
 	}
-	return fmt.Sprintf("openrouter batch: status %d: %s", status, catalog.Truncate(string(raw), 200))
+	return fmt.Sprintf("openrouter batch: status %d: %s", status, httpx.Truncate(string(raw), 200))
 }

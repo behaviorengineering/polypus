@@ -3,7 +3,6 @@ package router
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -20,20 +19,14 @@ type BatchPoll struct {
 }
 
 // ClaudeBatches runs Anthropic Message Batches through a router client's Bifrost
-// instance. It is separate from Client, which serves the synchronous calls; the batch
+// instance. Each method names the Anthropic backend by its id, and its time budget
+// is its context's deadline, which every method requires. It is separate from Client, which serves the synchronous calls; the batch
 // service owns it.
 type ClaudeBatches struct {
 	c *Client
 }
 
 // NewClaudeBatches returns the Message Batches surface of c. Panics if c is nil.
-// BatchTarget names the Anthropic backend a Message Batches call goes to and the
-// time budget for that one call.
-type BatchTarget struct {
-	BackendID string
-	Timeout   time.Duration
-}
-
 func NewClaudeBatches(c *Client) *ClaudeBatches {
 	if c == nil {
 		panic("router.NewClaudeBatches: nil client")
@@ -44,13 +37,15 @@ func NewClaudeBatches(c *Client) *ClaudeBatches {
 // Create submits OpenAI chat batch lines to an Anthropic backend as one Message Batch and
 // returns its upstream id. Each line's OpenAI body becomes native Messages params through
 // Bifrost's own chat converter, with the backend's automatic prompt caching applied.
-func (b *ClaudeBatches) Create(ctx context.Context, t BatchTarget, model string, lines []batch.InputLine) (string, error) {
-	backendID, timeout := t.BackendID, t.Timeout
+func (b *ClaudeBatches) Create(ctx context.Context, backendID, model string, lines []batch.InputLine) (string, error) {
 	if b == nil || b.c == nil || b.c.bf == nil {
-		return "", derrors.New(derrors.CodeFailedPrecondition, "router.ClaudeBatches.Create", "bifrost not configured")
+		return "", derrors.New(derrors.CodeNotReady, "router.ClaudeBatches.Create", "bifrost not configured")
+	}
+	if err := requireDeadline(ctx, "router.ClaudeBatches.Create"); err != nil {
+		return "", err
 	}
 	c := b.c
-	bctx, cancel := c.bifrostContext(ctx, timeout, false)
+	bctx, cancel := c.bifrostContext(ctx, 0, false)
 	defer cancel()
 	items := make([]schemas.BatchRequestItem, 0, len(lines))
 	for _, line := range lines {
@@ -82,7 +77,7 @@ func (c *Client) claudeBatchParams(bctx *schemas.BifrostContext, backendID, mode
 	if err != nil {
 		return nil, err
 	}
-	req, err := bifrostChatRequest(backendID, model, messages, body, false)
+	req, err := bifrostChatRequest(Call{BackendID: backendID, Model: model, Body: body}, messages, false)
 	if err != nil {
 		return nil, err
 	}
@@ -106,13 +101,15 @@ func (c *Client) claudeBatchParams(bctx *schemas.BifrostContext, backendID, mode
 }
 
 // Status reports whether an upstream Message Batch has ended or is cancelling.
-func (b *ClaudeBatches) Status(ctx context.Context, t BatchTarget, batchID string) (BatchPoll, error) {
-	backendID, timeout := t.BackendID, t.Timeout
+func (b *ClaudeBatches) Status(ctx context.Context, backendID, batchID string) (BatchPoll, error) {
 	if b == nil || b.c == nil || b.c.bf == nil {
-		return BatchPoll{}, derrors.New(derrors.CodeFailedPrecondition, "router.ClaudeBatches.Status", "bifrost not configured")
+		return BatchPoll{}, derrors.New(derrors.CodeNotReady, "router.ClaudeBatches.Status", "bifrost not configured")
+	}
+	if err := requireDeadline(ctx, "router.ClaudeBatches.Status"); err != nil {
+		return BatchPoll{}, err
 	}
 	c := b.c
-	bctx, cancel := c.bifrostContext(ctx, timeout, false)
+	bctx, cancel := c.bifrostContext(ctx, 0, false)
 	defer cancel()
 	resp, berr := c.bf.BatchRetrieveRequest(bctx, &schemas.BifrostBatchRetrieveRequest{
 		Provider: schemas.ModelProvider(backendID),
@@ -132,13 +129,15 @@ func (b *ClaudeBatches) Status(ctx context.Context, t BatchTarget, batchID strin
 
 // Results fetches an ended Message Batch and translates each succeeded line into an OpenAI
 // chat.completion labelled with publicModel.
-func (b *ClaudeBatches) Results(ctx context.Context, t BatchTarget, batchID, publicModel string) ([]batch.LineResult, error) {
-	backendID, timeout := t.BackendID, t.Timeout
+func (b *ClaudeBatches) Results(ctx context.Context, backendID, batchID, publicModel string) ([]batch.LineResult, error) {
 	if b == nil || b.c == nil || b.c.bf == nil {
-		return nil, derrors.New(derrors.CodeFailedPrecondition, "router.ClaudeBatches.Results", "bifrost not configured")
+		return nil, derrors.New(derrors.CodeNotReady, "router.ClaudeBatches.Results", "bifrost not configured")
+	}
+	if err := requireDeadline(ctx, "router.ClaudeBatches.Results"); err != nil {
+		return nil, err
 	}
 	c := b.c
-	bctx, cancel := c.bifrostContext(ctx, timeout, false)
+	bctx, cancel := c.bifrostContext(ctx, 0, false)
 	defer cancel()
 	resp, berr := c.bf.BatchResultsRequest(bctx, &schemas.BifrostBatchResultsRequest{
 		Provider: schemas.ModelProvider(backendID),
@@ -160,7 +159,7 @@ func (b *ClaudeBatches) Results(ctx context.Context, t BatchTarget, batchID, pub
 func claudeBatchLine(bctx *schemas.BifrostContext, item schemas.BatchResultItem, publicModel string) batch.LineResult {
 	line := batch.LineResult{CustomID: item.CustomID}
 	if item.Failed() || item.Result == nil {
-		line.ErrCode = "batch_failed"
+		line.ErrCode = batch.LineErrFailed
 		if item.Result != nil && item.Result.Type != "" {
 			line.ErrCode = item.Result.Type
 		}
@@ -174,7 +173,7 @@ func claudeBatchLine(bctx *schemas.BifrostContext, item schemas.BatchResultItem,
 	}
 	body, err := claudeMessageToChatCompletion(bctx, item.Result.Message, publicModel)
 	if err != nil {
-		line.ErrCode = "synthesis_failed"
+		line.ErrCode = batch.LineErrSynthesis
 		// The batch user reads this line; the wrap gives the op and step that failed.
 		line.ErrMessage = err.Error()
 		return line
@@ -207,13 +206,15 @@ func claudeMessageToChatCompletion(bctx *schemas.BifrostContext, message map[str
 
 // Cancel asks Anthropic to cancel a Message Batch. Lines already finished keep their
 // results; the batch ends once in-flight lines settle.
-func (b *ClaudeBatches) Cancel(ctx context.Context, t BatchTarget, batchID string) error {
-	backendID, timeout := t.BackendID, t.Timeout
+func (b *ClaudeBatches) Cancel(ctx context.Context, backendID, batchID string) error {
 	if b == nil || b.c == nil || b.c.bf == nil {
-		return derrors.New(derrors.CodeFailedPrecondition, "router.ClaudeBatches.Cancel", "bifrost not configured")
+		return derrors.New(derrors.CodeNotReady, "router.ClaudeBatches.Cancel", "bifrost not configured")
+	}
+	if err := requireDeadline(ctx, "router.ClaudeBatches.Cancel"); err != nil {
+		return err
 	}
 	c := b.c
-	bctx, cancel := c.bifrostContext(ctx, timeout, false)
+	bctx, cancel := c.bifrostContext(ctx, 0, false)
 	defer cancel()
 	_, berr := c.bf.BatchCancelRequest(bctx, &schemas.BifrostBatchCancelRequest{
 		Provider: schemas.ModelProvider(backendID),

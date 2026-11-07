@@ -87,7 +87,7 @@ func TestAnthropicUsesNonRawChatBody(t *testing.T) {
 
 func TestWithAutoPromptCacheAddsTopLevelMarker(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
-	req, err := bifrostChatRequest("claude_team", "claude-sonnet-5-5", nil, body, false)
+	req, err := bifrostChatRequest(Call{BackendID: "claude_team", Model: "claude-sonnet-5-5", Body: body}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestWithAutoPromptCacheAddsTopLevelMarker(t *testing.T) {
 
 func TestWithAutoPromptCacheKeepsClientMarkers(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`)
-	req, err := bifrostChatRequest("claude_team", "claude-sonnet-5-5", nil, body, false)
+	req, err := bifrostChatRequest(Call{BackendID: "claude_team", Model: "claude-sonnet-5-5", Body: body}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestWithAutoPromptCacheKeepsClientMarkers(t *testing.T) {
 
 func TestWithAutoPromptCacheIgnoresQuotedText(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":"explain \"cache_control\" please"}]}`)
-	req, err := bifrostChatRequest("claude_team", "claude-sonnet-5-5", nil, body, false)
+	req, err := bifrostChatRequest(Call{BackendID: "claude_team", Model: "claude-sonnet-5-5", Body: body}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestWithAutoPromptCacheOff(t *testing.T) {
 	b := anthropicBackend("")
 	b.PromptCache = &off
 	body := []byte(`{"messages":[]}`)
-	req, err := bifrostChatRequest("claude_team", "claude-sonnet-5-5", nil, body, false)
+	req, err := bifrostChatRequest(Call{BackendID: "claude_team", Model: "claude-sonnet-5-5", Body: body}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestWithAutoPromptCacheOff(t *testing.T) {
 
 func TestWithAutoPromptCacheSkipsOtherBackends(t *testing.T) {
 	body := []byte(`{"messages":[]}`)
-	req, err := bifrostChatRequest("gemini_paid", "gemini-2.5-flash", nil, body, false)
+	req, err := bifrostChatRequest(Call{BackendID: "gemini_paid", Model: "gemini-2.5-flash", Body: body}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

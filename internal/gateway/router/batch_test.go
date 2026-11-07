@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/batch"
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -153,18 +154,53 @@ func TestNewAccountAllowsClaudeBatchesWithCapability(t *testing.T) {
 
 func TestClaudeBatchesNilReceiverFailsClosed(t *testing.T) {
 	var b *ClaudeBatches
-	ctx := context.Background()
-	if _, err := b.Create(ctx, BatchTarget{BackendID: "claude_team", Timeout: time.Minute}, "m", nil); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	const target = "claude_team"
+	if _, err := b.Create(ctx, target, "m", nil); derrors.CodeOf(err) != derrors.CodeNotReady {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := b.Status(ctx, BatchTarget{BackendID: "claude_team", Timeout: time.Minute}, "id"); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+	if _, err := b.Status(ctx, target, "id"); derrors.CodeOf(err) != derrors.CodeNotReady {
 		t.Fatalf("Status: %v", err)
 	}
-	if _, err := b.Results(ctx, BatchTarget{BackendID: "claude_team", Timeout: time.Minute}, "id", "m"); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+	if _, err := b.Results(ctx, target, "id", "m"); derrors.CodeOf(err) != derrors.CodeNotReady {
 		t.Fatalf("Results: %v", err)
 	}
-	if err := b.Cancel(ctx, BatchTarget{BackendID: "claude_team", Timeout: time.Minute}, "id"); derrors.CodeOf(err) != derrors.CodeFailedPrecondition {
+	if err := b.Cancel(ctx, target, "id"); derrors.CodeOf(err) != derrors.CodeNotReady {
 		t.Fatalf("Cancel: %v", err)
+	}
+}
+
+func TestClaudeBatchesFailClosedWithoutADeadline(t *testing.T) {
+	t.Setenv(anthropicTestKeyEnv, "secret-key-at-least-twenty-ch")
+	client, err := NewClient(t.Context(), config.RouterConfig{
+		Timeouts: config.DefaultTimeouts(),
+		Backends: map[string]config.BackendDef{"claude_team": anthropicBackend("")},
+	}, WithLogger(testLogger()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	b := NewClaudeBatches(client)
+	const target = "claude_team"
+	var nilCtx context.Context // Nil on purpose.
+	for _, ctx := range []context.Context{context.Background(), nilCtx} {
+		want := derrors.CodeFailedPrecondition
+		if ctx == nil {
+			want = derrors.CodeInvalid
+		}
+		if _, err := b.Create(ctx, target, "m", nil); derrors.CodeOf(err) != want {
+			t.Fatalf("Create: %v", err)
+		}
+		if _, err := b.Status(ctx, target, "id"); derrors.CodeOf(err) != want {
+			t.Fatalf("Status: %v", err)
+		}
+		if _, err := b.Results(ctx, target, "id", "m"); derrors.CodeOf(err) != want {
+			t.Fatalf("Results: %v", err)
+		}
+		if err := b.Cancel(ctx, target, "id"); derrors.CodeOf(err) != want {
+			t.Fatalf("Cancel: %v", err)
+		}
 	}
 }
 
@@ -179,7 +215,7 @@ func TestClaudeBatchLineSynthesisFailureNamesTheStep(t *testing.T) {
 		},
 	}
 	line := claudeBatchLine(bctx, item, "claude_team/claude-sonnet-5-5")
-	if line.ErrCode != "synthesis_failed" {
+	if line.ErrCode != batch.LineErrSynthesis {
 		t.Fatalf("line: %+v", line)
 	}
 	if !strings.Contains(line.ErrMessage, "router.claudeMessageToChatCompletion") || !strings.Contains(line.ErrMessage, "decode message") {

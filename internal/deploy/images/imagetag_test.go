@@ -18,7 +18,7 @@ func TestParseImageTag(t *testing.T) {
 		{"latest", "", 0, false},
 	}
 	for _, tc := range cases {
-		parsed, err := ParseImageTag(tc.in)
+		parsed, err := parseImageTag(tc.in)
 		if tc.ok {
 			if err != nil {
 				t.Fatalf("%q: %v", tc.in, err)

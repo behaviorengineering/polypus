@@ -6,15 +6,15 @@ import (
 )
 
 func TestParseCompletionWindow(t *testing.T) {
-	d, err := ParseCompletionWindow("24h")
+	d, err := parseCompletionWindow("24h")
 	if err != nil || d != 24*time.Hour {
 		t.Fatalf("24h: %v %v", d, err)
 	}
-	d, err = ParseCompletionWindow("90m")
+	d, err = parseCompletionWindow("90m")
 	if err != nil || d != 90*time.Minute {
 		t.Fatalf("90m: %v %v", d, err)
 	}
-	if _, err := ParseCompletionWindow("bad"); err == nil {
+	if _, err := parseCompletionWindow("bad"); err == nil {
 		t.Fatal("expected error")
 	}
 }

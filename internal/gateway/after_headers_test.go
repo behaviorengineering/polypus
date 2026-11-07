@@ -16,10 +16,10 @@ func TestClientHangUpsDoNotOpenTheBreaker(t *testing.T) {
 		t.Fatalf("a failed client write must be CodeCanceled and response-written: %v", hangUp)
 	}
 	for range upstream.ConsecutiveFailuresTrip + 2 {
-		_ = board.Execute("claude_team", func() error { return hangUp })
+		_ = board.Execute(t.Context(), "claude_team", func() error { return hangUp })
 	}
 	ran := false
-	if err := board.Execute("claude_team", func() error { ran = true; return nil }); err != nil || !ran {
+	if err := board.Execute(t.Context(), "claude_team", func() error { ran = true; return nil }); err != nil || !ran {
 		t.Fatalf("client hang-ups opened the breaker: err=%v ran=%v", err, ran)
 	}
 }
@@ -31,9 +31,9 @@ func TestUpstreamStreamFailureStillCounts(t *testing.T) {
 		t.Fatalf("an upstream read failure must be CodeUnavailable: %v", dead)
 	}
 	for range upstream.ConsecutiveFailuresTrip {
-		_ = board.Execute("claude_team", func() error { return dead })
+		_ = board.Execute(t.Context(), "claude_team", func() error { return dead })
 	}
-	if err := board.Execute("claude_team", func() error { return nil }); !upstream.Unavailable(err) {
+	if err := board.Execute(t.Context(), "claude_team", func() error { return nil }); !upstream.Unavailable(err) {
 		t.Fatalf("a dead upstream must open the breaker, got %v", err)
 	}
 }

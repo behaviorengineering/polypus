@@ -2,7 +2,6 @@ package secrets
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 )
@@ -15,10 +14,9 @@ var accountIDRe = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
 
 const minAPIKeyLen = 20
 
-// validateCloudflareAccountIDFromEnv checks CF_ACCOUNT_ID after ResolveSecrets; app
-// names the keyring service in the message.
-func validateCloudflareAccountIDFromEnv(app string) error {
-	accountID := os.Getenv(cloudflareAccountID)
+// validateCloudflareAccountID checks the resolved CF_ACCOUNT_ID; app names the
+// keyring service in the message.
+func validateCloudflareAccountID(app, accountID string) error {
 	if !accountIDRe.MatchString(accountID) {
 		return fmt.Errorf("secrets: %s looks wrong (length=%d; expected 32 hex characters). Use the Cloudflare dashboard account ID in keyring %s:%s, not the API token",
 			cloudflareAccountID, len(accountID), app, cloudflareAccountID)
@@ -26,16 +24,16 @@ func validateCloudflareAccountIDFromEnv(app string) error {
 	return nil
 }
 
-// validateAPIKeysFromEnv checks that each exported API key is long enough to be
+// validateAPIKeys checks that each resolved API key in names is long enough to be
 // real. TS_AUTHKEY and CF_ACCOUNT_ID are not API keys and are skipped.
-func validateAPIKeysFromEnv(app string, names []string) error {
+func validateAPIKeys(app string, names []string, values map[string]string) error {
 	for _, name := range names {
 		name = strings.TrimSpace(name)
 		switch name {
 		case cloudflareAccountID, "TS_AUTHKEY", "":
 			continue
 		}
-		if val := os.Getenv(name); len(val) < minAPIKeyLen {
+		if val := values[name]; len(val) < minAPIKeyLen {
 			return fmt.Errorf("secrets: %s looks too short (length=%d); check %s:%s in keyring", name, len(val), app, name)
 		}
 	}

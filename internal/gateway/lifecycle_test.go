@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ func TestGatewayFromHandlerUnwrapsAccessProtector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 	if _, ok := handler.(*gatewayHandler); ok {
 		t.Fatal("expected wrapped handler from NewHandler")
 	}
@@ -46,12 +48,29 @@ func TestGatewayFromHandlerBareGateway(t *testing.T) {
 }
 
 func TestServeStopsWhenTheContextIsDone(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, &http.Server{Addr: "127.0.0.1:0", Handler: http.NotFoundHandler(), ReadHeaderTimeout: time.Second})
+		done <- serveOn(ctx, &http.Server{Handler: http.NotFoundHandler(), ReadHeaderTimeout: time.Second}, ln)
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// A round trip proves the server is accepting, so cancel lands while it serves.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+ln.Addr().String()+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("the server must answer before it is cancelled: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
 	cancel()
 	select {
 	case err := <-done:
@@ -67,5 +86,11 @@ func TestListenAndServeRequiresAContext(t *testing.T) {
 	//nolint:staticcheck // SA1012: a nil context is the case under test.
 	if err := ListenAndServe(nil, config.ServeOptions{}); derrors.CodeOf(err) != derrors.CodeInvalid {
 		t.Fatalf("a nil context must be refused: %v", err)
+	}
+}
+
+func TestSwitchyardConfigWithoutRouterIsTyped(t *testing.T) {
+	if code := derrors.CodeOf(writeSwitchyardConfig(nil, config.ServeOptions{})); code != derrors.CodeNotReady {
+		t.Fatalf("code %q", code)
 	}
 }

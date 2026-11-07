@@ -19,12 +19,13 @@ import (
 	internalsmoke "github.com/behaviorengineering/polypus/internal/smoke"
 )
 
-const defaultChatModel = internalsmoke.DefaultChatModel
-
 // Options configures post-deploy smoke against a running gateway.
 type Options struct {
 	// BaseURL is the gateway; empty reads POLYPUS_BASE_URL. One of them is required.
-	BaseURL   string
+	BaseURL string
+	// ChatModel is the direct chat probe's model when WithProviders is off. Empty
+	// reads POLYPUS_CHAT_SMOKE_MODEL, then takes the first chat probe the gateway
+	// YAML defines; with neither the smoke fails and says so.
 	ChatModel string
 	// WithRouter smokes every chat router in GatewayConfig.
 	WithRouter    bool
@@ -77,7 +78,7 @@ func run(ctx context.Context, ep endpoint, opts Options) error {
 		if err := runProviderSmokes(ctx, ep, opts); err != nil {
 			return err
 		}
-	} else if err := runChat(ctx, ep, opts.ChatModel, false, nil); err != nil {
+	} else if err := runDirectChat(ctx, ep, opts); err != nil {
 		return err
 	}
 	if opts.WithRouter {
@@ -99,7 +100,7 @@ func (o Options) withDefaults() Options {
 		out.BaseURL = strings.TrimSpace(os.Getenv("POLYPUS_BASE_URL"))
 	}
 	if strings.TrimSpace(out.ChatModel) == "" {
-		out.ChatModel = config.EnvOr("POLYPUS_CHAT_SMOKE_MODEL", defaultChatModel)
+		out.ChatModel = strings.TrimSpace(os.Getenv("POLYPUS_CHAT_SMOKE_MODEL"))
 	}
 	if strings.TrimSpace(out.SystemOneModel) == "" {
 		out.SystemOneModel = config.EnvOr("POLYPUS_SYSTEMONE_SMOKE_MODEL", internalsmoke.DefaultSystemOneModel)
@@ -107,14 +108,55 @@ func (o Options) withDefaults() Options {
 	return out
 }
 
-func runChat(ctx context.Context, ep endpoint, model string, requireSelected bool, allowed []string) error {
-	return runProbe(ctx, ep, model, internalsmoke.Options{
+// runDirectChat sends one chat to opts.ChatModel or, with none set, to the first
+// chat probe in the gateway YAML whose secrets the deploy has. No compiled-in
+// model is assumed: the environment may not define it.
+func runDirectChat(ctx context.Context, ep endpoint, opts Options) error {
+	if model := strings.TrimSpace(opts.ChatModel); model != "" {
+		return runChat(ctx, ep, chatProbe{model: model})
+	}
+	if strings.TrimSpace(opts.GatewayConfig) == "" {
+		return derrors.New(derrors.CodeInvalid, "smoke.run",
+			"no chat model to smoke: pass --smoke-chat-model (or set POLYPUS_CHAT_SMOKE_MODEL)")
+	}
+	targets, err := gatewayconfig.ChatSmokeTargets(opts.GatewayConfig)
+	if err != nil {
+		return fmt.Errorf("smoke: chat targets: %w", err)
+	}
+	ready, err := readyTargets(ep, "chat", opts.EnvDeploy, targets)
+	if err != nil {
+		return err
+	}
+	if len(ready) == 0 {
+		return derrors.New(derrors.CodeInvalid, "smoke.run",
+			"no chat model to smoke: give a chat backend a model in "+opts.GatewayConfig+" (models.allow or smoke.chat), or pass --smoke-chat-model")
+	}
+	return runChat(ctx, ep, chatProbe{model: ready[0].Model, reasoningEffort: ready[0].ReasoningEffort})
+}
+
+// chatProbe is one chat smoke: the model, the reasoning effort a reasoning model
+// needs to answer within the probe's tokens, and for a router the leaves it may
+// answer with.
+type chatProbe struct {
+	model string
+	// reasoningEffort, when set, goes on the request as reasoning.effort.
+	reasoningEffort string
+	// requireSelected fails the probe when the gateway does not say which model
+	// answered.
+	requireSelected bool
+	// allowed, when set, are the only models that may answer.
+	allowed []string
+}
+
+func runChat(ctx context.Context, ep endpoint, p chatProbe) error {
+	return runProbe(ctx, ep, p.model, internalsmoke.Options{
 		Channels:              []string{internalsmoke.ChannelChat},
-		ChatModel:             model,
+		ChatModel:             p.model,
 		MaxTokens:             64,
 		Temperature:           0.2,
-		RequireSelectedModel:  requireSelected,
-		AllowedSelectedModels: allowed,
+		RequireSelectedModel:  p.requireSelected,
+		AllowedSelectedModels: p.allowed,
+		ReasoningEffort:       p.reasoningEffort,
 	})
 }
 
@@ -125,8 +167,9 @@ func runSystemOne(ctx context.Context, ep endpoint, model string) error {
 	})
 }
 
-// runProbe runs one smoke probe for model against ep and prints each result. A
-// failed result fails the probe.
+// runProbe runs one smoke probe for model against ep and prints every result. The
+// error is internalsmoke.Run's, so a failed probe's typed cause (a 401, a 429, a
+// deadline) stays in the chain.
 func runProbe(ctx context.Context, ep endpoint, model string, popts internalsmoke.Options) error {
 	popts.BaseURL = ep.url
 	popts.APIKey = ep.key
@@ -134,9 +177,6 @@ func runProbe(ctx context.Context, ep endpoint, model string, popts internalsmok
 	for _, r := range results {
 		ep.out.Printf("smoke: channel=%s probe=%s model=%s selected=%s status=%s ms=%d detail=%s\n",
 			r.Channel, r.Probe, r.Model, r.SelectedModel, r.Status, r.Ms, r.Detail)
-		if r.Status == internalsmoke.StatusFail {
-			return fmt.Errorf("smoke %s probe %s: %s", model, r.Probe, r.Detail)
-		}
 	}
 	if err != nil {
 		return fmt.Errorf("smoke %s: %w", model, err)
@@ -159,15 +199,35 @@ func runRouterSmokes(ctx context.Context, ep endpoint, gatewayConfig string) err
 		return fmt.Errorf("smoke: no chat routers in %s", gatewayConfig)
 	}
 	for _, t := range targets {
-		var allowed []string
+		p := chatProbe{model: t.Model, requireSelected: true}
 		if t.Composed {
-			allowed = t.Leaves
+			p.allowed = t.Leaves
 		}
-		if err := runChat(ctx, ep, t.Model, true, allowed); err != nil {
+		if err := runChat(ctx, ep, p); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// readyTargets prints a skip line for each target whose secrets are missing from
+// envDeploy (the deploy has no key for it, so a probe could only fail) and returns
+// the rest. kind names the probe in the skip line.
+func readyTargets(ep endpoint, kind, envDeploy string, targets []gatewayconfig.ChatSmokeTarget) ([]gatewayconfig.ChatSmokeTarget, error) {
+	present, err := secrets.NonEmptyDotenvKeys(envDeploy)
+	if err != nil {
+		return nil, fmt.Errorf("smoke: dotenv: %w", err)
+	}
+	var ready []gatewayconfig.ChatSmokeTarget
+	for _, t := range targets {
+		if !gatewayconfig.SecretsReady(t, present) {
+			miss := gatewayconfig.MissingSecrets(t, present)
+			ep.out.Printf("smoke: skip %s backend=%s model=%s (missing %s)\n", kind, t.BackendID, t.Model, strings.Join(miss, ","))
+			continue
+		}
+		ready = append(ready, t)
+	}
+	return ready, nil
 }
 
 func runSystemOneProbes(ctx context.Context, ep endpoint, opts Options) error {
@@ -178,31 +238,19 @@ func runSystemOneProbes(ctx context.Context, ep endpoint, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("smoke: systemone targets: %w", err)
 	}
-	if err := gatewayconfig.ValidateChatSmokeTargets(targets); err != nil {
-		return err
-	}
 	if len(targets) == 0 {
 		return runSystemOne(ctx, ep, opts.SystemOneModel)
 	}
-	present, err := secrets.NonEmptyDotenvKeys(opts.EnvDeploy)
+	ready, err := readyTargets(ep, "systemone", opts.EnvDeploy, targets)
 	if err != nil {
-		return fmt.Errorf("smoke: dotenv: %w", err)
+		return err
 	}
-	// A backend without its secrets is skipped, as the provider probes do: the
-	// deploy has no key for it, so a probe could only fail.
-	var ran int
-	for _, t := range targets {
-		if !gatewayconfig.SecretsReady(t, present) {
-			miss := gatewayconfig.MissingSecrets(t, present)
-			ep.out.Printf("smoke: skip systemone backend=%s model=%s (missing %s)\n", t.BackendID, t.Model, strings.Join(miss, ","))
-			continue
-		}
+	for _, t := range ready {
 		if err := runSystemOne(ctx, ep, t.Model); err != nil {
 			return err
 		}
-		ran++
 	}
-	if ran == 0 && opts.SystemOneRequested {
+	if len(ready) == 0 && opts.SystemOneRequested {
 		ep.out.Printf("smoke: systemone not run: --with-systemone was set but every SystemOne backend is missing a secret in %s\n", opts.EnvDeploy)
 	}
 	return nil
@@ -217,26 +265,16 @@ func runProviderSmokes(ctx context.Context, ep endpoint, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("smoke: provider targets: %w", err)
 	}
-	if err := gatewayconfig.ValidateChatSmokeTargets(targets); err != nil {
+	ready, err := readyTargets(ep, "provider", opts.EnvDeploy, targets)
+	if err != nil {
 		return err
 	}
-	present, err := secrets.NonEmptyDotenvKeys(opts.EnvDeploy)
-	if err != nil {
-		return fmt.Errorf("smoke: dotenv: %w", err)
-	}
-	var ran int
-	for _, t := range targets {
-		if !gatewayconfig.SecretsReady(t, present) {
-			miss := gatewayconfig.MissingSecrets(t, present)
-			ep.out.Printf("smoke: skip provider backend=%s model=%s (missing %s)\n", t.BackendID, t.Model, strings.Join(miss, ","))
-			continue
-		}
-		if err := runProviderChat(ctx, ep, t.Model, t.ReasoningEffort); err != nil {
+	for _, t := range ready {
+		if err := runChat(ctx, ep, chatProbe{model: t.Model, reasoningEffort: t.ReasoningEffort}); err != nil {
 			return err
 		}
-		ran++
 	}
-	if ran == 0 {
+	if len(ready) == 0 {
 		return fmt.Errorf("smoke: no provider probes ran (check gateway YAML and %s)", opts.EnvDeploy)
 	}
 	return nil

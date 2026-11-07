@@ -3,15 +3,18 @@
 package upstream
 
 import (
+	"context"
 	"errors"
-	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/failsafe-go/failsafe-go"
 	"github.com/failsafe-go/failsafe-go/circuitbreaker"
 
+	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/ratelimit"
 )
 
 // Well-known breaker names.
@@ -58,19 +61,30 @@ func NewBoard() *Board {
 
 // Execute runs fn under the named breaker. A nil Board runs fn directly. A call the
 // breaker refuses returns UnavailableError without running fn; any other error is
-// fn's own, unchanged.
-func (b *Board) Execute(name string, fn func() error) error {
+// fn's own, unchanged. Only an error backendFault blames on the backend counts
+// against the breaker; ctx is the call's context, which says whether a deadline
+// was the caller's choice (config.WithCallerBudget).
+func (b *Board) Execute(ctx context.Context, name string, fn func() error) error {
 	if b == nil {
 		return fn()
 	}
 	name = normalizeName(name)
 	cb := b.breaker(name)
 	ran := false
+	var fnErr error
 	err := failsafe.With[any](cb).Run(func() error {
 		ran = true
-		return fn()
+		fnErr = fn()
+		if backendFault(ctx, fnErr) {
+			return fnErr
+		}
+		// Not the backend's doing: the breaker records the call as answered.
+		return nil
 	})
-	if err == nil || ran || !errors.Is(err, circuitbreaker.ErrOpen) {
+	if ran {
+		return fnErr
+	}
+	if err == nil || !errors.Is(err, circuitbreaker.ErrOpen) {
 		return err
 	}
 	// Read the state at refusal time: a half-open breaker refuses while its trial
@@ -92,15 +106,6 @@ func ResponseWritten(err error) bool {
 	return errors.Is(err, ErrResponseWritten)
 }
 
-// StatusFailure returns ErrResponseWritten for 5xx so the breaker trips after
-// the proxy has already forwarded the upstream body. 2xx/4xx return nil.
-func StatusFailure(status int) error {
-	if status >= 500 {
-		return fmt.Errorf("upstream status %d: %w", status, ErrResponseWritten)
-	}
-	return nil
-}
-
 func (b *Board) breaker(name string) circuitbreaker.CircuitBreaker[any] {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -117,10 +122,8 @@ func (b *Board) breaker(name string) circuitbreaker.CircuitBreaker[any] {
 	// Count based: it opens when the last ConsecutiveFailuresTrip calls all failed,
 	// so any success in between keeps it closed.
 	c := circuitbreaker.NewBuilder[any]().
-		HandleIf(func(_ any, err error) bool {
-			// Quota and capacity 429s and caller errors (4xx) are caller-visible, not a dead upstream.
-			return err != nil && !callerVisible(derrors.CodeOf(err))
-		}).
+		// Execute hands the breaker only backend faults, so every error counts.
+		HandleIf(func(_ any, err error) bool { return err != nil }).
 		WithFailureThreshold(ConsecutiveFailuresTrip).
 		WithDelay(delay).
 		WithSuccessThreshold(halfOpenMaxRequests).
@@ -149,18 +152,38 @@ func UnavailableError(name string, err error) error {
 // FieldUpstream is the error field naming the upstream whose breaker refused a call.
 const FieldUpstream = "upstream"
 
-// callerVisible reports codes that describe the request, not the upstream's health.
-// CodeCanceled is the caller going away (closed stream, cancelled request), so it
-// never counts against the backend.
-func callerVisible(code derrors.Code) bool {
-	switch code {
+// backendFault reports whether err is the backend's doing, so it counts against
+// the backend's breaker: the backend could not be reached or failed (CodeUnavailable,
+// unless the backend answered with a 4xx about the request), or it ran past the
+// gateway's own hop budget (CodeTimeout on a context the caller did not cut short).
+// Rate limits, other caller errors, cancels and errors raised inside Polypus
+// (NotReady such as a missing credential, FailedPrecondition, Internal,
+// Unimplemented) never count, and neither does an error with no domain code.
+func backendFault(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	// CodeOf reads an error with no domain code as CodeInternal.
+	switch derrors.CodeOf(err) {
+	case derrors.CodeUnavailable:
+		return !answeredClientError(err)
+	case derrors.CodeTimeout:
+		// A deadline the caller set (X-Polypus-Timeout shorter than the hop budget)
+		// is the caller's choice, not a slow backend.
+		return !config.CallerBudgetFrom(ctx)
 	case derrors.CodeRateLimited, derrors.CodeInvalid, derrors.CodeUnauthorized,
-		derrors.CodeNotFound, derrors.CodeConflict, derrors.CodeCanceled:
-		return true
-	case derrors.CodeTimeout, derrors.CodeFailedPrecondition,
-		derrors.CodeUnavailable, derrors.CodeNotReady, derrors.CodeInternal, derrors.CodeUnimplemented:
+		derrors.CodeNotFound, derrors.CodeConflict, derrors.CodeCanceled,
+		derrors.CodeNotReady, derrors.CodeFailedPrecondition, derrors.CodeInternal,
+		derrors.CodeUnimplemented:
 		return false
 	default:
 		return false
 	}
+}
+
+// answeredClientError reports an upstream answer with a 4xx status: the backend is
+// up and refused the request, whatever code the error was given.
+func answeredClientError(err error) bool {
+	status, convErr := strconv.Atoi(derrors.Field(err, ratelimit.FieldStatus))
+	return convErr == nil && status >= 400 && status < 500
 }

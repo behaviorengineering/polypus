@@ -8,6 +8,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/deploy/compose"
 	"github.com/behaviorengineering/polypus/internal/deploy/progress"
 	"github.com/behaviorengineering/polypus/internal/deploy/stack"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // dumpBudget bounds the diagnostics. It is a fresh budget, because a dump runs
@@ -18,6 +19,9 @@ const dumpBudget = 30 * time.Second
 // w (nil writes to os.Stdout), for CI debugging. It keeps ctx's values and trace
 // but not its cancel or deadline. It returns only a failure to write.
 func DumpGateway(ctx context.Context, w io.Writer, cc compose.Client) error {
+	if ctx == nil {
+		return derrors.New(derrors.CodeInvalid, "health.DumpGateway", "context required")
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dumpBudget)
 	defer cancel()
 	out := progress.New(w)

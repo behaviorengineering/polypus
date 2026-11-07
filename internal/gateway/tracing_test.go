@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -85,4 +86,33 @@ backends:
 	if chatTrace != rootTrace.String() {
 		t.Fatalf("polypus.chat trace %q != client trace %q", chatTrace, rootTrace)
 	}
+}
+
+func TestEmbeddingsRefusedByTheAllowGateEndsItsSpanAsAnError(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	cfg := scriptedRouterConfig()
+	leaf := cfg.Backends["leaf"]
+	leaf.Models = &config.BackendModels{AllowConfigured: true, Allow: []string{"ok"}}
+	cfg.Backends["leaf"] = leaf
+	h := newScriptedGateway(t, &scriptedRouter{}, cfg)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, pathEmbeddings, strings.NewReader(`{"model":"leaf/blocked","input":"x"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	for _, sp := range exporter.GetSpans() {
+		if sp.Name == "polypus.embeddings" {
+			if sp.Status.Code != codes.Error {
+				t.Fatalf("a refused embeddings request must not end its span as a success: %+v", sp.Status)
+			}
+			return
+		}
+	}
+	t.Fatal("missing polypus.embeddings span")
 }

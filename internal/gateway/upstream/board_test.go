@@ -1,17 +1,20 @@
 package upstream
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func TestBoardNilPassthrough(t *testing.T) {
 	var b *Board
 	called := false
-	err := b.Execute("x", func() error {
+	err := b.Execute(t.Context(), "x", func() error {
 		called = true
 		return nil
 	})
@@ -22,10 +25,10 @@ func TestBoardNilPassthrough(t *testing.T) {
 
 func TestBoardTripsAfterConsecutiveFailures(t *testing.T) {
 	b := NewBoard()
-	fail := errors.New("dial failed")
+	fail := derrors.New(derrors.CodeUnavailable, "router.bifrost", "dial failed")
 	for i := uint(0); i < ConsecutiveFailuresTrip; i++ {
 		called := false
-		err := b.Execute("leaf", func() error {
+		err := b.Execute(t.Context(), "leaf", func() error {
 			called = true
 			return fail
 		})
@@ -33,7 +36,7 @@ func TestBoardTripsAfterConsecutiveFailures(t *testing.T) {
 			t.Fatalf("attempt %d must still dial before the trip: called=%v err=%v", i, called, err)
 		}
 	}
-	err := b.Execute("leaf", func() error {
+	err := b.Execute(t.Context(), "leaf", func() error {
 		t.Fatal("must not dial while open")
 		return nil
 	})
@@ -51,9 +54,9 @@ func TestBoardTripsAfterConsecutiveFailures(t *testing.T) {
 func TestBoardHalfOpenRefusalIsLabelledHalfOpen(t *testing.T) {
 	const delay = 20 * time.Millisecond
 	b := &Board{openDelay: delay}
-	fail := errors.New("dial failed")
+	fail := derrors.New(derrors.CodeUnavailable, "router.bifrost", "dial failed")
 	for i := uint(0); i < ConsecutiveFailuresTrip; i++ {
-		_ = b.Execute("leaf", func() error { return fail })
+		_ = b.Execute(t.Context(), "leaf", func() error { return fail })
 	}
 	time.Sleep(2 * delay)
 
@@ -61,14 +64,14 @@ func TestBoardHalfOpenRefusalIsLabelledHalfOpen(t *testing.T) {
 	release := make(chan struct{})
 	trial := make(chan error, 1)
 	go func() {
-		trial <- b.Execute("leaf", func() error {
+		trial <- b.Execute(t.Context(), "leaf", func() error {
 			close(started)
 			<-release
 			return nil
 		})
 	}()
 	<-started
-	err := b.Execute("leaf", func() error {
+	err := b.Execute(t.Context(), "leaf", func() error {
 		t.Error("must not dial while the trial call is in flight")
 		return nil
 	})
@@ -82,7 +85,7 @@ func TestBoardHalfOpenRefusalIsLabelledHalfOpen(t *testing.T) {
 	if cls := ClassifyDialFailure(err, ""); cls.BreakerState != stateHalfOpen || cls.Upstream != "leaf" {
 		t.Fatalf("classification %+v", cls)
 	}
-	if err := b.Execute("leaf", func() error { return nil }); err != nil {
+	if err := b.Execute(t.Context(), "leaf", func() error { return nil }); err != nil {
 		t.Fatalf("a successful trial must close the breaker: %v", err)
 	}
 }
@@ -91,13 +94,13 @@ func TestBoardRateLimitedDoesNotTrip(t *testing.T) {
 	b := NewBoard()
 	fail := derrors.New(derrors.CodeRateLimited, "router.bifrost", "provider rate limited")
 	for i := 0; i < 5; i++ {
-		err := b.Execute("cf_local", func() error { return fail })
+		err := b.Execute(t.Context(), "cf_local", func() error { return fail })
 		if !errors.Is(err, derrors.ErrRateLimited) {
 			t.Fatalf("attempt %d: %v", i, err)
 		}
 	}
 	called := false
-	if err := b.Execute("cf_local", func() error {
+	if err := b.Execute(t.Context(), "cf_local", func() error {
 		called = true
 		return nil
 	}); err != nil || !called {
@@ -107,33 +110,20 @@ func TestBoardRateLimitedDoesNotTrip(t *testing.T) {
 
 func TestBoardSuccessResetsConsecutiveFailures(t *testing.T) {
 	b := NewBoard()
-	fail := errors.New("dial failed")
-	_ = b.Execute("leaf", func() error { return fail })
-	_ = b.Execute("leaf", func() error { return fail })
-	if err := b.Execute("leaf", func() error { return nil }); err != nil {
+	fail := derrors.New(derrors.CodeUnavailable, "router.bifrost", "dial failed")
+	_ = b.Execute(t.Context(), "leaf", func() error { return fail })
+	_ = b.Execute(t.Context(), "leaf", func() error { return fail })
+	if err := b.Execute(t.Context(), "leaf", func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := b.Execute("leaf", func() error { return fail }); !errors.Is(err, fail) {
+		if err := b.Execute(t.Context(), "leaf", func() error { return fail }); !errors.Is(err, fail) {
 			t.Fatalf("attempt %d: %v", i, err)
 		}
 	}
-	err := b.Execute("leaf", func() error { return nil })
+	err := b.Execute(t.Context(), "leaf", func() error { return nil })
 	if err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestStatusFailure(t *testing.T) {
-	if err := StatusFailure(200); err != nil {
-		t.Fatalf("200: %v", err)
-	}
-	if err := StatusFailure(404); err != nil {
-		t.Fatalf("404: %v", err)
-	}
-	err := StatusFailure(502)
-	if !ResponseWritten(err) {
-		t.Fatalf("502: %v", err)
 	}
 }
 
@@ -142,11 +132,11 @@ func TestBoardCallerVisibleErrorsDoNotTrip(t *testing.T) {
 	for _, code := range []derrors.Code{derrors.CodeRateLimited, derrors.CodeCanceled, derrors.CodeInvalid, derrors.CodeUnauthorized, derrors.CodeNotFound, derrors.CodeConflict} {
 		fail := derrors.New(code, "router.anthropic", "caller error")
 		for i := uint(0); i < ConsecutiveFailuresTrip+1; i++ {
-			_ = b.Execute("claude_team", func() error { return fail })
+			_ = b.Execute(t.Context(), "claude_team", func() error { return fail })
 		}
 	}
 	called := false
-	if err := b.Execute("claude_team", func() error {
+	if err := b.Execute(t.Context(), "claude_team", func() error {
 		called = true
 		return nil
 	}); err != nil || !called {
@@ -154,21 +144,103 @@ func TestBoardCallerVisibleErrorsDoNotTrip(t *testing.T) {
 	}
 }
 
-func TestBoardNotReadyTrips(t *testing.T) {
+func TestBoardLocalErrorsDoNotTrip(t *testing.T) {
 	b := NewBoard()
-	fail := derrors.New(derrors.CodeNotReady, "router.anthropic", "out of credit")
-	for i := uint(0); i < ConsecutiveFailuresTrip; i++ {
-		_ = b.Execute("claude_team", func() error { return fail })
+	for _, fail := range []error{
+		derrors.New(derrors.CodeNotReady, "gateway.proxyCloudflareSystemOne", "cloudflare credential missing"),
+		derrors.New(derrors.CodeNotReady, "router.anthropic", "out of credit"),
+		derrors.New(derrors.CodeFailedPrecondition, "gateway.dialChat", "backend not registered"),
+		derrors.New(derrors.CodeInternal, "gateway.rewrite", "marshal model"),
+		derrors.New(derrors.CodeUnimplemented, "batches.Cancel", "provider cannot cancel"),
+		errors.New("no domain code"),
+	} {
+		for i := uint(0); i < ConsecutiveFailuresTrip+1; i++ {
+			if err := b.Execute(t.Context(), "claude_team", func() error { return fail }); !errors.Is(err, fail) {
+				t.Fatalf("Execute must return fn's own error, got %v", err)
+			}
+		}
 	}
-	err := b.Execute("claude_team", func() error { return nil })
-	if !Unavailable(err) {
-		t.Fatalf("out-of-credit refusals must open the breaker, got %v", err)
+	if err := b.Execute(t.Context(), "claude_team", func() error { return nil }); err != nil {
+		t.Fatalf("errors raised inside Polypus must not open the breaker, got %v", err)
+	}
+}
+
+func TestBoardUpstream4xxDoesNotTrip(t *testing.T) {
+	b := NewBoard()
+	// bifrostErr codes a provider answer it cannot classify as unavailable, with
+	// the status alongside: a 4xx is still the backend answering.
+	fail := derrors.New(derrors.CodeUnavailable, "router.bifrost", "model not found").With("status", "400")
+	for i := uint(0); i < ConsecutiveFailuresTrip+1; i++ {
+		_ = b.Execute(t.Context(), "leaf", func() error { return fail })
+	}
+	if err := b.Execute(t.Context(), "leaf", func() error { return nil }); err != nil {
+		t.Fatalf("an upstream 4xx must not open the breaker, got %v", err)
+	}
+	b5 := NewBoard()
+	fail5 := derrors.New(derrors.CodeUnavailable, "router.bifrost", "bad gateway").With("status", "502")
+	for i := uint(0); i < ConsecutiveFailuresTrip; i++ {
+		_ = b5.Execute(t.Context(), "leaf", func() error { return fail5 })
+	}
+	if err := b5.Execute(t.Context(), "leaf", func() error { return nil }); !Unavailable(err) {
+		t.Fatalf("an upstream 5xx must open the breaker, got %v", err)
+	}
+}
+
+func TestBoardTimeoutCountsOnlyOnTheGatewayBudget(t *testing.T) {
+	timeout := derrors.New(derrors.CodeTimeout, "router.bifrost", "deadline exceeded")
+
+	own := NewBoard()
+	for i := uint(0); i < ConsecutiveFailuresTrip; i++ {
+		_ = own.Execute(t.Context(), "leaf", func() error { return timeout })
+	}
+	if err := own.Execute(t.Context(), "leaf", func() error { return nil }); !Unavailable(err) {
+		t.Fatalf("a backend that runs past the gateway's hop budget must open the breaker, got %v", err)
+	}
+
+	caller := NewBoard()
+	ctx := config.WithCallerBudget(t.Context())
+	for i := uint(0); i < ConsecutiveFailuresTrip+1; i++ {
+		_ = caller.Execute(ctx, "leaf", func() error { return timeout })
+	}
+	if err := caller.Execute(ctx, "leaf", func() error { return nil }); err != nil {
+		t.Fatalf("a deadline the caller chose must not open the breaker, got %v", err)
+	}
+}
+
+func TestBackendFault(t *testing.T) {
+	callerCtx := config.WithCallerBudget(context.Background())
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want bool
+	}{
+		{"nil", context.Background(), nil, false},
+		{"unavailable", context.Background(), derrors.New(derrors.CodeUnavailable, "op", "dial"), true},
+		{"unavailable 503", context.Background(), derrors.New(derrors.CodeUnavailable, "op", "x").With("status", "503"), true},
+		{"unavailable 404", context.Background(), derrors.New(derrors.CodeUnavailable, "op", "x").With("status", "404"), false},
+		{"own timeout", context.Background(), derrors.New(derrors.CodeTimeout, "op", "x"), true},
+		{"caller timeout", callerCtx, derrors.New(derrors.CodeTimeout, "op", "x"), false},
+		{"caller budget unavailable", callerCtx, derrors.New(derrors.CodeUnavailable, "op", "x"), true},
+		{"rate limited", context.Background(), derrors.New(derrors.CodeRateLimited, "op", "x"), false},
+		{"canceled", context.Background(), derrors.New(derrors.CodeCanceled, "op", "x"), false},
+		{"not ready", context.Background(), derrors.New(derrors.CodeNotReady, "op", "x"), false},
+		{"failed precondition", context.Background(), derrors.New(derrors.CodeFailedPrecondition, "op", "x"), false},
+		{"internal", context.Background(), derrors.New(derrors.CodeInternal, "op", "x"), false},
+		{"unimplemented", context.Background(), derrors.New(derrors.CodeUnimplemented, "op", "x"), false},
+		{"invalid", context.Background(), derrors.New(derrors.CodeInvalid, "op", "x"), false},
+		{"plain", context.Background(), errors.New("x"), false},
+		{"wrapped written", context.Background(), fmt.Errorf("%w: %w", ErrResponseWritten, derrors.New(derrors.CodeUnavailable, "op", "x")), true},
+	} {
+		if got := backendFault(tc.ctx, tc.err); got != tc.want {
+			t.Errorf("%s: backendFault=%v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
 func TestZeroValueBoardWorks(t *testing.T) {
 	var b Board
-	if err := b.Execute("leaf", func() error { return nil }); err != nil {
+	if err := b.Execute(t.Context(), "leaf", func() error { return nil }); err != nil {
 		t.Fatalf("a zero Board must run fn, not panic on a nil map: %v", err)
 	}
 	if snap := b.Snapshot(); len(snap) != 1 || snap[0].Name != "leaf" {

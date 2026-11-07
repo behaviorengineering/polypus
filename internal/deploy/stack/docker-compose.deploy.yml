@@ -6,9 +6,32 @@
 # polypus deploy picks them from the gateway YAML and the environment's observability switch.
 # No host ports: everything is reached over the tailnet through the tailscale service
 # (443 to the gateway; 4317, 4318, 6006 and 8080 to the observability services).
-# Usage: docker compose -f docker-compose.deploy.yml -p polypus-<identifier> --env-file .env.images --env-file .env.deploy up -d
+# Gateway and Switchyard run as uid and gid 10001; volume-owner hands their named volumes to
+# that user before either starts, so volumes an older root image created stay writable.
+# Run it through polypus deploy run, which sets POLYPUS_HOST_CONFIG, POLYPUS_TS_HOSTNAME,
+# POLYPUS_TS_SERVE_DIR and POLYPUS_DEPLOY_OTLP_ENDPOINT; a bare docker compose up stops on them.
 
 services:
+  # One-shot: chowns the gateway and Switchyard volumes to the images' non-root user.
+  # It mounts the Switchyard volumes too, so it needs no profile and an empty volume is fine.
+  volume-owner:
+    image: ${POLYPUS_IMAGE}
+    user: "0:0"
+    restart: "no"
+    entrypoint:
+      - chown
+      - -R
+      - "10001:10001"
+      - /var/lib/polypus/switchyard
+      - /var/lib/polypus/state
+      - /var/lib/polypus/inference-failures
+      - /var/lib/switchyard/inference-failures
+    volumes:
+      - switchyard_routes:/var/lib/polypus/switchyard
+      - polypus_state:/var/lib/polypus/state
+      - polypus_inference_failures:/var/lib/polypus/inference-failures
+      - switchyard_inference_failures:/var/lib/switchyard/inference-failures
+
   gateway:
     image: ${POLYPUS_IMAGE}
     restart: on-failure:5
@@ -23,7 +46,8 @@ services:
       POLYPUS_BASE_URL: http://gateway:1320
       POLYPUS_SWITCHYARD_BASE_URL: http://switchyard:4000
       POLYPUS_SWITCHYARD_CONFIG: /var/lib/polypus/switchyard/routes.toml
-      # deploy sets POLYPUS_SWITCHYARD=1 and COMPOSE_PROFILES=routers when host config has routers:
+      # deploy sets POLYPUS_SWITCHYARD=1 and COMPOSE_PROFILES=routers when the gateway YAML has a
+      # composed router (stage_router, llm_classifier or fallback); passthrough routers need no Switchyard.
       POLYPUS_SWITCHYARD: "${POLYPUS_SWITCHYARD:-0}"
       POLYPUS_CONFIG: /etc/polypus/config.yaml
       # Empty when observability is off: traces stay local (failure dumps still written).
@@ -43,6 +67,9 @@ services:
       timeout: 3s
       retries: 12
       start_period: 45s
+    depends_on:
+      volume-owner:
+        condition: service_completed_successfully
 
   switchyard:
     profiles: ["routers"]
@@ -65,6 +92,8 @@ services:
       retries: 12
       start_period: 60s
     depends_on:
+      volume-owner:
+        condition: service_completed_successfully
       gateway:
         condition: service_healthy
 

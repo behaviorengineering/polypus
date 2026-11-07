@@ -7,12 +7,11 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/batch"
-	"github.com/behaviorengineering/polypus/internal/clients/catalog"
 	"github.com/behaviorengineering/polypus/internal/clients/cloudflare"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
-const opCloudflare = "batch.cloudflare"
+const opCloudflare = "batches.cloudflare"
 
 type cloudflareSubmitter struct {
 	client func() (*cloudflare.Client, error)
@@ -23,7 +22,7 @@ type cloudflareSubmitter struct {
 // fetches) the backend's client; now stamps the synthesised responses. Panics on nil.
 func NewCloudflareSubmitter(client func() (*cloudflare.Client, error), now func() time.Time) Submitter {
 	if client == nil || now == nil {
-		panic("service.NewCloudflareSubmitter: nil client getter or clock")
+		panic("batches.NewCloudflareSubmitter: nil client getter or clock")
 	}
 	return cloudflareSubmitter{client: client, now: now}
 }
@@ -82,14 +81,14 @@ func cloudflareLines(endpoint, publicModel string, created int64, items []cloudf
 	for _, item := range items {
 		line := batch.LineResult{CustomID: item.ExternalReference}
 		if !item.Success {
-			line.ErrCode = "batch_failed"
-			line.ErrMessage = catalog.FirstNonEmpty(item.ErrorMessage, "workers ai batch line failed")
+			line.ErrCode = batch.LineErrFailed
+			line.ErrMessage = orDefault(item.ErrorMessage, "workers ai batch line failed")
 			out = append(out, line)
 			continue
 		}
 		body, err := synthesizeOpenAIBody(endpoint, publicModel, created, item.Result)
 		if err != nil {
-			line.ErrCode = "synthesis_failed"
+			line.ErrCode = batch.LineErrSynthesis
 			line.ErrMessage = err.Error()
 		} else {
 			line.Body = body

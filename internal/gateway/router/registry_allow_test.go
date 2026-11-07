@@ -102,3 +102,27 @@ func gatedTestRouterConfig() config.RouterConfig {
 		},
 	}
 }
+
+func TestWithAllowedModelCopiesEveryFieldAndOwnsItsSlices(t *testing.T) {
+	cfg := gatedTestRouterConfig()
+	b := cfg.Backends["cf"]
+	syncOff := false
+	b.Models.Sync = &syncOff
+	b.Models.SystemOneAllow = []string{"typesafe/jev"}
+	cfg.Backends["cf"] = b
+	snap, changed, err := withAllowedModel(cfg, "cf", "@cf/new")
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	got := snap.Backends["cf"].Models
+	if got.Sync != b.Models.Sync || !got.AllowConfigured {
+		t.Fatalf("fields dropped: %+v", got)
+	}
+	got.SystemOneAllow[0] = "changed"
+	if b.Models.SystemOneAllow[0] != "typesafe/jev" {
+		t.Fatal("the new snapshot must not share SystemOneAllow with the old one")
+	}
+	if len(b.Models.Allow) == len(got.Allow) {
+		t.Fatal("the old snapshot's allow list must stay as it was")
+	}
+}

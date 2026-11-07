@@ -26,26 +26,32 @@ type claudeBatchRouter struct {
 	ended        bool
 	cancelled    bool
 	results      []batch.LineResult
+	// backends is the backend id each call named, in order.
+	backends []string
 }
 
-func (r *claudeBatchRouter) Create(_ context.Context, _ router.BatchTarget, model string, lines []batch.InputLine) (string, error) {
+func (r *claudeBatchRouter) Create(_ context.Context, backendID, model string, lines []batch.InputLine) (string, error) {
+	r.backends = append(r.backends, backendID)
 	r.createdModel = model
 	r.createdLines = lines
 	return "msgbatch_1", nil
 }
 
-func (r *claudeBatchRouter) Status(_ context.Context, _ router.BatchTarget, batchID string) (router.BatchPoll, error) {
+func (r *claudeBatchRouter) Status(_ context.Context, backendID, batchID string) (router.BatchPoll, error) {
+	r.backends = append(r.backends, backendID)
 	if batchID != "msgbatch_1" {
 		return router.BatchPoll{}, context.Canceled
 	}
 	return router.BatchPoll{Ended: r.ended, Cancelling: r.cancelled && !r.ended}, nil
 }
 
-func (r *claudeBatchRouter) Results(_ context.Context, _ router.BatchTarget, _, _ string) ([]batch.LineResult, error) {
+func (r *claudeBatchRouter) Results(_ context.Context, backendID, _, _ string) ([]batch.LineResult, error) {
+	r.backends = append(r.backends, backendID)
 	return r.results, nil
 }
 
-func (r *claudeBatchRouter) Cancel(context.Context, router.BatchTarget, string) error {
+func (r *claudeBatchRouter) Cancel(_ context.Context, backendID, _ string) error {
+	r.backends = append(r.backends, backendID)
 	r.cancelled = true
 	return nil
 }
@@ -146,6 +152,14 @@ func TestClaudeBatchLifecycle(t *testing.T) {
 	}
 	if errs := fileContent(t, h, done.ErrorFileID); !strings.Contains(errs, `"custom_id":"job-2"`) || !strings.Contains(errs, "errored") {
 		t.Fatalf("errors: %s", errs)
+	}
+	if len(fr.backends) == 0 {
+		t.Fatal("the submitter made no Message Batches calls")
+	}
+	for i, id := range fr.backends {
+		if id != "claude_team" {
+			t.Fatalf("call %d named backend %q, want claude_team", i, id)
+		}
 	}
 }
 

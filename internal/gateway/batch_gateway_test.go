@@ -99,7 +99,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := router.NewClient(t.Context(), rcfg, router.WithLogger(testShared.log), router.WithCloudflareClientGet(func(b config.BackendDef) (*cloudflare.Client, error) {
+	client, err := router.NewClient(t.Context(), rcfg, router.WithLogger(testResponder.log), router.WithCloudflareClientGet(func(b config.BackendDef) (*cloudflare.Client, error) {
 		return cloudflare.NewClient(b)
 	}))
 	if err != nil {
@@ -111,6 +111,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = h.Close() })
 
 	line := `{"custom_id":"job-1","method":"POST","url":"/v1/chat/completions","body":{"model":"cf_local/@cf/meta/llama-3.3-70b-instruct-fp8-fast","messages":[{"role":"user","content":"hi"}]}}`
 	fileID := uploadBatchFile(t, h, line)
@@ -202,7 +203,7 @@ func TestBatchCancelNotSupported(t *testing.T) {
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("cancel status: %d %s", rec.Code, rec.Body.String())
 	}
-	got, _ := h.batchStore.GetBatch(batchObj.ID)
+	got, _ := h.batches.batchStore.GetBatch(t.Context(), batchObj.ID)
 	if got.Status != batch.StatusInProgress {
 		t.Fatalf("status unchanged: %s", got.Status)
 	}
@@ -502,20 +503,44 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := router.NewClient(t.Context(), rcfg, router.WithLogger(testShared.log), router.WithCloudflareClientGet(func(b config.BackendDef) (*cloudflare.Client, error) {
+	client, err := router.NewClient(t.Context(), rcfg, router.WithLogger(testResponder.log), router.WithCloudflareClientGet(func(b config.BackendDef) (*cloudflare.Client, error) {
 		return cloudflare.NewClient(b)
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
-	handler, err := NewHandler(config.ServeOptions{}, withRouter(client))
+	handler, err := NewHandler(config.ServeOptions{}, withRouter(client), withPolicies(fastTestPolicies()))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 	gw, ok := gatewayFromHandler(handler)
 	if !ok {
 		t.Fatal("expected *Gateway handler")
 	}
 	return gw
+}
+
+func TestBatchCreateBodyHasItsOwnCap(t *testing.T) {
+	h := newBatchGatewayHandler(t, nil)
+	body := `{"input_file_id":"` + strings.Repeat("x", batchCreateMaxBody) + `","endpoint":"/v1/chat/completions"}`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, pathBatches, strings.NewReader(body)))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("a create body past its small cap must be 413, not read up to the file cap: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBatchCancelForARemovedBackendFailsBeforeTheProvider(t *testing.T) {
+	h := newBatchGatewayHandler(t, nil)
+	meta := &batch.Meta{BackendID: "removed", Status: batch.StatusInProgress, Endpoint: pathChatCompletions}
+	if err := h.batches.batchStore.SaveBatch(t.Context(), meta); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, pathBatchesPrefix+meta.ID+"/cancel", nil))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "backend not found") {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
 }

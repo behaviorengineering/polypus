@@ -25,7 +25,7 @@ func TestCheckFailures(t *testing.T) {
 		err  error
 		want string
 	}{
-		"no cli":        {"", ErrNoCLI, "tailscale CLI not found"},
+		"no cli":        {"", errNoCLI, "tailscale CLI not found"},
 		"stopped":       {`{"BackendState":"Stopped"}`, nil, "not Running"},
 		"no tailnet":    {`{"BackendState":"Running"}`, nil, "no current tailnet"},
 		"other tailnet": {strings.Replace(running, "corp.ts.net", "home.ts.net", 1), nil, "on tailnet home.ts.net"},

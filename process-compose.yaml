@@ -1,7 +1,8 @@
 # Polypus gateway + backends (standalone process-compose project).
 # Start: go tool task serve  (or: scripts/pc-up.sh)
 # Stop:  go tool task serve-down
-# Namespaces: pc-up.sh selects core plus mlx, obs (Phoenix), hyperdx, and otelcol.
+# Namespaces: pc-up.sh selects core plus switchyard, mlx, obs (Phoenix), hyperdx and otelcol.
+# Readiness probes read the ports pc-up.sh exports (defaults in ports.env and pc-up.sh).
 
 version: "0.5"
 
@@ -47,7 +48,7 @@ processes:
     readiness_probe:
       http_get:
         host: 127.0.0.1
-        port: 1322
+        port: ${POLYPUS_MLX_PORT}
         path: /
       period_seconds: 5
       failure_threshold: 72
@@ -65,7 +66,7 @@ processes:
     readiness_probe:
       http_get:
         host: 127.0.0.1
-        port: 6006
+        port: ${PHOENIX_PORT}
         path: /
       period_seconds: 5
       failure_threshold: 24
@@ -83,7 +84,7 @@ processes:
     readiness_probe:
       http_get:
         host: 127.0.0.1
-        port: 8080
+        port: ${HYPERDX_PORT}
         path: /
       period_seconds: 5
       failure_threshold: 72
@@ -101,7 +102,7 @@ processes:
     readiness_probe:
       http_get:
         host: 127.0.0.1
-        port: 13133
+        port: ${OTELCOL_HEALTH_PORT}
         path: /
       period_seconds: 5
       failure_threshold: 24
@@ -119,7 +120,7 @@ processes:
     readiness_probe:
       http_get:
         host: 127.0.0.1
-        port: 1320
+        port: ${POLYPUS_PORT}
         path: /health
       period_seconds: 5
       failure_threshold: 12
@@ -137,7 +138,7 @@ processes:
     readiness_probe:
       http_get:
         host: 127.0.0.1
-        port: 4000
+        port: ${POLYPUS_SWITCHYARD_PORT}
         path: /health
       period_seconds: 5
       failure_threshold: 24

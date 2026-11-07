@@ -85,6 +85,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -195,6 +196,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -252,6 +254,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models/mlx_local/whisper-x", nil)
 	rec := httptest.NewRecorder()
@@ -313,6 +316,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -358,6 +362,7 @@ func TestHealthOKWhenBackendUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -381,6 +386,7 @@ func TestHealthOKWhenBackendDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -409,6 +415,7 @@ func TestBifrostTranscriptionPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
@@ -480,6 +487,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
@@ -523,6 +531,7 @@ func TestBifrostSpeechPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(
 		`{"model":"tts-test","input":"hello","voice":"vivian","response_format":"mp3"}`,
@@ -553,6 +562,7 @@ func TestChatNotProxiedToMLXWhenUnconfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"glm","messages":[{"role":"user","content":"hi"}]}`,
@@ -618,6 +628,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"cf_local/@cf/zai-org/glm-4.7-flash","messages":[{"role":"user","content":"ping"}]}`,
@@ -679,6 +690,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"@cf/google/gemma-4-26b-a4b-it","messages":[{"role":"user","content":[{"type":"text","text":"judge"},{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}`,
@@ -739,6 +751,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"@cf/google/gemma-4-26b-a4b-it","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}`,
@@ -772,6 +785,7 @@ func TestEmbedNotProxiedToMLXWhenUnconfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(
 		`{"model":"text-embedding-nomic-embed-text-v1.5","input":["probe"]}`,
@@ -829,6 +843,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(
 		`{"model":"lm_studio/text-embedding-nomic-embed-text-v1.5","input":["probe"]}`,
@@ -915,6 +930,7 @@ backends:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models?view=inventory", nil)
 	rec := httptest.NewRecorder()
@@ -962,6 +978,7 @@ func TestSpeechEmptyModelUsesDefaultBackend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(
 		`{"input":"hello","voice":"vivian","response_format":"mp3"}`,
@@ -975,5 +992,34 @@ func TestSpeechEmptyModelUsesDefaultBackend(t *testing.T) {
 	}
 	if gotPath != "/v1/audio/speech" {
 		t.Fatalf("backend path: got %q", gotPath)
+	}
+}
+
+func TestRouteWithUnknownMethodSetFailsClosed(t *testing.T) {
+	rt := gatewayRoute{path: "/x", methods: routeMethods(99)}
+	if rt.matches(httptest.NewRequest(http.MethodGet, "/x", nil)) {
+		t.Fatal("an unknown method set must match nothing")
+	}
+}
+
+func TestWrongMethodOnV1RoutesIs405WithAllow(t *testing.T) {
+	h := newBatchGatewayHandler(t, nil)
+	cases := []struct {
+		method, path, allow string
+	}{
+		{http.MethodPut, pathBatches, "GET, POST"},
+		{http.MethodGet, pathBatchesPrefix + "batch_x/cancel", "POST"},
+		{http.MethodGet, pathFiles, "POST"},
+		{http.MethodDelete, pathAdminModelsAllow, "GET, HEAD, POST"},
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+		if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != c.allow {
+			t.Fatalf("%s %s: status %d Allow %q", c.method, c.path, rec.Code, rec.Header().Get("Allow"))
+		}
+		if !strings.Contains(rec.Body.String(), codeMethodNotAllowed) {
+			t.Fatalf("%s %s: want an OpenAI error body, got %s", c.method, c.path, rec.Body.String())
+		}
 	}
 }

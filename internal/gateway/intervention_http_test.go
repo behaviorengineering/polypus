@@ -16,7 +16,7 @@ func TestWriteErrorJSONInterventionHeaderAndBody(t *testing.T) {
 	err := derrors.New(derrors.CodeNotReady, "gateway.serveEmbeddings", "no embed backend configured").
 		With(derrors.FieldIntervention, string(observability.InterventionEmbedCapabilityMissing))
 	rec := httptest.NewRecorder()
-	testShared.writeErrorJSON(rec, http.StatusServiceUnavailable, err, "")
+	testResponder.writeErrorJSON(rec, testRequest, http.StatusServiceUnavailable, err, "")
 	if got := rec.Header().Get(config.InterventionHeader); got != "embed_capability_missing" {
 		t.Fatalf("header=%q", got)
 	}

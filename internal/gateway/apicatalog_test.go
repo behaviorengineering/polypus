@@ -237,3 +237,15 @@ func TestBuildAPICatalogIncludesSystemOneWhenEnabled(t *testing.T) {
 		t.Fatalf("schema: %q", cat.APIs[1].Schema)
 	}
 }
+
+func TestSystemOneFallbackBackendIsDeterministic(t *testing.T) {
+	cfg := config.RouterConfig{Backends: map[string]config.BackendDef{}}
+	for _, id := range []string{"zeta", "alpha", "mid", "beta"} {
+		cfg.Backends[id] = config.BackendDef{ID: id, Capabilities: []config.Capability{config.CapSystemOne}}
+	}
+	for range 50 {
+		if id, _ := backendAndDownstreamForPublicID(cfg, "bare-model"); id != "alpha" {
+			t.Fatalf("picked %q, want the first sorted id", id)
+		}
+	}
+}

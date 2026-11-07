@@ -31,10 +31,14 @@ Cloudflare (`cf_local`) has no separate port; it runs in-process when configured
 ```env
 POLYPUS_HOST=127.0.0.1
 POLYPUS_PORT=1320
-POLYPUS_BASE_URL=http://127.0.0.1:1320   # client URL; also Switchyard leaf callback when set (Compose: http://gateway:1320)   # client URL; also Switchyard leaf callback when set (Compose: http://gateway:1320)
-POLYPUS_MLX_HOST=127.0.0.1
-POLYPUS_MLX_PORT=1322
-POLYPUS_PHOENIX=1
+POLYPUS_BASE_URL=http://127.0.0.1:1320   # client URL; also Switchyard leaf callback when set (Compose: http://gateway:1320)
+POLYPUS_MLX_HOST=127.0.0.1    # any MLX variable, or serve --backend, replaces backends.mlx_local.base_url;
+POLYPUS_MLX_PORT=1322         # leave them unset to keep the config's URL
+POLYPUS_PHOENIX=1             # go tool task serve: start the Phoenix container (0 skips it); it sets no OTLP endpoint
+POLYPUS_HYPERDX=1             # go tool task serve: start the HyperDX container (0 skips it)
+POLYPUS_ENABLE_MLX=           # go tool task serve: 1 or 0 overrides processes.mlx; MLX stays off unless one says on
+POLYPUS_OTLP_ENDPOINT=        # OTLP collector (then OTEL_EXPORTER_OTLP_ENDPOINT); neither set means no export.
+                              # pc-up.sh sets http://127.0.0.1:4317 when Phoenix and HyperDX both run
 POLYPUS_OTEL=1
 POLYPUS_SWITCHYARD=1          # 0 skips Switchyard process in go tool task serve
 POLYPUS_SWITCHYARD_BASE_URL=  # override Switchyard probe/render target (tests/ops)

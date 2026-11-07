@@ -19,15 +19,17 @@ import (
 type EnsureOptions struct {
 	// Token is the GitHub token (else GHCR_TOKEN, GITHUB_TOKEN or GH_TOKEN). The
 	// registry probe sends it to ghcr.io only; the Actions wait sends it to GitHub.
-	Token       string
-	Wait        bool
+	Token string
+	Wait  bool
+	// WaitTimeout is the Actions wait's budget, required with Wait.
 	WaitTimeout time.Duration
 	// Registry checks the manifests; nil builds one from Token.
 	Registry *registry.Client
 	// GitHub reads the Actions runs during the wait; nil builds one from Token.
 	GitHub *github.Client
-	// Probe replaces the registry check (tests).
-	Probe        func(context.Context, string, string) error
+	// Probe checks that one image ref is in its registry; nil probes Registry.
+	Probe func(ctx context.Context, ref string) error
+	// WaitForBuild replaces the Actions wait (tests); nil polls GitHub.
 	WaitForBuild func(context.Context, string, WaitOptions) error
 	// After Actions success, re-probe the registry on 404 before failing (registry
 	// lag). Both are required when Wait is set; DefaultEnsureOptions fills them.
@@ -44,7 +46,7 @@ type EnsureOptions struct {
 func DefaultEnsureOptions() EnsureOptions {
 	return EnsureOptions{
 		Wait:                  true,
-		WaitTimeout:           DefaultWaitOptions().Timeout,
+		WaitTimeout:           DefaultWaitTimeout,
 		PostWaitProbeTimeout:  2 * time.Minute,
 		PostWaitProbeInterval: 15 * time.Second,
 	}
@@ -56,22 +58,19 @@ func EnsurePresent(ctx context.Context, path string, opts EnsureOptions) error {
 	if ctx == nil {
 		return derrors.New(derrors.CodeInvalid, op, "context required")
 	}
-	if opts.Wait && (opts.PostWaitProbeTimeout <= 0 || opts.PostWaitProbeInterval <= 0) {
-		return derrors.New(derrors.CodeInvalid, op, "post-wait probe timeout and interval are required with Wait")
+	if opts.Wait && (opts.WaitTimeout <= 0 || opts.PostWaitProbeTimeout <= 0 || opts.PostWaitProbeInterval <= 0) {
+		return derrors.New(derrors.CodeInvalid, op, "wait timeout and post-wait probe timeout and interval are required with Wait")
 	}
 	refs, err := probeRefsFromEnv(path, opts.Services.probeKeys())
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInvalid, op, "read pins")
 	}
-	token := opts.Token
-	if token == "" {
-		token = registryToken()
-	}
+	token := tokenOr(opts.Token)
 	probe := opts.probeFunc(token)
 
 	var missing []string
 	for _, ref := range refs {
-		if err := probe(ctx, ref, token); err != nil {
+		if err := probe(ctx, ref); err != nil {
 			if errors.Is(err, ErrManifestNotFound) {
 				missing = append(missing, ref)
 				continue
@@ -93,18 +92,20 @@ func EnsurePresent(ctx context.Context, path string, opts EnsureOptions) error {
 	}
 	waitFn := opts.WaitForBuild
 	if waitFn == nil {
-		waitFn = WaitForImages
+		waitFn = waitForImages
 	}
-	waitOpts := applyWaitDefaults(WaitOptions{Timeout: opts.WaitTimeout, GitHub: opts.GitHub, Token: token, Out: opts.Out})
-	if err := waitFn(ctx, ver, waitOpts); err != nil {
+	waitOpts := applyWaitDefaults(WaitOptions{GitHub: opts.GitHub, Token: token, Out: opts.Out})
+	waitCtx, cancel := context.WithTimeout(ctx, opts.WaitTimeout)
+	defer cancel()
+	if err := waitFn(waitCtx, ver, waitOpts); err != nil {
 		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "wait for image build "+ver)
 	}
-	return probeMissingAfterActions(ctx, missing, probe, token, opts)
+	return probeMissingAfterActions(ctx, missing, probe, opts)
 }
 
 // probeFunc is opts.Probe, else a manifest probe on opts.Registry or a registry
 // client for token.
-func (o EnsureOptions) probeFunc(token string) func(context.Context, string, string) error {
+func (o EnsureOptions) probeFunc(token string) func(context.Context, string) error {
 	if o.Probe != nil {
 		return o.Probe
 	}
@@ -112,24 +113,21 @@ func (o EnsureOptions) probeFunc(token string) func(context.Context, string, str
 	if reg == nil {
 		reg = newRegistryClient(token)
 	}
-	return func(ctx context.Context, ref, _ string) error {
+	return func(ctx context.Context, ref string) error {
 		return probeWith(ctx, reg, ref)
 	}
 }
 
-func probeMissingAfterActions(
-	ctx context.Context,
-	missing []string,
-	probe func(context.Context, string, string) error,
-	token string,
-	opts EnsureOptions,
-) error {
+// probeMissingAfterActions re-probes missing until the registry has them all or
+// opts.PostWaitProbeTimeout, a budget of its own after the wait, ends.
+func probeMissingAfterActions(ctx context.Context, missing []string, probe func(context.Context, string) error, opts EnsureOptions) error {
 	const op = "images.EnsurePresent"
-	deadline := time.Now().Add(opts.PostWaitProbeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, opts.PostWaitProbeTimeout)
+	defer cancel()
 	for {
 		stillMissing := make([]string, 0, len(missing))
 		for _, ref := range missing {
-			if err := probe(ctx, ref, token); err != nil {
+			if err := probe(ctx, ref); err != nil {
 				if errors.Is(err, ErrManifestNotFound) {
 					stillMissing = append(stillMissing, ref)
 					continue
@@ -141,12 +139,12 @@ func probeMissingAfterActions(
 			return nil
 		}
 		missing = stillMissing
-		if time.Now().After(deadline) {
-			return derrors.New(derrors.CodeNotFound, op,
-				"registry manifest still missing after Actions success for "+strings.Join(missing, ", ")).
-				With("waited", opts.PostWaitProbeTimeout.String())
-		}
 		if err := sleepCtx(ctx, opts.PostWaitProbeInterval); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return derrors.New(derrors.CodeNotFound, op,
+					"registry manifest still missing after Actions success for "+strings.Join(missing, ", ")).
+					With("waited", opts.PostWaitProbeTimeout.String())
+			}
 			return derrors.Wrap(err, derrors.CodeCanceled, op, "registry catch-up")
 		}
 	}

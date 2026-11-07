@@ -71,6 +71,7 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"router/scribe","messages":[{"role":"user","content":"hi"}]}`,
@@ -135,6 +136,7 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"router/investigator","messages":[{"role":"user","content":"hi"}]}`,
@@ -217,6 +219,7 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"router/investigator","messages":[{"role":"user","content":"hi"}]}`,
@@ -302,6 +305,7 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = inner.Close() })
 	handler := observability.WrapHandler(inner, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
@@ -403,6 +407,7 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"router/smart","messages":[{"role":"user","content":"hi"}]}`,
@@ -465,10 +470,11 @@ routers:
 `, backend.URL)
 	writeConfig(t, dir, content)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL}, withPolicies(fastTestPolicies()))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -526,6 +532,7 @@ routers:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"router/scribe","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}`,

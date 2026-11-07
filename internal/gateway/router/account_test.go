@@ -229,7 +229,7 @@ func TestUsesBifrostSwitchyardAndLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Client{reg: reg}
+	c := &Client{reg: reg, switchyard: newAccount(cfg).hasSwitchyard()}
 	if !c.UsesBifrost("leaf") {
 		t.Fatal("leaf should use Bifrost")
 	}
@@ -260,7 +260,7 @@ func TestUsesBifrostSwitchyardAndLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c2 := &Client{reg: reg2}
+	c2 := &Client{reg: reg2, switchyard: newAccount(cfg).hasSwitchyard()}
 	if !c2.UsesBifrost(ProviderSwitchyard) {
 		t.Fatal("composed routers register switchyard for Bifrost")
 	}

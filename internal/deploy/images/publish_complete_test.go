@@ -29,12 +29,7 @@ func TestVerifyPublishCompleteTagRefRetries503(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	err := VerifyPublishComplete(testContext(t), "0.2.40", WaitOptions{
-		OwnerRepo:        "acme/polypus",
-		HTTPClient:       srv.Client(),
-		Token:            "test",
-		GitHubAPIBaseURL: srv.URL,
-	})
+	err := VerifyPublishComplete(testContext(t), "0.2.40", WaitOptions{GitHub: githubFor(t, srv)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,12 +54,7 @@ func TestVerifyPublishCompleteOK(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	err := VerifyPublishComplete(testContext(t), "0.2.40", WaitOptions{
-		OwnerRepo:        "acme/polypus",
-		HTTPClient:       srv.Client(),
-		Token:            "test",
-		GitHubAPIBaseURL: srv.URL,
-	})
+	err := VerifyPublishComplete(testContext(t), "0.2.40", WaitOptions{GitHub: githubFor(t, srv)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,12 +76,7 @@ func TestVerifyPublishCompleteMissingVerifyJob(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	err := VerifyPublishComplete(testContext(t), "0.2.40", WaitOptions{
-		OwnerRepo:        "acme/polypus",
-		HTTPClient:       srv.Client(),
-		Token:            "test",
-		GitHubAPIBaseURL: srv.URL,
-	})
+	err := VerifyPublishComplete(testContext(t), "0.2.40", WaitOptions{GitHub: githubFor(t, srv)})
 	if err == nil || !strings.Contains(err.Error(), "publish incomplete") {
 		t.Fatalf("expected publish incomplete, got %v", err)
 	}
@@ -108,12 +93,7 @@ func TestVerifyPublishCompleteRebuildOK(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	err := VerifyPublishComplete(testContext(t), "0.2.40-r1", WaitOptions{
-		OwnerRepo:        "acme/polypus",
-		HTTPClient:       srv.Client(),
-		Token:            "test",
-		GitHubAPIBaseURL: srv.URL,
-	})
+	err := VerifyPublishComplete(testContext(t), "0.2.40-r1", WaitOptions{GitHub: githubFor(t, srv)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,13 +1,15 @@
-// Package secrets resolves a deploy environment's secrets from the process
-// environment and its keyring service, writes them as dotenv files for compose,
-// and checks their shape.
+// Package secrets resolves a deploy environment's secrets from the shell, its
+// keyring service and its optional SOPS secrets file, writes them as dotenv files
+// for compose, and checks their shape. Nothing it resolves is set in the process
+// environment.
 package secrets
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
-
-	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
+	"strings"
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
@@ -21,61 +23,89 @@ var DefaultNames = []string{"TS_AUTHKEY"}
 // gateway YAML names reaches the gateway container and TS_AUTHKEY does not.
 const GatewayEnvFileName = ".env.gateway"
 
-// Export resolves names from the environment, then the OS keyring service app, and
-// writes them as ExportWithKeyring does.
-func Export(app string, names []string, outPath string) error {
-	return ExportWithKeyring(nil, app, names, outPath)
-}
-
-// ExportWithKeyring resolves names from the environment, then keyring service app
-// in kr (nil uses the OS keyring), and writes them to outPath as dotenv. Each is
-// required, and each is checked for shape before anything is written. It also writes GatewayEnvFileName beside
-// outPath with the gateway's share of names.
-func ExportWithKeyring(kr operatorconfig.Keyring, app string, names []string, outPath string) error {
+// Export resolves names for keyring service app through r (nil reads the shell, the
+// OS keyring and the SOPS secrets file, and fails on a conflict) and writes them to
+// outPath as dotenv, with GatewayEnvFileName beside it holding the gateway's share.
+// Each name is required, and each value is checked for shape before anything is
+// written.
+func Export(r *Resolver, app string, names []string, outPath string) error {
 	const op = "secrets.Export"
+	if r == nil {
+		r = &Resolver{}
+	}
 	if app == "" {
 		app = "polypus"
 	}
 	if len(names) == 0 {
 		names = DefaultNames
 	}
-	secrets := make([]operatorconfig.Secret, len(names))
-	for i, n := range names {
-		secrets[i] = operatorconfig.Secret{Env: n, Required: true}
-	}
-	opts := operatorconfig.Options{App: app, Secrets: secrets}
-	if err := operatorconfig.ResolveSecrets(opts, kr); err != nil {
-		return derrors.Wrap(err, derrors.CodeFailedPrecondition, op, "resolve secrets (store each with: polypus deploy secret set <ENV>)").
-			With("keyring_service", app)
+	values := make(map[string]string, len(names))
+	for _, n := range names {
+		v, _, err := r.Resolve(app, n)
+		if err != nil {
+			return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeFailedPrecondition), op, "resolve "+n).
+				With("keyring_service", app)
+		}
+		if v == "" {
+			return derrors.New(derrors.CodeFailedPrecondition, op, r.missing(app, n)).With("keyring_service", app)
+		}
+		values[n] = v
 	}
 	// Check every value before writing either file, so a bad key leaves no
 	// dotenv behind for compose to pick up.
-	if slices.Contains(names, cloudflareAccountID) {
-		if err := validateCloudflareAccountIDFromEnv(app); err != nil {
+	if v, ok := values[cloudflareAccountID]; ok {
+		if err := validateCloudflareAccountID(app, v); err != nil {
 			return derrors.Wrap(err, derrors.CodeFailedPrecondition, op, "check "+cloudflareAccountID).With("keyring_service", app)
 		}
 	}
-	if err := validateAPIKeysFromEnv(app, names); err != nil {
+	if err := validateAPIKeys(app, names, values); err != nil {
 		return derrors.Wrap(err, derrors.CodeFailedPrecondition, op, "check API keys").With("keyring_service", app)
 	}
-	if err := operatorconfig.WriteDotenv(outPath, secrets); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
+		return derrors.Wrap(err, derrors.CodeInternal, op, "mkdir "+filepath.Dir(outPath))
+	}
+	if err := writeDotenv(outPath, names, values); err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, op, "write "+outPath)
 	}
 	gatewayPath := filepath.Join(filepath.Dir(outPath), GatewayEnvFileName)
-	if err := operatorconfig.WriteDotenv(gatewayPath, gatewaySecrets(secrets)); err != nil {
+	if err := writeDotenv(gatewayPath, gatewayNames(names), values); err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, op, "write "+gatewayPath)
 	}
 	return nil
 }
 
-// gatewaySecrets returns secrets without DefaultNames, which only the tailscale
+// gatewayNames returns names without DefaultNames, which only the tailscale
 // service reads.
-func gatewaySecrets(secrets []operatorconfig.Secret) []operatorconfig.Secret {
-	out := make([]operatorconfig.Secret, 0, len(secrets))
-	for _, s := range secrets {
-		if !slices.Contains(DefaultNames, s.Env) {
-			out = append(out, s)
+func gatewayNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if !slices.Contains(DefaultNames, n) {
+			out = append(out, n)
 		}
 	}
 	return out
+}
+
+// writeDotenv writes names with their values to path (mode 0600), quoting a value
+// that holds a space, a quote, a tab, a newline or a #.
+func writeDotenv(path string, names []string, values map[string]string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("secrets: dotenv path required")
+	}
+	var b strings.Builder
+	for _, n := range names {
+		v := values[n]
+		if v == "" {
+			continue
+		}
+		if strings.ContainsAny(v, " \t\n\"'#") {
+			v = fmt.Sprintf("%q", v)
+		}
+		b.WriteString(n + "=" + v + "\n")
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		return fmt.Errorf("secrets: write dotenv %q: %w", path, err)
+	}
+	return nil
 }

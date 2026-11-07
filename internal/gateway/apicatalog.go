@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
 
 // modelSurface is a gateway API flavor for model catalog partitioning.
@@ -96,7 +97,8 @@ func openAICatalogEntry() apiCatalogEntry {
 			"audio_speech":         {Method: http.MethodPost, Path: pathAudioSpeech},
 			"audio_transcriptions": {Method: http.MethodPost, Path: pathAudioTranscriptions},
 			"audio_voices":         {Method: http.MethodGet, Path: pathAudioVoices},
-			"files":                {Method: http.MethodGet, Path: pathFiles},
+			"files_upload":         {Method: http.MethodPost, Path: pathFiles},
+			"files_retrieve":       {Method: http.MethodGet, Path: pathFilesPrefix + "{id}"},
 			"batches":              {Method: http.MethodPost, Path: pathBatches},
 		},
 	}
@@ -117,18 +119,15 @@ func systemOneCatalogEntry() apiCatalogEntry {
 	}
 }
 
-type apiCatalogHandler struct{ *shared }
+// apiCatalogHandler serves the API catalogue.
+type apiCatalogHandler struct {
+	responder
+	registry *router.Registry
+}
 
+// serveCatalog answers GET and HEAD (the route table admits nothing else).
 func (h apiCatalogHandler) serveCatalog(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		h.writeMethodNotAllowed(w, allowRead...)
-		return
-	}
-	cfg := config.RouterConfig{}
-	if h.registry != nil {
-		cfg = h.registry.Config()
-	}
-	cat := buildAPICatalog(cfg)
+	cat := buildAPICatalog(h.registry.Config())
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)

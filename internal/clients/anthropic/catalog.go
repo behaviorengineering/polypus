@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/clients/catalog"
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/outbound"
@@ -103,7 +104,7 @@ func modelsListURL(base string) string {
 // ListModelsStrict fetches the catalog or returns an error when fetch fails and no cache exists.
 func (c *Client) ListModelsStrict(ctx context.Context) (ModelList, error) {
 	if c == nil {
-		return ModelList{}, derrors.New(derrors.CodeFailedPrecondition, opList, "not configured")
+		return ModelList{}, derrors.New(derrors.CodeNotReady, opList, "not configured")
 	}
 	if ctx == nil {
 		return ModelList{}, derrors.New(derrors.CodeInvalid, opList, "context required")
@@ -155,12 +156,8 @@ func (c *Client) fetchPage(ctx context.Context, afterID string) (anthropicModelP
 	hdr.Set("x-api-key", c.apiKey)
 	hdr.Set("anthropic-version", apiVersion)
 	hdr.Set("Accept", "application/json")
-	h := catalog.HTTP{Client: c.httpClient, Policies: c.policies, Dep: outbound.Scoped(outbound.DepAnthropic, c.backendID)}
-	var page anthropicModelPage
-	if err := catalog.GetJSON(ctx, h, opFetchPage, u.String(), hdr, modelsMaxBody, &page); err != nil {
-		return anthropicModelPage{}, err
-	}
-	return page, nil
+	h := httpx.HTTP{Client: c.httpClient, Policies: c.policies, Dep: outbound.Scoped(outbound.DepAnthropic, c.backendID)}
+	return httpx.GetJSON[anthropicModelPage](ctx, h, httpx.JSONGet{Op: opFetchPage, URL: u.String(), Header: hdr, MaxBody: modelsMaxBody})
 }
 
 // createdUnix converts the RFC 3339 created_at to Unix seconds (0 when absent or malformed).

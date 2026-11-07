@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -28,6 +29,10 @@ import (
 )
 
 // CollectorOptions configures OTLP fan-out smoke against otelcol, Phoenix, and HyperDX.
+// The endpoints have no built-in address: an empty OTLPEndpoint reads
+// POLYPUS_OTLP_ENDPOINT then OTEL_EXPORTER_OTLP_ENDPOINT, an empty PhoenixBaseURL
+// reads PHOENIX_BASE_URL and an empty HyperDXBaseURL reads HYPERDX_BASE_URL; one still
+// empty after that is an error (HyperDX only when its verify runs).
 type CollectorOptions struct {
 	OTLPEndpoint     string
 	PhoenixBaseURL   string
@@ -39,13 +44,19 @@ type CollectorOptions struct {
 	PollInterval     time.Duration
 	// DisableHyperDXCH turns off the ClickHouse fallback (docker exec into the HyperDX
 	// container) used when the HyperDX v2 API is unavailable. The zero value allows
-	// it; POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK=0, false or no also turns it off.
+	// it; POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK set to an off word (0, false, no, off)
+	// also turns it off, and a word that is not on or off is an error.
 	DisableHyperDXCH bool
 	// SkipHyperDXVerify skips HyperDX routing checks (for example tailnet laptops without /api/v2 or Docker).
 	SkipHyperDXVerify bool
 	// Logger receives progress (endpoints, trace ids, probe counts). Nil discards it,
 	// so the smoke never writes to the host's stdout.
 	Logger *slog.Logger
+	// HTTP sends the Phoenix and HyperDX probes; nil is http.DefaultClient.
+	HTTP *http.Client
+	// Policies retries the probes and the ClickHouse fallback; nil is the process
+	// default set. Tests pass outbound.NewPoliciesWith a short backoff.
+	Policies *outbound.Policies
 }
 
 // DefaultCollectorPollInterval is the delay between backend polls.
@@ -59,21 +70,31 @@ var (
 	errPhoenixRESTUnavailable = errors.New("phoenix: REST spans API unavailable")
 )
 
-// RunCollector exports two synthetic traces through otelcol and verifies Phoenix / HyperDX routing.
+// opRunCollector names RunCollector's errors.
+const opRunCollector = "otelcol.RunCollector"
+
+// RunCollector exports two synthetic traces through otelcol and verifies Phoenix /
+// HyperDX routing. Its errors are typed: CodeInvalid for a nil context or an unset
+// endpoint, CodeFailedPrecondition without a deadline, CodeUnavailable when the export
+// fails or routing is still wrong when the budget runs out, and CodeTimeout or
+// CodeCanceled when the context ends.
 func RunCollector(ctx context.Context, opts CollectorOptions) error {
 	if ctx == nil {
-		return fmt.Errorf("collector smoke: context required")
+		return derrors.New(derrors.CodeInvalid, opRunCollector, "context required")
 	}
 	if _, ok := ctx.Deadline(); !ok {
-		return fmt.Errorf("collector smoke: missing deadline")
+		return derrors.New(derrors.CodeFailedPrecondition, opRunCollector, "context deadline required")
 	}
-	opts = opts.withCollectorDefaults()
+	opts, err := opts.withCollectorDefaults()
+	if err != nil {
+		return err
+	}
 
 	opts.Logger.Info("collector smoke", "otlp", opts.OTLPEndpoint, "phoenix", opts.PhoenixBaseURL, "hyperdx", opts.HyperDXBaseURL)
 
 	genAITrace, plainTrace, err := exportSmokeTraces(ctx, opts)
 	if err != nil {
-		return err
+		return derrors.Wrap(err, contextCodeOr(ctx, derrors.CodeUnavailable), opRunCollector, "otlp export")
 	}
 	opts.Logger.Info("collector smoke: otlp export ok", "gen_ai_trace_id", genAITrace, "plain_trace_id", plainTrace)
 
@@ -81,21 +102,31 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 	var lastErr error
 	for {
 		if err := ctx.Err(); err != nil {
-			if lastErr != nil {
-				return fmt.Errorf("collector smoke: %w (last probe: %w)", err, lastErr)
-			}
-			return fmt.Errorf("collector smoke: %w", err)
+			return derrors.Wrap(errors.Join(err, lastErr), contextCodeOr(ctx, derrors.CodeTimeout), opRunCollector, "context ended before routing was confirmed")
 		}
 		if lastErr = probeRouting(ctx, opts, genAITrace, plainTrace); lastErr == nil {
 			opts.Logger.Info("collector smoke: routing ok", "hyperdx_verified", !opts.SkipHyperDXVerify)
 			return nil
 		}
 		if time.Now().Add(opts.PollInterval).After(deadline) {
-			return fmt.Errorf("collector smoke: timed out: %w", lastErr)
+			return derrors.Wrap(lastErr, derrors.CodeUnavailable, opRunCollector, "routing not confirmed before the deadline")
 		}
 		if err := sleepContext(ctx, opts.PollInterval); err != nil {
-			return err
+			return derrors.Wrap(errors.Join(err, lastErr), contextCodeOr(ctx, derrors.CodeTimeout), opRunCollector, "context ended before routing was confirmed")
 		}
+	}
+}
+
+// contextCodeOr is the domain code for ctx's end (CodeTimeout for a deadline,
+// CodeCanceled for a cancel), or fallback while ctx is live.
+func contextCodeOr(ctx context.Context, fallback derrors.Code) derrors.Code {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return derrors.CodeTimeout
+	case errors.Is(ctx.Err(), context.Canceled):
+		return derrors.CodeCanceled
+	default:
+		return fallback
 	}
 }
 
@@ -183,13 +214,16 @@ func joinProbeErrors(results []probeResult) error {
 	return errors.New(strings.Join(parts, "; "))
 }
 
-func (o CollectorOptions) withCollectorDefaults() CollectorOptions {
+// withCollectorDefaults fills empty options from the environment. It fails when an
+// endpoint the smoke needs is still unset, or when POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK
+// holds a word that is not on or off.
+func (o CollectorOptions) withCollectorDefaults() (CollectorOptions, error) {
 	out := o
 	if strings.TrimSpace(out.OTLPEndpoint) == "" {
-		out.OTLPEndpoint = config.EnvOr("POLYPUS_OTLP_ENDPOINT", config.EnvOr("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4317"))
+		out.OTLPEndpoint = config.EnvOr("POLYPUS_OTLP_ENDPOINT", strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")))
 	}
 	if strings.TrimSpace(out.PhoenixBaseURL) == "" {
-		out.PhoenixBaseURL = config.EnvOr("PHOENIX_BASE_URL", "http://127.0.0.1:6006")
+		out.PhoenixBaseURL = strings.TrimSpace(os.Getenv("PHOENIX_BASE_URL"))
 	}
 	if strings.TrimSpace(out.PhoenixProject) == "" {
 		out.PhoenixProject = config.EnvOr("PHOENIX_PROJECT", "default")
@@ -198,7 +232,7 @@ func (o CollectorOptions) withCollectorDefaults() CollectorOptions {
 		out.PhoenixAPIKey = strings.TrimSpace(os.Getenv("PHOENIX_API_KEY"))
 	}
 	if strings.TrimSpace(out.HyperDXBaseURL) == "" {
-		out.HyperDXBaseURL = config.EnvOr("HYPERDX_BASE_URL", "http://127.0.0.1:8080")
+		out.HyperDXBaseURL = strings.TrimSpace(os.Getenv("HYPERDX_BASE_URL"))
 	}
 	if strings.TrimSpace(out.HyperDXAPIKey) == "" {
 		out.HyperDXAPIKey = strings.TrimSpace(os.Getenv("HYPERDX_API_KEY"))
@@ -213,11 +247,27 @@ func (o CollectorOptions) withCollectorDefaults() CollectorOptions {
 		out.Logger = slog.New(slog.DiscardHandler)
 	}
 	// The environment can only turn the fallback off; a caller's DisableHyperDXCH stays.
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK"))) {
-	case "0", "false", "no":
+	on, err := config.ParseEnvBool("POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK", true)
+	if err != nil {
+		return out, derrors.Wrap(err, derrors.CodeInvalid, opRunCollector, "POLYPUS_HYPERDX_CLICKHOUSE_FALLBACK")
+	}
+	if !on {
 		out.DisableHyperDXCH = true
 	}
-	return out
+	var missing []string
+	if out.OTLPEndpoint == "" {
+		missing = append(missing, "POLYPUS_OTLP_ENDPOINT (or OTEL_EXPORTER_OTLP_ENDPOINT)")
+	}
+	if out.PhoenixBaseURL == "" {
+		missing = append(missing, "PHOENIX_BASE_URL")
+	}
+	if out.HyperDXBaseURL == "" && !out.SkipHyperDXVerify {
+		missing = append(missing, "HYPERDX_BASE_URL")
+	}
+	if len(missing) > 0 {
+		return out, derrors.New(derrors.CodeInvalid, opRunCollector, "set "+strings.Join(missing, ", "))
+	}
+	return out, nil
 }
 
 func exportCollectorSpan(ctx context.Context, endpoint, spanName string, attrs ...attribute.KeyValue) (string, error) {
@@ -359,7 +409,7 @@ func phoenixSpanCountREST(ctx context.Context, opts CollectorOptions, traceID st
 		req.Header.Set("Authorization", "Bearer "+opts.PhoenixAPIKey)
 	}
 
-	ans, err := fetch(ctx, req)
+	ans, err := opts.fetch(ctx, req)
 	if err != nil {
 		return 0, fmt.Errorf("collector smoke: phoenix: %w", err)
 	}
@@ -398,7 +448,7 @@ func hyperdxTraceCount(ctx context.Context, opts CollectorOptions, traceID strin
 	if !errors.Is(err, errHyperDXAPIUnavailable) || opts.DisableHyperDXCH {
 		return 0, err
 	}
-	return hyperdxClickhouseDocker(ctx, opts.HyperDXContainer, traceID)
+	return hyperdxClickhouseDocker(ctx, opts.Policies, opts.HyperDXContainer, traceID)
 }
 
 type hyperdxSearchPayload struct {
@@ -424,27 +474,27 @@ func hyperdxSearchV2(ctx context.Context, opts CollectorOptions, traceID string)
 }
 
 // hyperdxRequest builds a HyperDX v2 API request with the API key, when set.
-func hyperdxRequest(ctx context.Context, opts CollectorOptions, method, path string, body []byte) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(opts.HyperDXBaseURL, "/")+path, bytes.NewReader(body))
+func (o CollectorOptions) hyperdxRequest(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(o.HyperDXBaseURL, "/")+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("collector smoke: hyperdx request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if opts.HyperDXAPIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+opts.HyperDXAPIKey)
+	if o.HyperDXAPIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+o.HyperDXAPIKey)
 	}
 	return req, nil
 }
 
 // hyperdxTraceSourceID returns the id of HyperDX's trace source.
 func hyperdxTraceSourceID(ctx context.Context, opts CollectorOptions) (string, error) {
-	req, err := hyperdxRequest(ctx, opts, http.MethodGet, "/api/v2/sources", nil)
+	req, err := opts.hyperdxRequest(ctx, http.MethodGet, "/api/v2/sources", nil)
 	if err != nil {
 		return "", err
 	}
-	ans, err := fetch(ctx, req)
+	ans, err := opts.fetch(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("collector smoke: hyperdx sources: %w", err)
 	}
@@ -481,11 +531,11 @@ func hyperdxSearchCount(ctx context.Context, opts CollectorOptions, sourceID, tr
 	if err != nil {
 		return 0, fmt.Errorf("collector smoke: hyperdx search payload: %w", err)
 	}
-	req, err := hyperdxRequest(ctx, opts, http.MethodPost, "/api/v2/search", buf)
+	req, err := opts.hyperdxRequest(ctx, http.MethodPost, "/api/v2/search", buf)
 	if err != nil {
 		return 0, err
 	}
-	ans, err := fetch(ctx, req)
+	ans, err := opts.fetch(ctx, req)
 	if err != nil {
 		return 0, fmt.Errorf("collector smoke: hyperdx search: %w", err)
 	}
@@ -516,7 +566,7 @@ func pickHyperDXTraceSource(sources []hyperdxSource) string {
 	return ""
 }
 
-func hyperdxClickhouseDocker(ctx context.Context, container, traceID string) (int, error) {
+func hyperdxClickhouseDocker(ctx context.Context, policies *outbound.Policies, container, traceID string) (int, error) {
 	traceID, err := normalizeTraceIDHex(traceID)
 	if err != nil {
 		return 0, err
@@ -526,7 +576,7 @@ func hyperdxClickhouseDocker(ctx context.Context, container, traceID string) (in
 	}
 	query := fmt.Sprintf("SELECT count() FROM default.otel_traces WHERE TraceId = '%s'", traceID)
 	var out []byte
-	err = outbound.Run(ctx, outbound.DepDockerDaemon, func() error {
+	err = policies.Run(ctx, outbound.DepDockerDaemon, func() error {
 		cmd := exec.CommandContext(ctx, "docker", "exec", container, //nolint:gosec // G204: traceID is normalised hex and container is the smoke's own name
 			"clickhouse-client", "--query", query)
 		b, err := cmd.CombinedOutput()

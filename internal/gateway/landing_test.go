@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/behaviorengineering/polypus/internal/config"
-	"github.com/behaviorengineering/polypus/media"
+	"github.com/behaviorengineering/polypus/internal/gateway/assets"
 )
 
 func newLandingTestHandler(t *testing.T) http.Handler {
@@ -21,6 +21,7 @@ func newLandingTestHandler(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 	return handler
 }
 
@@ -168,8 +169,8 @@ func TestBannerWebP(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "image/webp" {
 		t.Fatalf("content-type: %q", ct)
 	}
-	if rec.Body.Len() != len(media.BannerWebP) {
-		t.Fatalf("body len: got %d want %d", rec.Body.Len(), len(media.BannerWebP))
+	if rec.Body.Len() != len(assets.BannerWebP()) {
+		t.Fatalf("body len: got %d want %d", rec.Body.Len(), len(assets.BannerWebP()))
 	}
 }
 

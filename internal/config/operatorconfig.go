@@ -98,7 +98,7 @@ func RequireDeclaredSecret(envName string) error {
 }
 
 func declaredSecretEnvs() ([]string, error) {
-	path, err := ResolveConfigPathWithError()
+	path, err := resolveConfigPath()
 	if err != nil {
 		return nil, err
 	}
@@ -130,5 +130,9 @@ func declaredSecretEnvs() ([]string, error) {
 // UserConfigFilePath is where polypus init writes the user config
 // (~/.config/polypus/config.yaml, or under $XDG_CONFIG_HOME).
 func UserConfigFilePath() (string, error) {
-	return operatorconfig.UserConfigPath(appName, "config.yaml")
+	p, err := operatorconfig.UserConfigPath(appName, "config.yaml")
+	if err != nil {
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotReady), "config.UserConfigFilePath", "user config path")
+	}
+	return p, nil
 }

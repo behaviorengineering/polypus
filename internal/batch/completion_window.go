@@ -10,17 +10,17 @@ import (
 
 // ExpiresAtUnix returns createdAt plus the OpenAI completion_window duration (e.g. "24h").
 func ExpiresAtUnix(createdAt int64, completionWindow string) (int64, error) {
-	d, err := ParseCompletionWindow(completionWindow)
+	d, err := parseCompletionWindow(completionWindow)
 	if err != nil {
 		return 0, err
 	}
 	return createdAt + int64(d.Seconds()), nil
 }
 
-// ParseCompletionWindow parses OpenAI batch completion_window strings: a positive
+// parseCompletionWindow parses OpenAI batch completion_window strings: a positive
 // whole number of hours or minutes ("24h", "90m"). Empty means 24h.
-func ParseCompletionWindow(window string) (time.Duration, error) {
-	const op = "batch.ParseCompletionWindow"
+func parseCompletionWindow(window string) (time.Duration, error) {
+	const op = "batch.parseCompletionWindow"
 	window = strings.TrimSpace(strings.ToLower(window))
 	if window == "" {
 		return 24 * time.Hour, nil

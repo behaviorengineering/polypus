@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/behaviorengineering/polypus/internal/clients/httpx"
 	"github.com/behaviorengineering/polypus/internal/observability"
 	"github.com/behaviorengineering/polypus/internal/outbound"
 )
@@ -63,22 +64,27 @@ const (
 	errorBodyMax = 200
 )
 
-// call sends req once and returns the body of a 2xx answer (at most limit bytes), or
-// a *statusError carrying the status and the start of the body. what names the call.
-func call(req *http.Request, what string, limit int64) ([]byte, error) {
+// call sends req once and returns the body and headers of a 2xx answer, or a
+// *statusError carrying the status and the start of the body. A 2xx body over limit
+// bytes is an error, never a silent truncation that passes a size check or fails
+// later as a parse error. what names the call in every error.
+func call(req *http.Request, what string, limit int64) ([]byte, http.Header, error) {
 	resp, err := httpDefaultDo(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", what, err)
+		return nil, nil, fmt.Errorf("%s: %w", what, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return nil, fmt.Errorf("%s: read body: %w", what, err)
+		return nil, nil, fmt.Errorf("%s: read body: %w", what, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &statusError{what: what, status: resp.StatusCode, body: truncate(string(raw), errorBodyMax)}
+		return nil, nil, &statusError{what: what, status: resp.StatusCode, body: httpx.Truncate(string(raw), errorBodyMax)}
 	}
-	return raw, nil
+	if int64(len(raw)) > limit {
+		return nil, nil, fmt.Errorf("%s: body over %d bytes", what, limit)
+	}
+	return raw, resp.Header, nil
 }
 
 // statusError is a gateway answer outside 2xx, kept typed so callers read the status.

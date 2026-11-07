@@ -279,3 +279,30 @@ func TestRunSecretSet_helpNoWarn(t *testing.T) {
 		t.Fatal("usage path should not print insecure warning")
 	}
 }
+
+// TestSecretSetReadsCommandInput feeds --stdin through the command's input, not
+// the process stdin.
+func TestSecretSetReadsCommandInput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("secrets:\n  - CF_AI_API_KEY\nbackends:\n  b:\n    base_url: http://127.0.0.1:1\n    capabilities: [chat]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POLYPUS_CONFIG", path)
+	mem := operatorconfig.NewMemKeyring()
+	operatorconfig.SetTestKeyring(mem)
+	t.Cleanup(func() { operatorconfig.SetTestKeyring(operatorconfig.OSKeyring{}) })
+
+	var out, errOut bytes.Buffer
+	cio := cmdIO{in: strings.NewReader("from-cmd-input\n"), out: &out, errOut: &errOut}
+	if code := runSecretSet(cio, []string{"CF_AI_API_KEY"}, secretSetOpts{fromStdin: true}); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if got, err := mem.Get("polypus", "CF_AI_API_KEY"); err != nil || got != "from-cmd-input" {
+		t.Fatalf("keyring got %q, %v", got, err)
+	}
+
+	out.Reset()
+	if code := runSecretSet(cio, []string{"CF_AI_API_KEY"}, secretSetOpts{dryRun: true}); code != 0 || !strings.Contains(out.String(), "dry-run: would store CF_AI_API_KEY") {
+		t.Fatalf("dry-run plan must go to stdout: exit %d stdout %q", code, out.String())
+	}
+}

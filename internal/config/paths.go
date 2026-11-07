@@ -11,23 +11,23 @@ import (
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
 )
 
-// DefaultCacheDir returns ~/.cache/polypus (or $XDG_CACHE_HOME/polypus).
-func DefaultCacheDir() (string, error) {
+// defaultCacheDir returns ~/.cache/polypus (or $XDG_CACHE_HOME/polypus).
+func defaultCacheDir() (string, error) {
 	return xdgDir("XDG_CACHE_HOME", ".cache")
 }
 
-// DefaultSwitchyardRoutesPath returns the generated Switchyard TOML path.
-func DefaultSwitchyardRoutesPath() (string, error) {
-	dir, err := DefaultCacheDir()
+// defaultSwitchyardRoutesPath returns the generated Switchyard TOML path.
+func defaultSwitchyardRoutesPath() (string, error) {
+	dir, err := defaultCacheDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "switchyard", "routes.toml"), nil
 }
 
-// DefaultModelsInventoryCachePath returns the default models inventory disk cache path.
-func DefaultModelsInventoryCachePath() (string, error) {
-	dir, err := DefaultCacheDir()
+// defaultModelsInventoryCachePath returns the default models inventory disk cache path.
+func defaultModelsInventoryCachePath() (string, error) {
+	dir, err := defaultCacheDir()
 	if err != nil {
 		return "", err
 	}
@@ -49,7 +49,7 @@ func resolveModelsInventoryCachePath() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("POLYPUS_MODELS_CACHE")); path != "" {
 		return path, nil
 	}
-	return DefaultModelsInventoryCachePath()
+	return defaultModelsInventoryCachePath()
 }
 
 // DefaultStateDir returns ~/.local/state/polypus (or $XDG_STATE_HOME/polypus).
@@ -84,30 +84,16 @@ func resolveBatchDir() (string, error) {
 	return defaultBatchDir()
 }
 
-// DefaultProcessComposeSockPath returns the default process-compose Unix socket path.
-func DefaultProcessComposeSockPath() (string, error) {
-	dir, err := DefaultStateDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "process-compose.sock"), nil
-}
-
-// ResolveConfigPathWithError picks the router config file.
+// resolveConfigPath picks the router config file.
 // Order: POLYPUS_CONFIG, ~/.config/polypus/config.yaml, $POLYPUS_ROOT/config.yaml, ./config.yaml.
 // Returns "" when none exist (caller may fall back to env-only defaults), and an
-// error for an invalid override path.
-func ResolveConfigPathWithError() (string, error) {
-	out, err := resolveConfigPathWithError()
+// error (CodeInvalid) for an invalid override path.
+func resolveConfigPath() (string, error) {
+	out, err := operatorconfig.ResolveConfigPath(operatorConfigOptions())
 	if err != nil {
-		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.ResolveConfigPathWithError", "config path")
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeInvalid), "config.resolveConfigPath", "config path")
 	}
 	return out, nil
-}
-
-// resolveConfigPathWithError is ResolveConfigPathWithError before its error is typed at the package boundary.
-func resolveConfigPathWithError() (string, error) {
-	return operatorconfig.ResolveConfigPath(operatorConfigOptions())
 }
 
 // xdgDir is $envName/polypus when the XDG variable is set, else ~/homeSubdir/polypus.

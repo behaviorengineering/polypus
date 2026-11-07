@@ -2,6 +2,8 @@ package observability
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -79,5 +81,24 @@ func TestJoinInterventionsDedupes(t *testing.T) {
 	got = JoinInterventions("reasoning_alias", InterventionSSEDrop)
 	if got != "reasoning_alias,sse_drop" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestRecordInterventionFromTwoGoroutines(t *testing.T) {
+	ctx := WithInterventionState(context.Background())
+	var wg sync.WaitGroup
+	for _, code := range []Intervention{InterventionSSEDrop, InterventionReasoningAlias} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				RecordIntervention(ctx, code)
+			}
+		}()
+	}
+	wg.Wait()
+	got := InterventionJoined(ctx)
+	if !strings.Contains(got, string(InterventionSSEDrop)) || !strings.Contains(got, string(InterventionReasoningAlias)) {
+		t.Fatalf("joined = %q, want both codes", got)
 	}
 }

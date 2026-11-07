@@ -53,7 +53,7 @@ disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
     source = "../docs/switchyard/README.md"
     target = "content/docs/switchyard/_index.md"
   [[module.mounts]]
-    source = "../media"
+    source = "../internal/gateway/assets"
     target = "static/media"
     includeFiles = ["*.webp"]
   [[module.mounts]]

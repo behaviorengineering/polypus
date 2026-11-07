@@ -83,12 +83,33 @@ func TestAgentGuideListsLeaves(t *testing.T) {
 		"admin-key generate",
 		"deploy run",
 		"deploy export-env",
+		"deploy secret set",
 		"serve",
 		"version",
 	} {
 		if !strings.Contains(guide, needle) {
 			t.Fatalf("guide missing %q\n%s", needle, guide)
 		}
+	}
+}
+
+// TestAgentGuideNamesRunnableCommands checks every command line the guide prints
+// is a leaf an agent can run, not a parent that prints help and exits 2.
+func TestAgentGuideNamesRunnableCommands(t *testing.T) {
+	root := newRoot()
+	for _, leaf := range guideLeaves(root) {
+		if len(visibleSubcommands(leaf)) > 0 {
+			t.Errorf("guide lists %q, which has subcommands", leaf.CommandPath())
+		}
+	}
+	guide := agentOperatingGuide(root)
+	for _, line := range strings.Split(guide, "\n") {
+		if f := strings.Fields(line); len(f) >= 2 && f[0] == "deploy" && f[1] == "secret" && (len(f) < 3 || f[2] != "set") {
+			t.Fatalf("guide lists deploy secret without its verb: %q", line)
+		}
+	}
+	if !strings.Contains(guide, "except serve takes --dry-run") {
+		t.Fatalf("guide must say serve has no --dry-run\n%s", guide)
 	}
 }
 
@@ -217,9 +238,9 @@ func TestInitDryRunWritesNothing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home+"/config")
-	code, _, errOut := captureRun([]string{"init", "--dry-run"})
-	if code != 0 || !strings.Contains(errOut, "dry-run: would write") {
-		t.Fatalf("exit %d stderr %q", code, errOut)
+	code, out, errOut := captureRun([]string{"init", "--dry-run"})
+	if code != 0 || !strings.Contains(out, "dry-run: would write") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out, errOut)
 	}
 	if entries, _ := os.ReadDir(home + "/config"); len(entries) != 0 {
 		t.Fatalf("dry-run wrote files: %v", entries)

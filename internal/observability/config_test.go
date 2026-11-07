@@ -1,8 +1,10 @@
 package observability
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,6 +15,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	t.Setenv("POLYPUS_OTEL", "")
 	t.Setenv("POLYPUS_OTEL_ENABLED", "")
 	t.Setenv("POLYPUS_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("POLYPUS_FAILURE_DUMP_DIR", "")
 	t.Setenv("POLYPUS_SERVICE_NAME", "")
 	t.Setenv("POLYPUS_PHOENIX", "")
@@ -24,8 +27,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.ServiceName != defaultServiceName {
 		t.Fatalf("service=%s", cfg.ServiceName)
 	}
-	if cfg.OTLPEndpoint != defaultOTLPEndpoint {
-		t.Fatalf("otlp=%s", cfg.OTLPEndpoint)
+	if cfg.OTLPEndpoint != "" {
+		t.Fatalf("no endpoint in the environment must mean no OTLP export, got %q", cfg.OTLPEndpoint)
 	}
 	if want, _ := filepath.Abs(defaultDumpDir); cfg.DumpDir != want {
 		t.Fatalf("the default dump root resolves to an absolute path: %s", cfg.DumpDir)
@@ -91,7 +94,7 @@ func TestLoadConfigHonoursStandardOTLPEndpoint(t *testing.T) {
 	t.Setenv("POLYPUS_OTLP_ENDPOINT", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.example:4317")
 	if got := mustLoadConfig(t).OTLPEndpoint; got != "http://collector.example:4317" {
-		t.Fatalf("OTEL_EXPORTER_OTLP_ENDPOINT must win over the local default, got %q", got)
+		t.Fatalf("OTEL_EXPORTER_OTLP_ENDPOINT must be used when POLYPUS_OTLP_ENDPOINT is unset, got %q", got)
 	}
 	t.Setenv("POLYPUS_OTLP_ENDPOINT", "http://polypus.example:4317")
 	if got := mustLoadConfig(t).OTLPEndpoint; got != "http://polypus.example:4317" {
@@ -117,5 +120,21 @@ func TestLoadConfigRejectsValuesItCannotRead(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "POLYPUS_OTEL") && derrors.Field(err, "env") == "" {
 		t.Fatalf("the error must name the variable: %v", err)
+	}
+}
+
+func TestEnvIntKeepsTheParseCause(t *testing.T) {
+	t.Setenv("POLYPUS_TEST_INT", "99999999999999999999")
+	_, err := envInt("POLYPUS_TEST_INT", 1)
+	if !errors.Is(err, strconv.ErrRange) || derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("err = %v, want the range error in the chain", err)
+	}
+	t.Setenv("POLYPUS_TEST_INT", "-1")
+	if n, err := envInt("POLYPUS_TEST_INT", 7); n != 7 || derrors.CodeOf(err) != derrors.CodeInvalid || !strings.Contains(err.Error(), "negative") {
+		t.Fatalf("n=%d err=%v, want the fallback and a negative error", n, err)
+	}
+	t.Setenv("POLYPUS_TEST_INT", "12")
+	if n, err := envInt("POLYPUS_TEST_INT", 7); n != 12 || err != nil {
+		t.Fatalf("n=%d err=%v", n, err)
 	}
 }

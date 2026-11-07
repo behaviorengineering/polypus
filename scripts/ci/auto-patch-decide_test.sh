@@ -83,6 +83,56 @@ check_marker() {
 check_marker true  "feat: add main [skip release]"
 check_marker false $'feat: add main\n\nThe [skip release] marker is documented here.'
 
+# tagged_repo builds a repo tagged v0.1.0 plus one feat commit touching the given paths.
+tagged_repo() {
+  local repo="$1"
+  shift
+  rm -rf "${repo}"
+  git init -q "${repo}"
+  : > "${repo}/main.go"
+  git -C "${repo}" add main.go
+  git -C "${repo}" -c user.name=test -c user.email=test@example.com commit -q -m "feat: add main"
+  git -C "${repo}" -c user.name=test -c user.email=test@example.com tag -a v0.1.0 -m v0.1.0
+  local f
+  for f in "$@"; do
+    mkdir -p "$(dirname "${repo}/${f}")"
+    echo "change" >> "${repo}/${f}"
+  done
+  git -C "${repo}" add -A
+  git -C "${repo}" -c user.name=test -c user.email=test@example.com commit -q -m "feat: change"
+}
+
+# check_release runs auto-patch-decide.sh and packaging-only-since-tag.sh on a tagged
+# repo with the release workflow's extra packaging globs, and compares both skips.
+check_release() {
+  local want_release_skip="$1" want_rebuild_skip="$2"
+  shift 2
+  local repo="${_tmp}/rel" out="${_tmp}/rel.out" rebuild="${_tmp}/rebuild.out"
+  tagged_repo "${repo}" "$@"
+  : > "${out}"
+  : > "${rebuild}"
+  (cd "${repo}" && AUTO_PATCH_EXTRA_PACKAGING_PATHS="docker-bake.hcl" OUTPUT_FILE="${out}" \
+    bash "${_script_dir}/auto-patch-decide.sh")
+  (cd "${repo}" && AUTO_PATCH_EXTRA_PACKAGING_PATHS="docker-bake.hcl" GITHUB_OUTPUT="${rebuild}" \
+    bash "${_script_dir}/packaging-only-since-tag.sh" >/dev/null)
+  local got_release got_rebuild
+  got_release="$(sed -n 's/^skip=//p' "${out}")"
+  got_rebuild="$(sed -n 's/^skip=//p' "${rebuild}")"
+  if [[ "${got_release}" != "${want_release_skip}" || "${got_rebuild}" != "${want_rebuild_skip}" ]]; then
+    echo "FAIL: paths $*: want release skip=${want_release_skip} rebuild skip=${want_rebuild_skip}, got ${got_release} and ${got_rebuild}" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+# A change is released or rebuilt, never both: release skip and rebuild skip differ
+# except for harness-only changes, which do neither.
+check_release false true main.go
+check_release true  false Dockerfile
+check_release true  false Dockerfile AGENTS.md
+check_release true  false docker-bake.hcl CLAUDE.md
+check_release false true  Dockerfile main.go
+check_release true  true  AGENTS.md
+
 if [[ "${failures}" -gt 0 ]]; then
   echo "${failures} auto-patch test(s) failed" >&2
   exit 1

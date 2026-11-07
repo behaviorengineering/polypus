@@ -14,9 +14,8 @@ import (
 )
 
 const (
-	defaultServiceName  = "polypus"
-	defaultOTLPEndpoint = "localhost:4317"
-	defaultDumpDir      = "logs/inference-failures"
+	defaultServiceName = "polypus"
+	defaultDumpDir     = "logs/inference-failures"
 )
 
 var defaultSkipPaths = []string{"/health", "/health/backends", "/health/upstreams"}
@@ -41,7 +40,8 @@ type Config struct {
 
 // LoadConfig reads the tracing settings from the environment: POLYPUS_OTEL and
 // POLYPUS_OTEL_ENABLED (on/off), POLYPUS_SERVICE_NAME, POLYPUS_OTLP_ENDPOINT (then
-// OTEL_EXPORTER_OTLP_ENDPOINT, then the local Phoenix unless POLYPUS_PHOENIX is off),
+// OTEL_EXPORTER_OTLP_ENDPOINT; neither set means no OTLP export, and the local stack's
+// scripts/pc-up.sh sets the first),
 // POLYPUS_FAILURE_DUMP_DIR, POLYPUS_FAILURE_DUMP_MAX_FILES,
 // POLYPUS_FAILURE_DUMP_MAX_AGE_HOURS, POLYPUS_OTEL_SKIP_PATHS and
 // POLYPUS_STREAM_CHUNK_DEBUG. Tracing is on by
@@ -70,13 +70,11 @@ func LoadConfig() (Config, error) {
 
 		StreamChunkDebug: boolEnv("POLYPUS_STREAM_CHUNK_DEBUG", false),
 	}
-	// POLYPUS_OTLP_ENDPOINT, then the standard OTEL_EXPORTER_OTLP_ENDPOINT, then the
-	// local Phoenix default.
+	// POLYPUS_OTLP_ENDPOINT, then the standard OTEL_EXPORTER_OTLP_ENDPOINT. There is
+	// no collector address in Go: a job on a host without one would otherwise wait on
+	// the OTLP timeout at every flush.
 	if cfg.OTLPEndpoint == "" {
 		cfg.OTLPEndpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
-	}
-	if cfg.OTLPEndpoint == "" && boolEnv("POLYPUS_PHOENIX", true) {
-		cfg.OTLPEndpoint = defaultOTLPEndpoint
 	}
 	cfg.Enabled = boolEnv("POLYPUS_OTEL_ENABLED", cfg.Enabled)
 	// Dumps must be findable after the process exits: resolve the root against the
@@ -165,8 +163,12 @@ func envInt(key string, fallback int) (int, error) {
 		return fallback, nil
 	}
 	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		return fallback, derrors.New(derrors.CodeInvalid, "observability.envInt", "not a non-negative integer").
+	if err != nil {
+		return fallback, derrors.Wrap(err, derrors.CodeInvalid, "observability.envInt", "not an integer").
+			With("env", key).With("value", raw)
+	}
+	if n < 0 {
+		return fallback, derrors.New(derrors.CodeInvalid, "observability.envInt", "negative").
 			With("env", key).With("value", raw)
 	}
 	return n, nil

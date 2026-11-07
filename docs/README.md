@@ -14,7 +14,7 @@ Polypus is an OpenAI-compatible gateway: your apps call one address, and Polypus
 | Model catalogue | `GET /v1/models`, with an optional allow list per backend |
 | Routers | `model: router/<name>`: stage router, LLM classifier, random, passthrough, fallback |
 | Access keys | Optional lock with gateway keys (`polypus admin-key`) |
-| Failure dumps | `GET /debug/failures/<trace id>` returns what went wrong, readable by an agent |
+| Failure dumps | `GET /debug/failures/<trace id>` returns what went wrong, readable by an agent: the failure dump as it is, or `{trace_id, failure, stream_chunks[]}` when a stream also dropped chunks |
 
 ## Deploy it for a team
 

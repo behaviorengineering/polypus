@@ -33,6 +33,9 @@ type Config struct {
 	Rotate bool
 	// Keyring stores the key; nil uses the OS keyring.
 	Keyring operatorconfig.Keyring
+	// Secrets reads the key back for the verify step; nil reads the shell and
+	// Keyring, and fails when they disagree. Its own nil Keyring means Keyring.
+	Secrets *secrets.Resolver
 	// Docker runs a docker command and returns its stdout; nil runs docker.
 	Docker func(ctx context.Context, args []string) ([]byte, error)
 	// HealthURL is the gateway base URL Lock verifies the lock against.
@@ -51,7 +54,8 @@ type Result struct {
 }
 
 // Lock creates and stores the key (Create), then, unless SkipVerify, reads it back
-// from the keyring and checks the gateway at HealthURL answers 401 without it and
+// through Secrets (a shell POLYPUS_API_KEY that differs is a *secrets.Conflict,
+// never used silently) and checks the gateway at HealthURL answers 401 without it and
 // 200 with it. On a verify failure Result.Name still names the stored key.
 func Lock(ctx context.Context, cfg Config) (Result, error) {
 	const op = "clientkey.Lock"
@@ -67,19 +71,30 @@ func Lock(ctx context.Context, cfg Config) (Result, error) {
 	if url == "" {
 		return res, derrors.New(derrors.CodeInvalid, op, "health URL required to verify the lock (or set SkipVerify)")
 	}
-	key, err := secrets.Lookup(cfg.Keyring, cfg.Project, secrets.ClientKeyName)
+	key, _, err := cfg.resolver().Resolve(cfg.Project, secrets.ClientKeyName)
 	if err != nil {
-		return res, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeNotFound), op, "read stored key").With("keyring_service", cfg.Project)
+		return res, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeFailedPrecondition), op, "read stored key").With("keyring_service", cfg.Project)
 	}
 	client := cfg.HTTP
 	if client == nil {
 		client = &http.Client{}
 	}
-	if err := Verify(ctx, client, url, key); err != nil {
+	if err := verify(ctx, client, url, key); err != nil {
 		return res, err
 	}
 	res.VerifiedURL = url
 	return res, nil
+}
+
+// resolver is Secrets reading Keyring, or a resolver of the shell and Keyring.
+func (c Config) resolver() *secrets.Resolver {
+	if c.Secrets == nil {
+		return &secrets.Resolver{Keyring: c.Keyring}
+	}
+	if c.Secrets.Keyring == nil {
+		c.Secrets.Keyring = c.Keyring
+	}
+	return c.Secrets
 }
 
 func (c Config) keyName() string {
@@ -176,22 +191,24 @@ func gatewayContainer(ctx context.Context, cfg Config) (string, error) {
 		"no running gateway in compose project "+cfg.Project+"; run polypus deploy run first")
 }
 
-// Verify checks the gateway at baseURL now needs key: /v1/models answers 401 without
-// it and 200 with it.
-func Verify(ctx context.Context, client *http.Client, baseURL, key string) error {
+// verify checks the gateway at baseURL now needs key: /v1/models answers 401 without
+// it and 200 with it. A wrong answer is CodeFailedPrecondition: the lock is not in
+// place.
+func verify(ctx context.Context, client *http.Client, baseURL, key string) error {
+	const op = "clientkey.verify"
 	without, err := modelsStatus(ctx, client, baseURL, "")
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "GET /v1/models without a key")
 	}
 	if without != http.StatusUnauthorized {
-		return fmt.Errorf("clientkey: /v1/models without a key answered %d, want 401", without)
+		return derrors.New(derrors.CodeFailedPrecondition, op, fmt.Sprintf("/v1/models without a key answered %d, want 401", without))
 	}
 	with, err := modelsStatus(ctx, client, baseURL, key)
 	if err != nil {
-		return err
+		return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), op, "GET /v1/models with the key")
 	}
 	if with != http.StatusOK {
-		return fmt.Errorf("clientkey: /v1/models with the key answered %d, want 200", with)
+		return derrors.New(derrors.CodeFailedPrecondition, op, fmt.Sprintf("/v1/models with the key answered %d, want 200", with))
 	}
 	return nil
 }

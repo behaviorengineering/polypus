@@ -18,6 +18,8 @@
 #   - Gitlink-only bumps of a harness submodule listed in
 #     AUTO_PATCH_EXTRA_HARNESS_PATHS are harness-only (no product tag).
 #   - Mixed harness + product paths are releasable.
+#   - Mixed harness + packaging paths are not: they publish an image revision -rN
+#     (packaging-only-since-tag.sh treats harness paths as neutral the same way).
 #   - Manual (workflow_dispatch / web) skips subject/path filters; still refuses existing tags.
 #   - Empty file list does not path-skip (falls through to bump).
 set -euo pipefail
@@ -115,17 +117,18 @@ else
       exit 0
     fi
 
-    packaging_only="true"
+    # Harness paths are neutral here: packaging plus harness ships no new binary.
+    packaging_or_harness="true"
     while IFS= read -r f; do
       [[ -z "${f}" ]] && continue
-      if ! is_packaging_only_path "${f}"; then
-        packaging_only="false"
+      if ! is_packaging_only_path "${f}" && ! is_harness_only_path "${f}"; then
+        packaging_or_harness="false"
         break
       fi
     done <<< "${files}"
-    if [[ "${packaging_only}" == "true" ]]; then
+    if [[ "${packaging_or_harness}" == "true" ]]; then
       write_out "skip=true"
-      write_out "reason=packaging-only (use Docker release -rN)"
+      write_out "reason=packaging and harness only (use Docker release -rN)"
       exit 0
     fi
   fi

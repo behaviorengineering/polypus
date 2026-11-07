@@ -60,12 +60,32 @@ paths:
         "200":
           description: Voice list
   /v1/files:
-    get:
-      summary: Files API (proxy)
-      operationId: listFiles
+    post:
+      summary: Upload a batch input file (multipart, purpose=batch)
+      operationId: createFile
       responses:
         "200":
-          description: File list
+          description: File object
+  /v1/files/{file_id}:
+    get:
+      summary: Retrieve a file
+      operationId: retrieveFile
+      responses:
+        "200":
+          description: File object
+    delete:
+      summary: Delete a file
+      operationId: deleteFile
+      responses:
+        "200":
+          description: Deletion status
+  /v1/files/{file_id}/content:
+    get:
+      summary: Retrieve a file's content
+      operationId: downloadFile
+      responses:
+        "200":
+          description: File content (JSONL)
   /v1/batches:
     post:
       summary: Create batch job

@@ -1,11 +1,11 @@
 package images
 
 import (
-	"fmt"
 	"os"
 	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/clients/registry"
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // parseEnv reads KEY=VALUE lines of an images file, skipping blanks and comments.
@@ -29,7 +29,7 @@ func parseEnv(data string) map[string]string {
 func readEnvFile(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // G304: the operator's own images file
 	if err != nil {
-		return nil, fmt.Errorf("images: read %q: %w", path, err)
+		return nil, derrors.Wrap(err, derrors.CodeInvalid, "images.readEnvFile", "read "+path)
 	}
 	return parseEnv(string(data)), nil
 }
@@ -43,7 +43,7 @@ func probeRefsFromEnv(path string, keys []string) ([]string, error) {
 	for _, key := range keys {
 		val, ok := found[key]
 		if !ok || val == "" {
-			return nil, fmt.Errorf("images: missing %s in %s", key, path)
+			return nil, derrors.New(derrors.CodeInvalid, "images.probeRefs", "missing "+key+" in "+path)
 		}
 		refs = append(refs, val)
 	}
@@ -61,11 +61,11 @@ func PolypusVersionFromEnv(path string) (string, error) {
 
 func versionFromRefs(refs []string) (string, error) {
 	if len(refs) == 0 {
-		return "", fmt.Errorf("images: no image refs")
+		return "", derrors.New(derrors.CodeInvalid, "images.versionFromRefs", "no image refs")
 	}
 	ref, err := registry.ParseRef(refs[0])
 	if err != nil {
-		return "", fmt.Errorf("images: %w", err)
+		return "", derrors.Wrap(err, derrors.CodeInvalid, "images.versionFromRefs", "parse "+refs[0])
 	}
 	return ref.Tag, nil
 }

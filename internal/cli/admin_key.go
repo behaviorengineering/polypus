@@ -1,10 +1,10 @@
 package cli
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"time"
 
@@ -13,11 +13,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// openAdminKeyStore opens the admin key store at its resolved path.
 func openAdminKeyStore() (*keys.Store, error) {
 	path, err := config.ResolveAdminKeysPath()
 	if err != nil {
 		return nil, err
 	}
+	return openAdminKeyStoreAt(path)
+}
+
+// openAdminKeyStoreAt opens the admin key store at path.
+func openAdminKeyStoreAt(path string) (*keys.Store, error) {
 	return keys.Config{Path: path, Clock: func() time.Time { return time.Now().UTC() }}.CreateStore()
 }
 
@@ -111,7 +117,7 @@ func runAdminKeyRotate(cio cmdIO, o adminKeyOpts) int {
 }
 
 func runAdminKeyDelete(cio cmdIO, o adminKeyOpts) int {
-	if err := requireAdminKeyName(o.name, o.yes || o.dryRun); err != nil {
+	if err := requireAdminKeyName(cio, o.name, o.yes || o.dryRun); err != nil {
 		cio.errorf("%s\n", err.Error())
 		return 2
 	}
@@ -145,7 +151,10 @@ func dryRunDelete(cio cmdIO, s *keys.Store, name string) int {
 		cio.errorf("polypus admin-key delete: dry-run: %v\n", err)
 		return 1
 	}
-	cio.errorf("polypus admin-key delete: dry-run: would remove %s (%s)\n", name, rec.Prefix)
+	if err := cio.printf("polypus admin-key delete: dry-run: would remove %s (%s)\n", name, rec.Prefix); err != nil {
+		cio.errorf("polypus admin-key delete: write: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -184,13 +193,18 @@ func runAdminKeyList(cio cmdIO, o adminKeyOpts) int {
 	return 0
 }
 
-// writeAdminKeyList prints one labelled block per key.
+// writeAdminKeyList prints one labelled block per key. A key never rotated shows
+// "Rotated: never", so the text view carries what --json does.
 func writeAdminKeyList(cio cmdIO, recs []keys.Record) error {
 	if len(recs) == 0 {
 		return cio.printf("No admin keys.\n")
 	}
 	for _, r := range recs {
-		if err := cio.printf("Name: %s\nId: %s\nPrefix: %s\nCreated: %s\n\n", r.Name, r.ID, r.Prefix, r.CreatedAt); err != nil {
+		rotated := r.RotatedAt
+		if rotated == "" {
+			rotated = "never"
+		}
+		if err := cio.printf("Name: %s\nId: %s\nPrefix: %s\nCreated: %s\nRotated: %s\n\n", r.Name, r.ID, r.Prefix, r.CreatedAt, rotated); err != nil {
 			return err
 		}
 	}
@@ -252,7 +266,12 @@ type adminKeyMutation struct {
 func runAdminKeyMutate(cio cmdIO, verb string, o adminKeyOpts, m adminKeyMutation) int {
 	name := o.name
 	if strings.TrimSpace(name) == "" {
-		if !stdinTTY() {
+		// A dry-run never prompts, not even for the name.
+		if o.dryRun {
+			cio.errorf("polypus admin-key %s: dry-run needs --name\n", verb)
+			return 2
+		}
+		if !cio.inTTY {
 			cio.errorf("%s\n", "polypus admin-key "+verb+": "+noTTYMessage)
 			return 2
 		}
@@ -263,7 +282,7 @@ func runAdminKeyMutate(cio cmdIO, verb string, o adminKeyOpts, m adminKeyMutatio
 		}
 		name = prompted
 	}
-	if err := requireAdminKeyName(name, o.yes || o.dryRun); err != nil {
+	if err := requireAdminKeyName(cio, name, o.yes || o.dryRun); err != nil {
 		cio.errorf("%s\n", err.Error())
 		return 2
 	}
@@ -279,7 +298,10 @@ func runAdminKeyMutate(cio cmdIO, verb string, o adminKeyOpts, m adminKeyMutatio
 			cio.errorf("polypus admin-key %s: dry-run: %v\n", verb, err)
 			return 1
 		}
-		cio.errorf("polypus admin-key %s: dry-run: %s\n", verb, plan)
+		if err := cio.printf("polypus admin-key %s: dry-run: %s\n", verb, plan); err != nil {
+			cio.errorf("polypus admin-key %s: write: %v\n", verb, err)
+			return 1
+		}
 		return 0
 	}
 	if !o.yes && !confirmed(cio, verb, verb+" admin API key", name) {
@@ -306,11 +328,13 @@ func runAdminKeyMutate(cio cmdIO, verb string, o adminKeyOpts, m adminKeyMutatio
 	return 0
 }
 
-func requireAdminKeyName(name string, yes bool) error {
+// requireAdminKeyName checks a name was given and, unless yes skips the prompt,
+// that there is a terminal to confirm on.
+func requireAdminKeyName(cio cmdIO, name string, yes bool) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("polypus admin-key: name required")
 	}
-	if !stdinTTY() && !yes {
+	if !cio.inTTY && !yes {
 		return fmt.Errorf("polypus admin-key: %s", noTTYMessage)
 	}
 	return nil
@@ -318,14 +342,6 @@ func requireAdminKeyName(name string, yes bool) error {
 
 // noTTYMessage says why a prompt cannot run and how to skip it.
 const noTTYMessage = "cannot prompt when stdin is not a TTY; use --name and --yes"
-
-func stdinTTY() bool {
-	f, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (f.Mode() & os.ModeCharDevice) != 0
-}
 
 // confirmed asks the operator to confirm action on name, and says why when the
 // answer is not yes: a read failure, a decline, or no terminal to ask on.
@@ -341,7 +357,7 @@ func confirmed(cio cmdIO, verb, action, name string) bool {
 }
 
 func confirmTTY(cio cmdIO, action, name string) (bool, error) {
-	if !stdinTTY() {
+	if !cio.inTTY {
 		return false, nil
 	}
 	line, err := promptLine(cio, fmt.Sprintf("Confirm %s \"%s\"? [y/N]: ", action, name))
@@ -352,13 +368,26 @@ func confirmTTY(cio cmdIO, action, name string) (bool, error) {
 	return line == "y" || line == "yes", nil
 }
 
-// promptLine writes label to the error stream and reads one line from stdin.
+// promptLine writes label to the error stream and reads one line from the
+// command's input. It reads a byte at a time, so a second prompt finds the input
+// the first one left.
 func promptLine(cio cmdIO, label string) (string, error) {
 	cio.errorf("%s", label)
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
+	var line strings.Builder
+	var b [1]byte
+	for {
+		n, err := cio.in.Read(b[:])
+		if n == 1 {
+			if b[0] == '\n' {
+				return strings.TrimSpace(line.String()), nil
+			}
+			line.WriteByte(b[0])
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) && line.Len() > 0 {
+				return strings.TrimSpace(line.String()), nil
+			}
+			return "", err
+		}
 	}
-	return strings.TrimSpace(line), nil
 }

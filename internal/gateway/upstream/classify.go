@@ -15,7 +15,6 @@ const (
 	LayerPolypusBreaker = "polypus_breaker"
 	LayerSwitchyard     = "switchyard"
 	LayerLeaf           = "leaf"
-	LayerGateway        = "gateway"
 )
 
 // FailureClass is structured attribution for dial failures.

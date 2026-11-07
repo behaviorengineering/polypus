@@ -303,3 +303,13 @@ backends:
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestSystemOneModelRewriteKeepsLargeIntegersExact(t *testing.T) {
+	out, err := rewriteSystemOneResponseModel([]byte(`{"model":"x","n":9007199254740993}`), "public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"n":9007199254740993`) || !strings.Contains(string(out), `"model":"public"`) {
+		t.Fatalf("rewrite: %s", out)
+	}
+}

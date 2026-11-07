@@ -1,17 +1,11 @@
 package gateway
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"strings"
 
-	"github.com/behaviorengineering/polypus/internal/config"
-	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
 )
 
@@ -205,15 +199,6 @@ func ensureChoiceFinishReasons(choices []map[string]json.RawMessage) bool {
 	return changed
 }
 
-func recordProxyStreamChunk(ctx context.Context, openaiJSON []byte, action streamSSEAction) {
-	if action != streamSSEDrop {
-		return
-	}
-	observability.RecordIntervention(ctx, observability.InterventionSSEDrop)
-	idx := nextStreamChunkIndex(ctx)
-	dumpIllegalStreamChunk(ctx, idx, openaiJSON, nil)
-}
-
 func jsonFieldPresent(obj map[string]json.RawMessage, key string) bool {
 	raw, ok := obj[key]
 	if !ok {
@@ -326,145 +311,4 @@ func normalizeChatCompletion(ctx context.Context, w http.ResponseWriter, raw []b
 		setIntervention(ctx, w, observability.InterventionReasoningAlias)
 	}
 	return out
-}
-
-// streamCopyOpts configures delayed HTTP status for proxy SSE.
-type streamCopyOpts struct {
-	responseWriter   http.ResponseWriter
-	statusCode       int
-	delayWriteHeader bool
-}
-
-// copyOpenAIChatStreamWithOpts applies sanitizeOpenAIStreamChunk to each SSE data
-// frame from src. opts is nil when dst is not the HTTP response.
-func copyOpenAIChatStreamWithOpts(ctx context.Context, dst io.Writer, src io.Reader, stripExtraFields bool, opts *streamCopyOpts) (int64, error) {
-	if ctx == nil {
-		return 0, derrors.New(derrors.CodeInvalid, "gateway.copyOpenAIChatStream", "context required")
-	}
-	c := &sseCopier{ctx: ctx, dst: dst, san: newOpenAIStreamSanitizer(), strip: stripExtraFields}
-	if opts != nil {
-		c.httpWriter = opts.responseWriter
-		c.statusCode = opts.statusCode
-		c.delayWriteHeader = opts.delayWriteHeader
-	}
-	br := bufio.NewReader(src)
-	var event bytes.Buffer
-	for {
-		if err := ctx.Err(); err != nil {
-			return c.written, err
-		}
-		line, err := br.ReadString('\n')
-		switch {
-		case line == "\n" || line == "\r\n":
-			// A blank line ends an SSE event.
-			if ferr := c.flush(&event); ferr != nil {
-				return c.written, ferr
-			}
-			continue
-		case line != "":
-			event.WriteString(line)
-		}
-		if errors.Is(err, io.EOF) {
-			return c.written, c.finish(&event)
-		}
-		if err != nil {
-			return c.written, err
-		}
-	}
-}
-
-// sseCopier rewrites one OpenAI SSE stream event by event.
-type sseCopier struct {
-	ctx              context.Context
-	dst              io.Writer
-	san              *openAIStreamSanitizer
-	strip            bool
-	written          int64
-	seenDone         bool
-	httpWriter       http.ResponseWriter
-	statusCode       int
-	delayWriteHeader bool
-	headersStarted   bool
-}
-
-// flush rewrites the buffered event and writes it; an event that ends up empty is dropped.
-func (c *sseCopier) flush(event *bytes.Buffer) error {
-	if event.Len() == 0 {
-		return nil
-	}
-	payload := event.String()
-	event.Reset()
-	var out strings.Builder
-	for _, line := range strings.Split(payload, "\n") {
-		c.rewriteLine(line, &out)
-	}
-	if out.Len() == 0 {
-		return nil
-	}
-	out.WriteByte('\n')
-	return c.write(out.String())
-}
-
-// rewriteLine copies one event line to out: non-data lines as they are, [DONE] as
-// is, and data frames through the sanitizer (dropped frames are recorded, not sent).
-func (c *sseCopier) rewriteLine(line string, out *strings.Builder) {
-	if line == "" {
-		return
-	}
-	if !strings.HasPrefix(line, "data:") {
-		out.WriteString(line)
-		out.WriteByte('\n')
-		return
-	}
-	data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-	if data == "[DONE]" {
-		c.seenDone = true
-		out.WriteString("data: [DONE]\n")
-		return
-	}
-	original := []byte(data)
-	res := sanitizeOpenAIStreamChunk(original, c.san, c.strip)
-	if res.action == streamSSEDrop {
-		recordProxyStreamChunk(c.ctx, original, res.action)
-		return
-	}
-	if res.alias {
-		observability.RecordIntervention(c.ctx, observability.InterventionReasoningAlias)
-	}
-	out.WriteString("data: ")
-	out.Write(res.out)
-	out.WriteByte('\n')
-}
-
-// finish runs at EOF: it flushes a final event that had no blank line after it, or
-// closes a finished stream that never sent [DONE].
-func (c *sseCopier) finish(event *bytes.Buffer) error {
-	if event.Len() > 0 {
-		return c.flush(event)
-	}
-	if !c.seenDone && c.san.hasAnyFinished() {
-		c.ensureResponseStarted()
-		return c.write("data: [DONE]\n\n")
-	}
-	return nil
-}
-
-func (c *sseCopier) ensureResponseStarted() {
-	if !c.delayWriteHeader || c.httpWriter == nil || c.headersStarted {
-		return
-	}
-	if joined := observability.InterventionJoined(c.ctx); joined != "" {
-		c.httpWriter.Header().Set(config.InterventionHeader, joined)
-	}
-	c.httpWriter.WriteHeader(c.statusCode)
-	c.headersStarted = true
-}
-
-func (c *sseCopier) write(s string) error {
-	if strings.TrimSpace(s) != "" {
-		c.ensureResponseStarted()
-	}
-	n, err := io.WriteString(c.dst, s)
-	c.written += int64(n)
-	return err
 }

@@ -13,7 +13,6 @@ import (
 
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/observability"
-	"go.opentelemetry.io/otel/codes"
 )
 
 // Channel names accepted by Run / Options.Channels.
@@ -58,6 +57,8 @@ type Options struct {
 	// APIKey is the gateway access key, sent as a bearer token on every probe when
 	// the gateway is locked. Empty sends none.
 	APIKey string
+	// ReasoningEffort, when set, goes on the chat and batch pings as reasoning.effort.
+	ReasoningEffort string
 }
 
 // Status is a probe outcome.
@@ -175,7 +176,6 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 // share a parent and the gateway's server spans join the same trace.
 func runChannel(ctx context.Context, ch string, opts Options) ([]Result, error) {
 	ctx, span := observability.Tracer().Start(ctx, "polypus-smoke."+ch)
-	defer span.End()
 	var results []Result
 	var err error
 	switch ch {
@@ -193,10 +193,16 @@ func runChannel(ctx context.Context, ch string, opts Options) ([]Result, error) 
 		results = []Result{{Channel: ch, Probe: "unknown", Status: StatusFail, Detail: "unknown channel"}}
 		err = fmt.Errorf("unknown channel %q", ch)
 	}
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+	// The span carries each failed probe's cause (status, body, which probe), not only
+	// the channel's fixed "<channel> smoke failed", and EndSpan redacts it and marks a
+	// passing channel Ok.
+	var causes []error
+	for _, r := range results {
+		if r.Status == StatusFail && r.cause != nil {
+			causes = append(causes, fmt.Errorf("probe %s: %w", r.Probe, r.cause))
+		}
 	}
+	observability.EndSpan(span, errors.Join(append(causes, err)...))
 	return results, err
 }
 

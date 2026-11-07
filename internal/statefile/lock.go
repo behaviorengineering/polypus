@@ -20,20 +20,20 @@ func lockPath(path string) string {
 // HTTP handler whose client went away does not keep polling.
 func WithFileLock(ctx context.Context, path string, fn func() error) error {
 	const op = "statefile.WithFileLock"
-	if ctx == nil {
-		return derrors.New(derrors.CodeInvalid, op, "context is required")
+	if ctx == nil || fn == nil {
+		return derrors.New(derrors.CodeInvalid, op, "context and fn are required")
 	}
-	lockPath := lockPath(path)
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+	lp := lockPath(path)
+	if err := os.MkdirAll(filepath.Dir(lp), 0o700); err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, op, "mkdir")
 	}
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
+	f, err := os.OpenFile(lp, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: a path the operator configures (env or flag), not request input
 	if err != nil {
 		return derrors.Wrap(err, derrors.CodeInternal, op, "open lock")
 	}
 	defer func() { _ = f.Close() }()
 	if err := lockFile(ctx, f, lockWait); err != nil {
-		return derrors.Wrap(err, derrors.CodeOf(err), op, "lock").With("path", lockPath)
+		return derrors.Wrap(err, derrors.CodeOf(err), op, "lock").With("path", lp)
 	}
 	defer unlockFile(f)
 	return fn()

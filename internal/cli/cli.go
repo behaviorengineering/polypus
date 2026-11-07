@@ -91,18 +91,36 @@ func polypusCommands(root *cobra.Command) []*cobra.Command {
 	return out
 }
 
-// cmdIO is a command's context and output streams, handed to run functions so
-// they write through Cobra's writers (SetOut and SetErr reach them) and can be
-// tested without a Cobra tree.
+// cmdIO is a command's context, input and output streams, handed to run
+// functions so they read and write through Cobra's streams (SetIn, SetOut and
+// SetErr reach them) and can be tested without a Cobra tree.
 type cmdIO struct {
 	ctx    context.Context
+	in     io.Reader
 	out    io.Writer
 	errOut io.Writer
+	// inTTY reports whether in is a terminal an operator can answer prompts on.
+	inTTY bool
 }
 
-// ioFor reads cmd's context and writers.
+// ioFor reads cmd's context and streams.
 func ioFor(cmd *cobra.Command) cmdIO {
-	return cmdIO{ctx: cmd.Context(), out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr()}
+	in := cmd.InOrStdin()
+	return cmdIO{ctx: cmd.Context(), in: in, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr(), inTTY: isTerminal(in)}
+}
+
+// isTerminal reports whether r is a character device, such as an operator's
+// terminal. Pipes, files and in-memory readers are not.
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(interface{ Stat() (os.FileInfo, error) })
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // errorf writes one diagnostic to the error stream. A failed write to stderr has

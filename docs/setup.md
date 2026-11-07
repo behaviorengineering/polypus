@@ -73,6 +73,10 @@ polypus deploy secret set OPENROUTER_API_KEY
 
 Each command asks for the value at a hidden prompt and stores it in your keyring under the service `polypus-<identifier>`: the macOS Keychain, or Windows Credential Manager. Always store secrets with this command. A value saved by another tool can carry a stray character that breaks the deploy later.
 
+The deploy looks for each secret in three places, in order. It checks your shell first, then the keyring, then an optional SOPS file at `~/.config/polypus-<identifier>/secrets.enc.yaml`. The SOPS file only fills a secret that neither of the others holds, and its age key must come from `SOPS_AGE_KEY`, `SOPS_AGE_KEY_FILE` or the SOPS default key file.
+
+A secret in your shell can differ from the one in the keyring, for example when the shell was set up for another environment. The deploy never picks one silently. On a terminal it asks which to use for this run. Without a terminal it stops and names the secret. Choose ahead of time with `--secrets-from env` (this shell only) or `--secrets-from keyring` (the keyring, then the SOPS file), or set `POLYPUS_SECRETS_FROM` to `env` or `keyring`. `deploy run`, `deploy smoke`, `deploy export-env` and `deploy client-key` all take the flag.
+
 ## 5. Deploy
 
 Check the plan first, then deploy:
@@ -123,12 +127,14 @@ polypus deploy run
 
 The binary carries its own image versions, so the deploy moves the whole stack to that release. Your config, secrets, tailnet device and any client key all stay as they are.
 
+The gateway and Switchyard images run as a non-root user, uid and gid 10001. An older image ran as root, so its volumes belong to root. Before the gateway starts, each deploy runs a one-shot `volume-owner` service that hands those volumes to uid 10001. Your gateway's state and failure dumps carry over without any step from you.
+
 ## When something goes wrong
 
 | What you see | What to do |
 | --- | --- |
 | Every model call fails after working for a while | Your key has probably reached its credit limit, or your OpenRouter balance has run out. Raise the limit or add credits on OpenRouter. At Digizoo, the weekly guardrail has probably tripped, and OpenRouter refuses calls until it resets; if normal work trips it, ask in `#chapter-ai` for the limit to be looked at. |
-| `setenv "<NAME>": invalid argument` during a deploy | The stored secret holds a character the deploy cannot pass on. Store it again with `polypus deploy secret set <NAME>`. |
+| `<NAME> is set in this shell and differs from keyring service polypus-<identifier>` | Your shell holds a different value from the keyring. Run `unset <NAME>` to use the keyring, or pick a source for the run with `--secrets-from keyring` or `--secrets-from env`. |
 | The health check times out on the first deploy | Run `polypus deploy run` again; see step 5. |
 | The health check times out later | Check that Tailscale is connected on this computer, then look at the containers with `docker compose -p polypus-<identifier> ps` and `docker compose -p polypus-<identifier> logs gateway`. |
 | You want to re-test a running gateway | `polypus deploy smoke` sends the same chat checks without deploying. |
@@ -146,3 +152,5 @@ go run github.com/behaviorengineering/polypus/cmd/polypus@vX.Y.Z deploy run --co
 ```
 
 The runner that executes this job must run as the server's login user, not as a system service account, so the job can read that user's keyring. When Polypus publishes a release, change the pinned version in a merge request; its merge deploys the new release. Secrets never go in the repository or in CI variables.
+
+A CI job on a runner with no keyring, such as a Linux runner without a Secret Service, sets `POLYPUS_SECRETS_FROM=env` instead. The deploy then reads each secret from the job's environment only and never touches the keyring. Fill that environment from the runner's own secret store, never from the repository.

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/behaviorengineering/operatorconfig/pkg/operatorconfig"
@@ -66,7 +65,10 @@ func runSecretSet(cio cmdIO, args []string, o secretSetOpts) int {
 			cio.errorf("polypus secret set: %v\n", err)
 			return 1
 		}
-		cio.errorf("polypus secret set: dry-run: would store %s in keyring (service polypus)\n", envName)
+		if err := cio.printf("polypus secret set: dry-run: would store %s in keyring (service polypus)\n", envName); err != nil {
+			cio.errorf("polypus secret set: write: %v\n", err)
+			return 1
+		}
 		return 0
 	}
 
@@ -88,14 +90,14 @@ func runSecretSet(cio cmdIO, args []string, o secretSetOpts) int {
 		warnSecretOnCLI(cio.errOut)
 		value = o.password
 	case o.fromStdin:
-		line, err := readSecretStdin(os.Stdin)
+		line, err := readSecretStdin(cio.in)
 		if err != nil {
 			cio.errorf("polypus secret set: %v\n", err)
 			return 1
 		}
 		value = line
 	default:
-		line, err := readSecretPrompt(cio.errOut, "polypus secret set", envName, os.Stdin)
+		line, err := readSecretPrompt(cio.errOut, "polypus secret set", envName, cio.in)
 		if err != nil {
 			cio.errorf("polypus secret set: %v\n", err)
 			return 1

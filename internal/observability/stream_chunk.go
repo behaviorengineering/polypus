@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
-	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -21,6 +20,9 @@ type StreamChunk struct {
 	// SSEAction is what the gateway did with the chunk (for example emit or drop).
 	SSEAction string
 	Emitted   bool
+	// Preview adds redacted, capped previews of the chunk bodies to the event. The
+	// gateway sets it from Config.StreamChunkDebug.
+	Preview bool
 }
 
 // RecordChatStreamChunk adds a compact OpenInference event on the active span.
@@ -39,7 +41,7 @@ func RecordChatStreamChunk(ctx context.Context, c StreamChunk) {
 	if len(c.RawProviderJSON) > 0 {
 		attrs = append(attrs, attribute.String("polypus.stream.raw_sha256", sha256Hex(c.RawProviderJSON)))
 	}
-	if streamChunkDebug.Load() {
+	if c.Preview {
 		if p := cappedRedacted(string(c.OpenAIJSON)); p != "" {
 			attrs = append(attrs, attribute.String("polypus.stream.openai_preview", p))
 		}
@@ -52,10 +54,6 @@ func RecordChatStreamChunk(ctx context.Context, c StreamChunk) {
 	span.AddEvent("polypus.bifrost.stream_chunk", trace.WithAttributes(attrs...))
 }
 
-// streamChunkDebug is Config.StreamChunkDebug, set once by Init rather than read from
-// the environment on every chunk.
-var streamChunkDebug atomic.Bool
-
 func sha256Hex(b []byte) string {
 	if len(b) == 0 {
 		return ""
@@ -67,7 +65,9 @@ func sha256Hex(b []byte) string {
 func cappedRedacted(s string) string {
 	s = redactURLsInText(s)
 	if len(s) > streamChunkPreviewMax {
-		s = s[:streamChunkPreviewMax]
+		// A byte cut can split a rune; an invalid UTF-8 attribute can make OTLP
+		// reject the whole batch, so the broken tail is dropped.
+		s = strings.ToValidUTF8(s[:streamChunkPreviewMax], "")
 	}
 	return s
 }
