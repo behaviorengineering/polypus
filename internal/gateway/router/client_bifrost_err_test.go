@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -168,5 +169,60 @@ func TestBifrostErrCloudflareFreeTextCodeOnA5xxIsNotARateLimit(t *testing.T) {
 	err := bifrostErr(berr, nil, true)
 	if errors.Is(err, derrors.ErrRateLimited) || derrors.CodeOf(err) != derrors.CodeUnavailable {
 		t.Fatalf("a 5xx that only mentions 3040 must stay an upstream failure: %v", err)
+	}
+}
+
+func TestBifrostErrProviderRefusalKeepsAClientCode(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		msg    string
+		want   derrors.Code
+		http   int
+	}{
+		// The work deploy's smoke on 2026-11-07: OpenRouter's spent weekly budget.
+		{"openrouter budget", http.StatusForbidden, "Budget limit exceeded (weekly limit). Contact your org admin. $10.06 of $10.00 used; resets 2026-11-09T00:00:00.000Z.", derrors.CodeNotReady, http.StatusServiceUnavailable},
+		{"payment required", http.StatusPaymentRequired, "add credits", derrors.CodeNotReady, http.StatusServiceUnavailable},
+		{"credit balance", http.StatusBadRequest, "Your credit balance is too low", derrors.CodeNotReady, http.StatusServiceUnavailable},
+		{"forbidden", http.StatusForbidden, "model not allowed for this key", derrors.CodeUnauthorized, http.StatusUnauthorized},
+		{"unauthorised", http.StatusUnauthorized, "invalid api key", derrors.CodeUnauthorized, http.StatusUnauthorized},
+		{"not found", http.StatusNotFound, "no such model", derrors.CodeNotFound, http.StatusNotFound},
+		{"bad request", http.StatusBadRequest, "messages must not be empty", derrors.CodeInvalid, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status := tc.status
+			berr := &schemas.BifrostError{
+				StatusCode:  &status,
+				Error:       &schemas.ErrorField{Message: tc.msg},
+				ExtraFields: schemas.BifrostErrorExtraFields{RoutingInfo: schemas.RoutingInfo{Provider: "openrouter"}},
+			}
+			err := bifrostErr(berr, nil, false)
+			if got := derrors.CodeOf(err); got != tc.want {
+				t.Fatalf("code = %s, want %s (err %v)", got, tc.want, err)
+			}
+			if got := derrors.HTTPStatus(err); got != tc.http {
+				t.Fatalf("HTTP status = %d, want %d", got, tc.http)
+			}
+			if derrors.Field(err, ratelimit.FieldStatus) != strconv.Itoa(tc.status) {
+				t.Fatalf("status field = %q, want %d", derrors.Field(err, ratelimit.FieldStatus), tc.status)
+			}
+			if !strings.Contains(err.Error(), tc.msg) {
+				t.Fatalf("err %v lost the provider message", err)
+			}
+		})
+	}
+}
+
+func TestBifrostErrRefusalKeepsAProviderCode(t *testing.T) {
+	status := http.StatusBadRequest
+	err := bifrostErr(&schemas.BifrostError{
+		StatusCode: &status,
+		Error: &schemas.ErrorField{
+			Message: "plugin refused",
+			Error:   derrors.New(derrors.CodeConflict, "plugin", "already running"),
+		},
+	}, nil, false)
+	if got := derrors.CodeOf(err); got != derrors.CodeConflict {
+		t.Fatalf("code = %s, want the provider's conflict", got)
 	}
 }

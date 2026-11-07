@@ -77,7 +77,17 @@ func TestChatBifrostErrScopesToAnthropic(t *testing.T) {
 	if got := derrors.HTTPStatus(c.chatBifrostErr("claude_team", berr, nil)); got != http.StatusBadRequest {
 		t.Fatalf("claude 400: got %d", got)
 	}
-	if got := derrors.HTTPStatus(c.chatBifrostErr("gemini_paid", berr, nil)); got != http.StatusBadGateway {
-		t.Fatalf("gemini keeps today's mapping: got %d", got)
+	// Any provider's 4xx refusal keeps a client code (bifrostErr), so both are 400.
+	if got := derrors.HTTPStatus(c.chatBifrostErr("gemini_paid", berr, nil)); got != http.StatusBadRequest {
+		t.Fatalf("gemini 400: got %d", got)
+	}
+	// Anthropic's own rules stay scoped: its 529 overloaded is 503 NotReady, while the
+	// same status from Gemini is an ordinary 5xx, 502 unavailable.
+	overloaded := bifrostTestErr(anthropicOverloadedStatus, "overloaded_error", "busy")
+	if got := derrors.HTTPStatus(c.chatBifrostErr("claude_team", overloaded, nil)); got != http.StatusServiceUnavailable {
+		t.Fatalf("claude 529: got %d", got)
+	}
+	if got := derrors.HTTPStatus(c.chatBifrostErr("gemini_paid", overloaded, nil)); got != http.StatusBadGateway {
+		t.Fatalf("gemini 529 keeps the 5xx mapping: got %d", got)
 	}
 }
