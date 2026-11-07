@@ -34,7 +34,7 @@ var observabilityServices = []string{stack.ServiceOtelcol, stack.ServicePhoenix,
 
 // collectorEndpoint is where the gateway and Switchyard send traces when the
 // collector runs.
-const collectorEndpoint = "http://" + stack.ServiceOtelcol + ":4317" // NOSONAR: compose-network service address; no host port is published
+const collectorEndpoint = "http://" + stack.ServiceOtelcol + ":4317" // NOSONAR: compose-network service address; no host port is published.
 
 // reloadServices are force-recreated after compose up so bind-mounted files
 // (gateway YAML, otelcol config, Tailscale serve.json) reload on Windows. Only

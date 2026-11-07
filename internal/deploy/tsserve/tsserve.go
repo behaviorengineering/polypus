@@ -24,7 +24,7 @@ var observabilityForwards = map[string]string{
 }
 
 // gatewayProxy is the gateway's address inside the compose network.
-const gatewayProxy = "http://" + stack.ServiceGateway + ":1320" // NOSONAR: compose-network hop; Tailscale serve terminates HTTPS in front
+const gatewayProxy = "http://" + stack.ServiceGateway + ":1320" // NOSONAR: compose-network hop; Tailscale serve terminates HTTPS in front.
 
 type tcpHandler struct {
 	HTTPS      bool   `json:"HTTPS,omitempty"`
