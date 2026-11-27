@@ -273,6 +273,77 @@ func TestBifrostOTelTracer_requestIdentityNoInputMessages(t *testing.T) {
 	assertNoAttr(t, child, schemas.AttrInputMessages)
 }
 
+func TestBifrostOTelTracer_responseIdentityWithoutRequestHook(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+
+	tr := NewBifrostOTelTracer()
+	var iface schemas.Tracer = tr
+	bctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	_, handle := iface.StartSpanID(bctx, "chat_completion openai", schemas.SpanKindLLMCall)
+	resp := &schemas.BifrostResponse{
+		ChatResponse: &schemas.BifrostChatResponse{
+			Model: "gpt-4o-2024",
+			Usage: &schemas.BifrostLLMUsage{PromptTokens: 3, CompletionTokens: 1, TotalTokens: 4},
+		},
+	}
+	resp.PopulateExtraFields(schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4o", "gpt-4o-2024")
+	iface.PopulateLLMResponseAttributes(bctx, handle, resp, nil)
+	iface.EndSpan(handle, schemas.SpanStatusOk, "")
+
+	child := findExportedSpan(exporter, "chat_completion openai")
+	if child == nil {
+		t.Fatal("missing child span")
+	}
+	assertAttrString(t, child, attrLLMProvider, "openai")
+	assertAttrString(t, child, attrLLMModelName, "gpt-4o-2024")
+	assertAttrString(t, child, schemas.AttrBifrostProviderName, string(schemas.OpenAI))
+	assertAttrString(t, child, schemas.AttrOperationName, "chat")
+	assertAttrInt64(t, child, attrLLMTokenCountPrompt, 3)
+}
+
+func TestBifrostOTelTracer_errorPathIdentityAndBilledUsage(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+
+	tr := NewBifrostOTelTracer()
+	var iface schemas.Tracer = tr
+	bctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	bctx.SetValue(schemas.BifrostContextKeyRequestedProvider, schemas.Gemini)
+	bctx.SetValue(schemas.BifrostContextKeyRequestedModel, "gemini-2.0-flash")
+	_, handle := iface.StartSpanID(bctx, "chat_completion gemini-error", schemas.SpanKindLLMCall)
+	berr := &schemas.BifrostError{
+		Error: &schemas.ErrorField{Message: "upstream failed"},
+		ExtraFields: schemas.BifrostErrorExtraFields{
+			BilledUsage: &schemas.BifrostLLMUsage{PromptTokens: 6, TotalTokens: 6},
+		},
+	}
+	berr.PopulateExtraFields(schemas.ChatCompletionRequest, schemas.Gemini, "gemini-2.0-flash", "")
+	iface.PopulateLLMResponseAttributes(bctx, handle, nil, berr)
+	iface.EndSpan(handle, schemas.SpanStatusError, "upstream failed")
+
+	child := findExportedSpan(exporter, "chat_completion gemini-error")
+	if child == nil {
+		t.Fatal("missing child span")
+	}
+	assertAttrString(t, child, attrLLMProvider, "gcp.gemini")
+	assertAttrString(t, child, attrLLMModelName, "gemini-2.0-flash")
+	assertAttrString(t, child, schemas.AttrOperationName, "chat")
+	assertAttrInt64(t, child, attrLLMTokenCountPrompt, 6)
+}
+
 func TestBifrostOTelTracer_streamDeferredSpanUsage(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))

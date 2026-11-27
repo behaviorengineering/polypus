@@ -33,6 +33,7 @@ type BifrostOTelTracer struct {
 }
 
 type streamChunkAccumulator struct {
+	mu     sync.Mutex
 	chunks []*schemas.BifrostResponse
 }
 
@@ -131,7 +132,7 @@ func (t *BifrostOTelTracer) PopulateLLMRequestAttributes(handle schemas.SpanHand
 }
 
 // PopulateLLMResponseAttributes implements schemas.Tracer.
-func (t *BifrostOTelTracer) PopulateLLMResponseAttributes(_ *schemas.BifrostContext, handle schemas.SpanHandle, resp *schemas.BifrostResponse, err *schemas.BifrostError) {
+func (t *BifrostOTelTracer) PopulateLLMResponseAttributes(bctx *schemas.BifrostContext, handle schemas.SpanHandle, resp *schemas.BifrostResponse, err *schemas.BifrostError) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil {
 		return
@@ -139,9 +140,7 @@ func (t *BifrostOTelTracer) PopulateLLMResponseAttributes(_ *schemas.BifrostCont
 	if err != nil && err.Error != nil {
 		bridge.schema.SetAttribute("error.message", err.Error.Message)
 	}
-	if resp != nil {
-		populateLLMResponseUsage(bridge.schema, resp, nil)
-	}
+	populateLLMResponseUsage(bridge.schema, resp, err, bctx)
 	flushBifrostSpanAttributes(bridge)
 }
 
@@ -208,7 +207,9 @@ func (t *BifrostOTelTracer) AddStreamingChunk(traceID string, response *schemas.
 	if !ok || acc == nil {
 		return
 	}
+	acc.mu.Lock()
 	acc.chunks = append(acc.chunks, response)
+	acc.mu.Unlock()
 }
 
 // GetAccumulatedChunks implements schemas.Tracer.
@@ -221,7 +222,12 @@ func (t *BifrostOTelTracer) GetAccumulatedChunks(traceID string) (*schemas.Bifro
 		return nil, 0, 0
 	}
 	acc, ok := v.(*streamChunkAccumulator)
-	if !ok || acc == nil || len(acc.chunks) == 0 {
+	if !ok || acc == nil {
+		return nil, 0, 0
+	}
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	if len(acc.chunks) == 0 {
 		return nil, 0, 0
 	}
 	var last *schemas.BifrostResponse
@@ -260,7 +266,9 @@ func (t *BifrostOTelTracer) ResetStreamAccumulator(traceID string) {
 	if !ok || acc == nil {
 		return
 	}
+	acc.mu.Lock()
 	acc.chunks = nil
+	acc.mu.Unlock()
 }
 
 // flushBifrostSpanAttributes copies the Bifrost span's attributes onto the OTel span.
@@ -339,6 +347,18 @@ func (t *BifrostOTelTracer) Stop() {
 			bridge.otel.End()
 		}
 		t.handles.Delete(key)
+		return true
+	})
+	clearSyncMap(&t.deferred)
+	clearSyncMap(&t.streamAccum)
+}
+
+func clearSyncMap(m *sync.Map) {
+	if m == nil {
+		return
+	}
+	m.Range(func(key, _ any) bool {
+		m.Delete(key)
 		return true
 	})
 }
