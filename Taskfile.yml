@@ -205,7 +205,7 @@ tasks:
 
   smoke-otel:
     desc: Integration smoke OTLP fan-out (needs Docker)
-    summary: "Starts phoenix, hyperdx and otelcol from docker-compose.yml (left running; stop them with docker compose down), then runs TestSmokeOtelFanout against them (POLYPUS_SMOKE_OTEL=1, 15m timeout)."
+    summary: "Starts phoenix, hyperdx and otelcol from docker-compose.yml (left running; stop them with docker compose down), then runs TestSmokeOtelFanout against them (POLYPUS_SMOKE_OTEL=1, 15m timeout). Proves OTLP fan-out routing and Phoenix cost on synthetic LLM spans."
     env:
       POLYPUS_SMOKE_OTEL: "1"
     cmds:

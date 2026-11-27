@@ -15,7 +15,8 @@ const DefaultCollectorPollInterval = otelcol.DefaultCollectorPollInterval
 // DefaultCollectorSmokeTimeout is the collector smoke budget.
 const DefaultCollectorSmokeTimeout = otelcol.DefaultCollectorSmokeTimeout
 
-// RunCollector exports two synthetic traces through otelcol and verifies Phoenix / HyperDX routing.
+// RunCollector exports synthetic traces through otelcol and verifies Phoenix / HyperDX
+// routing plus Phoenix cost on two LLM hops.
 func RunCollector(ctx context.Context, opts CollectorOptions) error {
 	return otelcol.RunCollector(ctx, opts)
 }
