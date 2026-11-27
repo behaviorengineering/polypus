@@ -27,8 +27,10 @@ func Render(cfg config.RouterConfig, polypusBaseURL string) ([]byte, error) {
 type routesFile struct {
 	SchemaVersion int                  `toml:"schema_version"`
 	LLMClients    map[string]llmClient `toml:"llm_clients"`
-	Targets       map[string]target    `toml:"targets,omitempty"`
-	Routes        map[string]route     `toml:"routes,omitempty"`
+	// Empty tables stay in the file: Switchyard's server config requires `targets`
+	// and `routes` even when this gateway has no composed routers.
+	Targets map[string]target `toml:"targets"`
+	Routes  map[string]route  `toml:"routes"`
 }
 
 type llmClient struct {
@@ -80,6 +82,9 @@ const (
 	polypusClient = "polypus"
 	// fallbackClient is the llm client fallback targets use (no retries).
 	fallbackClient = "polypus_fallback"
+	routeTypeNoop  = "noop"
+	idleRouteKey   = "polypus_idle"
+	idleRouteID    = "polypus/idle"
 )
 
 // render is Render before its error is typed at the package boundary.
@@ -113,6 +118,12 @@ func render(cfg config.RouterConfig, polypusBaseURL string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if len(file.Routes) == 0 {
+		// Switchyard refuses to start with no algorithm route. Keep an empty
+		// [targets] table and a documented noop so the process stays up when this
+		// gateway has only passthrough routers (or none).
+		file.Routes[idleRouteKey] = route{ID: idleRouteID, Type: routeTypeNoop}
 	}
 	// Maps encode with sorted keys, so the file is the same for the same config.
 	return toml.Marshal(file)

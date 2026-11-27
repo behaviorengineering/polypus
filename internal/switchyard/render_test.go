@@ -103,9 +103,12 @@ func TestRenderEmptyRouters(t *testing.T) {
 	}
 	doc := decode(t, out)
 	wantAt(t, doc, "llm_clients.polypus.format", "openai_chat")
-	if _, ok := doc["routes"]; ok {
-		t.Fatalf("unexpected routes:\n%s", out)
+	targets, ok := doc["targets"].(map[string]any)
+	if !ok || len(targets) != 0 {
+		t.Fatalf("want empty [targets], got %#v\n%s", doc["targets"], out)
 	}
+	wantAt(t, doc, "routes.polypus_idle.id", idleRouteID)
+	wantAt(t, doc, "routes.polypus_idle.type", routeTypeNoop)
 }
 
 func TestRenderLLMClassifierCustom(t *testing.T) {
