@@ -47,7 +47,7 @@ backends:
 `, leaf.URL)
 	writeConfig(t, dir, content)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: leaf.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: leaf.URL})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -130,8 +130,17 @@ func Create(ctx context.Context, cfg Config) (string, error) {
 		verb = "rotate"
 	}
 	name := cfg.keyName()
-	// admin-key generate and rotate are not idempotent, so they run once.
-	out, err := cfg.docker(ctx, []string{"exec", container, "polypus", "admin-key", verb, "--name", name, "--yes", "--json"})
+	// admin-key generate and rotate are not idempotent, so they run once under the
+	// docker breaker only (Abort on every failure; never retry a generate).
+	var out []byte
+	err = outbound.Run(ctx, outbound.DepDockerDaemon, func() error {
+		raw, runErr := cfg.docker(ctx, []string{"exec", container, "polypus", "admin-key", verb, "--name", name, "--yes", "--json"})
+		out = raw
+		if runErr != nil {
+			return outbound.Abort(runErr)
+		}
+		return nil
+	})
 	if err != nil {
 		return "", derrors.Wrap(err, derrors.CodeUnavailable, op, fmt.Sprintf("admin-key %s in %s", verb, container))
 	}
@@ -180,7 +189,7 @@ func gatewayContainer(ctx context.Context, cfg Config) (string, error) {
 		return outbound.Abort(runErr)
 	})
 	if err != nil {
-		return "", fmt.Errorf("clientkey: find gateway: %w", err)
+		return "", derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "clientkey.gatewayContainer", "find gateway")
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		if name := strings.TrimSpace(line); name != "" {
@@ -216,14 +225,14 @@ func verify(ctx context.Context, client *http.Client, baseURL, key string) error
 func modelsStatus(ctx context.Context, client *http.Client, baseURL, key string) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/v1/models", nil)
 	if err != nil {
-		return 0, fmt.Errorf("clientkey: %w", err)
+		return 0, derrors.Wrap(err, derrors.CodeInvalid, "clientkey.modelsStatus", "new request")
 	}
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	resp, err := outbound.DoOnce(ctx, outbound.DepGateway, client, req)
 	if err != nil {
-		return 0, fmt.Errorf("clientkey: /v1/models: %w", err)
+		return 0, derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "clientkey.modelsStatus", "GET /v1/models")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode, nil

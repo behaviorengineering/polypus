@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
@@ -46,6 +47,16 @@ func WithLogger(l *slog.Logger) HandlerOption {
 // HTTP paths that get no SERVER span (nil keeps the default /health probes).
 func WithObservability(dumpDir string, traceSkipPaths []string) HandlerOption {
 	return HandlerOption{apply: gateway.WithObservability(dumpDir, traceSkipPaths)}
+}
+
+// WithClock sets the job clock NewHandler uses for caches, batch IDs and client
+// TTLs. A nil now makes Serve and NewHandler return an error. Serve and
+// ListenAndServe supply the process wall clock when the host does not pass one.
+func WithClock(now func() time.Time) HandlerOption {
+	if now == nil {
+		return HandlerOption{err: derrors.New(derrors.CodeInvalid, "polypus.WithClock", "clock is required")}
+	}
+	return HandlerOption{apply: gateway.WithClock(now)}
 }
 
 // WithAdminStateDir keeps the models allow overlay and the admin key store under dir
@@ -150,14 +161,16 @@ type Handler interface {
 	io.Closer
 }
 
-// NewHandler builds the public HTTP handler without listening. The host serves it
-// on its own server and calls Close when done; Serve manages that itself.
-func NewHandler(opts ServeOptions, options ...HandlerOption) (Handler, error) {
+// NewHandler builds the public HTTP handler without listening. ctx is the host
+// lifetime the router runs under; it must be non-nil. The host serves the handler
+// on its own server and calls Close when done; Serve manages that itself. A clock
+// is required (WithClock).
+func NewHandler(ctx context.Context, opts ServeOptions, options ...HandlerOption) (Handler, error) {
 	gopts, err := gatewayOptions("polypus.NewHandler", options)
 	if err != nil {
 		return nil, err
 	}
-	h, err := gateway.NewHandler(opts, gopts...)
+	h, err := gateway.NewHandler(ctx, opts, gopts...)
 	if err != nil {
 		return nil, err
 	}

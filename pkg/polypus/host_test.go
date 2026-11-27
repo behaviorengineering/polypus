@@ -40,8 +40,9 @@ func hostEnv(t *testing.T) polypus.ServeOptions {
 
 func TestHostBuildsHandlerThroughFacade(t *testing.T) {
 	opts := hostEnv(t)
-	h, err := polypus.NewHandler(opts,
+	h, err := polypus.NewHandler(t.Context(), opts,
 		polypus.WithAdminStateDir(t.TempDir()),
+		polypus.WithClock(func() time.Time { return time.Date(2026, 11, 27, 0, 0, 0, 0, time.UTC) }),
 		polypus.WithObservability("", nil))
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
@@ -125,7 +126,9 @@ func ExampleNewHandler() {
 		fmt.Println("serve options:", polypus.CodeOf(err))
 		return
 	}
-	h, err := polypus.NewHandler(opts, polypus.WithObservability("", nil))
+	h, err := polypus.NewHandler(context.Background(), opts,
+		polypus.WithClock(func() time.Time { return time.Now().UTC() }),
+		polypus.WithObservability("", nil))
 	if err != nil {
 		fmt.Println("handler:", polypus.CodeOf(err))
 		return

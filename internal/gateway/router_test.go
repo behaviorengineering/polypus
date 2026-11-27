@@ -143,7 +143,7 @@ func fastTestPolicies() *outbound.Policies {
 func newTestGateway(t *testing.T, opts config.ServeOptions, r registryProvider, extra ...HandlerOption) http.Handler {
 	t.Helper()
 	options := append([]HandlerOption{withRouter(r), withPolicies(fastTestPolicies())}, extra...)
-	handler, err := NewHandler(opts, options...)
+	handler, err := newHandlerForTest(t, opts, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +407,7 @@ routers:
 
 	// No injected router: the gateway builds a real Bifrost client, which registers
 	// Switchyard as a provider.
-	inner, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:9"}, WithAdminStateDir(t.TempDir()))
+	inner, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:9"}, WithAdminStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -85,8 +85,10 @@ func applyChatThinkingRoot(root map[string]any, extension string, model string) 
 	wants := chatMapWantsThinking(root)
 	model = strings.ToLower(strings.TrimSpace(model))
 	if model == "" {
-		bodyModel, _ := root[keyModel].(string)
-		model = strings.ToLower(strings.TrimSpace(bodyModel))
+		bodyModel, ok := root[keyModel].(string)
+		if ok {
+			model = strings.ToLower(strings.TrimSpace(bodyModel))
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(extension)) {
 	case config.ExtensionGemini:

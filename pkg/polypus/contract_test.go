@@ -1,6 +1,7 @@
 package polypus_test
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"reflect"
@@ -85,7 +86,7 @@ func TestFacadeFieldSetsArePinned(t *testing.T) {
 // The entry points' signatures are part of the contract: a change fails to compile
 // here, so it is reviewed as a kit API change.
 var (
-	_ func(polypus.ServeOptions, ...polypus.HandlerOption) (polypus.Handler, error) = polypus.NewHandler
-	_ http.Handler                                                                  = polypus.Handler(nil)
-	_ io.Closer                                                                     = polypus.Handler(nil)
+	_ func(context.Context, polypus.ServeOptions, ...polypus.HandlerOption) (polypus.Handler, error) = polypus.NewHandler
+	_ http.Handler                                                                                   = polypus.Handler(nil)
+	_ io.Closer                                                                                      = polypus.Handler(nil)
 )

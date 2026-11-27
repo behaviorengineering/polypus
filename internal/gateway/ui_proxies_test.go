@@ -48,7 +48,7 @@ backends:
 	t.Setenv("POLYPUS_CONFIG", cfgPath)
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ backends:
 	t.Setenv("POLYPUS_CONFIG", cfgPath)
 	t.Setenv("POLYPUS_SWITCHYARD", "0")
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}

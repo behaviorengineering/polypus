@@ -78,9 +78,15 @@ func (c chatRequest) outbound(downstream, extension string) ([]byte, error) {
 
 // chatMapHasVision reports whether any message has an image_url content part.
 func chatMapHasVision(root map[string]any) bool {
-	messages, _ := root["messages"].([]any)
+	messages, ok := root["messages"].([]any)
+	if !ok {
+		return false
+	}
 	for _, msg := range messages {
-		m, _ := msg.(map[string]any)
+		m, ok := msg.(map[string]any)
+		if !ok {
+			continue
+		}
 		parts, ok := m["content"].([]any)
 		if !ok {
 			continue

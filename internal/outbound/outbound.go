@@ -45,6 +45,7 @@ func Retry(err error) error {
 const (
 	DepHealth       = "health"
 	DepDockerDaemon = "docker-daemon"
+	DepTailscale    = "tailscale"
 	DepCloudflare   = "cloudflare"
 	DepGemini       = "gemini"
 	DepAnthropic    = "anthropic"

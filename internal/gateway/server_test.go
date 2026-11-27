@@ -81,7 +81,7 @@ backends:
 	t.Setenv("POLYPUS_DEFAULT_MODEL", "")
 	t.Setenv("POLYPUS_DEFAULT_STT_MODEL", "")
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: mlx.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: mlx.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ backends:
 	t.Setenv("POLYPUS_DEFAULT_MODEL", "")
 	t.Setenv("POLYPUS_DEFAULT_STT_MODEL", "")
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: mlx.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: mlx.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ backends:
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: backend.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ backends:
 	t.Setenv("POLYPUS_DEFAULT_MODEL", "mlx-community/tts-env")
 	t.Setenv("POLYPUS_DEFAULT_STT_MODEL", "mlx-community/stt-env")
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: backend.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestHealthOKWhenBackendUp(t *testing.T) {
 		Port:       1320,
 		BackendURL: backend.URL,
 	}
-	handler, err := NewHandler(opts)
+	handler, err := newHandlerForTest(t, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestHealthOKWhenBackendDown(t *testing.T) {
 	}))
 	t.Cleanup(backend.Close)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: backend.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestBifrostTranscriptionPath(t *testing.T) {
 	t.Cleanup(backend.Close)
 
 	opts := config.ServeOptions{BackendURL: backend.URL}
-	handler, err := NewHandler(opts)
+	handler, err := newHandlerForTest(t, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,7 @@ backends:
 	t.Setenv("POLYPUS_CONFIG", path)
 
 	opts := config.ServeOptions{BackendURL: mlxURL}
-	handler, err := NewHandler(opts)
+	handler, err := newHandlerForTest(t, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +527,7 @@ func TestBifrostSpeechPath(t *testing.T) {
 	t.Cleanup(backend.Close)
 
 	opts := config.ServeOptions{BackendURL: backend.URL}
-	handler, err := NewHandler(opts)
+	handler, err := newHandlerForTest(t, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -558,7 +558,7 @@ func TestChatNotProxiedToMLXWhenUnconfigured(t *testing.T) {
 	t.Cleanup(mlx.Close)
 
 	opts := config.ServeOptions{BackendURL: mlx.URL}
-	handler, err := NewHandler(opts)
+	handler, err := newHandlerForTest(t, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,7 +624,7 @@ backends:
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: mlx.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: mlx.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +686,7 @@ backends:
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -747,7 +747,7 @@ backends:
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -781,7 +781,7 @@ func TestEmbedNotProxiedToMLXWhenUnconfigured(t *testing.T) {
 	t.Cleanup(mlx.Close)
 
 	opts := config.ServeOptions{BackendURL: mlx.URL}
-	handler, err := NewHandler(opts)
+	handler, err := newHandlerForTest(t, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -839,7 +839,7 @@ backends:
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +926,7 @@ backends:
 	t.Setenv("POLYPUS_CONFIG", path)
 	t.Setenv("CF_AI_API_KEY", "secret")
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: mlx.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: mlx.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -974,7 +974,7 @@ func TestSpeechEmptyModelUsesDefaultBackend(t *testing.T) {
 
 	t.Setenv("POLYPUS_DEFAULT_MODEL", "tts-test")
 	opts := config.ServeOptions{BackendURL: backend.URL}
-	handler, err := NewHandler(opts)
+	handler, err := newHandlerForTest(t, opts)
 	if err != nil {
 		t.Fatal(err)
 	}

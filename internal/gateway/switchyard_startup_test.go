@@ -43,7 +43,7 @@ routers:
 `
 	writeConfig(t, dir, content)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:19999"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:19999"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ routers:
 	writeConfig(t, dir, content)
 
 	opts := config.ServeOptions{BackendURL: "http://127.0.0.1:19999"}
-	handler, err := NewHandler(opts)
+	handler, err := newHandlerForTest(t, opts)
 	if err != nil {
 		t.Fatal(err)
 	}

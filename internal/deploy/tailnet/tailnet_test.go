@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/behaviorengineering/polypus/internal/deploy/execx"
 )
 
 func fixed(out string, err error) StatusFunc {
@@ -16,6 +18,19 @@ const running = `{"BackendState":"Running","CurrentTailnet":{"Name":"me","MagicD
 func TestCheckRunningOnTailnet(t *testing.T) {
 	if err := Check(context.Background(), "corp.ts.net", fixed(running, nil)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTailscaleExecRetryable(t *testing.T) {
+	if tailscaleExecRetryable(nil) || tailscaleExecRetryable(context.Canceled) {
+		t.Fatal("nil and canceled must not retry")
+	}
+	transient := &execx.RunError{Name: "tailscale", Stderr: "connection refused", Err: errors.New("exit")}
+	if !tailscaleExecRetryable(transient) {
+		t.Fatal("stderr transport phrase must retry")
+	}
+	if tailscaleExecRetryable(errNoCLI) {
+		t.Fatal("a missing CLI must not retry")
 	}
 }
 

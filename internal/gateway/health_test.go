@@ -42,7 +42,7 @@ func TestBackendHealthOKWhenBackendUp(t *testing.T) {
 	}))
 	t.Cleanup(backend.Close)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: backend.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestBackendHealthDegradedWhenBackendDown(t *testing.T) {
 	}))
 	t.Cleanup(backend.Close)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: backend.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestBackendHealthDegradedWhenBackendDown(t *testing.T) {
 func TestHealthNamesNoBackendOrSwitchyard(t *testing.T) {
 	for _, switchyard := range []string{"0", "1"} {
 		t.Setenv("POLYPUS_SWITCHYARD", switchyard)
-		handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+		handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -123,7 +123,7 @@ func TestBackendHealthSkipsSwitchyardWhenDisabled(t *testing.T) {
 	}))
 	t.Cleanup(backend.Close)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: backend.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestBackendHealthHonorsRequestCancel(t *testing.T) {
 		backend.Close()
 	})
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: backend.URL})
 	if err != nil {
 		t.Fatal(err)
 	}

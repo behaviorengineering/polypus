@@ -266,6 +266,18 @@ func WithLogger(l *slog.Logger) HandlerOption {
 	}
 }
 
+// WithClock sets the job clock NewHandler uses for caches, batch IDs and client
+// TTLs. NewHandler returns CodeInvalid when the clock is missing. Panics if now
+// is nil.
+func WithClock(now func() time.Time) HandlerOption {
+	if now == nil {
+		panic("gateway: WithClock(nil)")
+	}
+	return func(o *handlerOptions) {
+		o.clock = now
+	}
+}
+
 // WithObservability sets where failure dumps land (empty turns them off) and the HTTP
 // paths that get no SERVER span (nil keeps the default /health probes).
 func WithObservability(dumpDir string, traceSkipPaths []string) HandlerOption {
@@ -275,9 +287,12 @@ func WithObservability(dumpDir string, traceSkipPaths []string) HandlerOption {
 	}
 }
 
-// fillDefaults resolves every option the caller left unset: state paths, the job
-// clock and the provider client getters.
+// fillDefaults resolves every option the caller left unset: state paths and the
+// provider client getters. A clock is required; there is no wall-clock fallback.
 func (o *handlerOptions) fillDefaults() error {
+	if o.clock == nil {
+		return derrors.New(derrors.CodeInvalid, "gateway.fillDefaults", "clock is required")
+	}
 	if o.overlayPath == "" {
 		p, err := config.ResolveModelsAllowOverlayPath()
 		if err != nil {
@@ -291,9 +306,6 @@ func (o *handlerOptions) fillDefaults() error {
 			return err
 		}
 		o.adminKeysPath = p
-	}
-	if o.clock == nil {
-		o.clock = func() time.Time { return time.Now().UTC() }
 	}
 	if o.logger == nil {
 		o.logger = slog.Default()

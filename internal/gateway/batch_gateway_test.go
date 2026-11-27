@@ -107,7 +107,7 @@ backends:
 	}
 	defer client.Close()
 
-	h, err := NewHandler(config.ServeOptions{}, withRouter(client))
+	h, err := newHandlerForTest(t, config.ServeOptions{}, withRouter(client))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +510,7 @@ backends:
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
-	handler, err := NewHandler(config.ServeOptions{}, withRouter(client), withPolicies(fastTestPolicies()))
+	handler, err := newHandlerForTest(t, config.ServeOptions{}, withRouter(client), withPolicies(fastTestPolicies()))
 	if err != nil {
 		t.Fatal(err)
 	}
