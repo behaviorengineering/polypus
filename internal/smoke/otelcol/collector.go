@@ -73,11 +73,12 @@ var (
 // opRunCollector names RunCollector's errors.
 const opRunCollector = "otelcol.RunCollector"
 
-// RunCollector exports two synthetic traces through otelcol and verifies Phoenix /
-// HyperDX routing. Its errors are typed: CodeInvalid for a nil context or an unset
-// endpoint, CodeFailedPrecondition without a deadline, CodeUnavailable when the export
-// fails or routing is still wrong when the budget runs out, and CodeTimeout or
-// CodeCanceled when the context ends.
+// RunCollector exports synthetic traces through otelcol and verifies Phoenix /
+// HyperDX routing, then Phoenix cost on two LLM hops (custom Settings → Models
+// row plus a LiteLLM-priced leaf). Its errors are typed: CodeInvalid for a nil
+// context or an unset endpoint, CodeFailedPrecondition without a deadline,
+// CodeUnavailable when the export fails or routing or cost is still wrong when
+// the budget runs out, and CodeTimeout or CodeCanceled when the context ends.
 func RunCollector(ctx context.Context, opts CollectorOptions) error {
 	if ctx == nil {
 		return derrors.New(derrors.CodeInvalid, opRunCollector, "context required")
@@ -98,21 +99,37 @@ func RunCollector(ctx context.Context, opts CollectorOptions) error {
 	}
 	opts.Logger.Info("collector smoke: otlp export ok", "gen_ai_trace_id", genAITrace, "plain_trace_id", plainTrace)
 
+	if err := waitProbe(ctx, opts.PollInterval, func() error {
+		return probeRouting(ctx, opts, genAITrace, plainTrace)
+	}, "routing not confirmed before the deadline", "context ended before routing was confirmed"); err != nil {
+		return err
+	}
+	opts.Logger.Info("collector smoke: routing ok", "hyperdx_verified", !opts.SkipHyperDXVerify)
+
+	if err := provePhoenixCost(ctx, opts); err != nil {
+		return err
+	}
+	return nil
+}
+
+// waitProbe runs probe until it returns nil, the deadline is too close for
+// another interval, or ctx ends. unavailableMsg and contextMsg are the Wrap
+// messages for those two exits.
+func waitProbe(ctx context.Context, interval time.Duration, probe func() error, unavailableMsg, contextMsg string) error {
 	deadline, _ := ctx.Deadline()
 	var lastErr error
 	for {
 		if err := ctx.Err(); err != nil {
-			return derrors.Wrap(errors.Join(err, lastErr), contextCodeOr(ctx, derrors.CodeTimeout), opRunCollector, "context ended before routing was confirmed")
+			return derrors.Wrap(errors.Join(err, lastErr), contextCodeOr(ctx, derrors.CodeTimeout), opRunCollector, contextMsg)
 		}
-		if lastErr = probeRouting(ctx, opts, genAITrace, plainTrace); lastErr == nil {
-			opts.Logger.Info("collector smoke: routing ok", "hyperdx_verified", !opts.SkipHyperDXVerify)
+		if lastErr = probe(); lastErr == nil {
 			return nil
 		}
-		if time.Now().Add(opts.PollInterval).After(deadline) {
-			return derrors.Wrap(lastErr, derrors.CodeUnavailable, opRunCollector, "routing not confirmed before the deadline")
+		if time.Now().Add(interval).After(deadline) {
+			return derrors.Wrap(lastErr, derrors.CodeUnavailable, opRunCollector, unavailableMsg)
 		}
-		if err := sleepContext(ctx, opts.PollInterval); err != nil {
-			return derrors.Wrap(errors.Join(err, lastErr), contextCodeOr(ctx, derrors.CodeTimeout), opRunCollector, "context ended before routing was confirmed")
+		if err := sleepContext(ctx, interval); err != nil {
+			return derrors.Wrap(errors.Join(err, lastErr), contextCodeOr(ctx, derrors.CodeTimeout), opRunCollector, contextMsg)
 		}
 	}
 }
