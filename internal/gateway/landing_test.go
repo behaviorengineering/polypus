@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +8,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/gateway/assets"
+	"github.com/behaviorengineering/polypus/internal/gateway/landing"
 )
 
 func newLandingTestHandler(t *testing.T) http.Handler {
@@ -17,7 +17,7 @@ func newLandingTestHandler(t *testing.T) http.Handler {
 	}))
 	t.Cleanup(backend.Close)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: backend.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestLandingPageHTML(t *testing.T) {
 		"OTEL_EXPORTER_OTLP_ENDPOINT",
 		"grpc: http://127.0.0.1:4317",
 		"http: http://127.0.0.1:4318",
-		bannerAssetPath,
+		landing.BannerPath,
 		`id="allow-form"`,
 		`name="backend"`,
 		`name="model"`,
@@ -159,7 +159,7 @@ func TestLandingObservabilityUsesHostPorts(t *testing.T) {
 func TestBannerWebP(t *testing.T) {
 	handler := newLandingTestHandler(t)
 
-	req := httptest.NewRequest(http.MethodGet, bannerAssetPath, nil)
+	req := httptest.NewRequest(http.MethodGet, landing.BannerPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -177,7 +177,7 @@ func TestBannerWebP(t *testing.T) {
 func TestBannerHEAD(t *testing.T) {
 	handler := newLandingTestHandler(t)
 
-	req := httptest.NewRequest(http.MethodHead, bannerAssetPath, nil)
+	req := httptest.NewRequest(http.MethodHead, landing.BannerPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -198,7 +198,7 @@ func TestBannerHEAD(t *testing.T) {
 func TestBannerMethodNotAllowed(t *testing.T) {
 	handler := newLandingTestHandler(t)
 
-	req := httptest.NewRequest(http.MethodPost, bannerAssetPath, nil)
+	req := httptest.NewRequest(http.MethodPost, landing.BannerPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -225,62 +225,18 @@ func TestHealthUnchangedAfterLanding(t *testing.T) {
 	}
 }
 
-func TestRequestHostnameSanitization(t *testing.T) {
-	t.Run("nil request", func(t *testing.T) {
-		if got := requestHostname(nil); got != "127.0.0.1" {
-			t.Fatalf("got %q", got)
+func TestLandingHrefsMatchRouteTable(t *testing.T) {
+	pairs := [][2]string{
+		{landing.HrefAPIs, pathAPIs},
+		{landing.HrefOpenAIModels, pathOpenAIModels},
+		{landing.HrefSystemOneModels, pathSystemOneModels},
+		{landing.HrefAdminModelsAllow, pathAdminModelsAllow},
+		{landing.HrefHealthBackends, pathHealthBackends},
+		{landing.HrefHealthUpstreams, pathHealthUpstreams},
+	}
+	for _, p := range pairs {
+		if p[0] != p[1] {
+			t.Errorf("landing href %q does not match route %q", p[0], p[1])
 		}
-	})
-	t.Run("empty host", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "http:///", nil)
-		req.Host = ""
-		req.URL.Host = ""
-		if got := requestHostname(req); got != "127.0.0.1" {
-			t.Fatalf("got %q", got)
-		}
-	})
-	t.Run("unsafe host", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Host = "evil\nhost:1320"
-		if got := requestHostname(req); got != "127.0.0.1" {
-			t.Fatalf("got %q", got)
-		}
-	})
-	t.Run("strip port", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Host = "gateway.example.com:1320"
-		if got := requestHostname(req); got != "gateway.example.com" {
-			t.Fatalf("got %q", got)
-		}
-	})
-	t.Run("ipv6 bracket fallback", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Host = "[::1]:1320"
-		if got := requestHostname(req); got != "127.0.0.1" {
-			t.Fatalf("got %q", got)
-		}
-	})
-}
-
-func TestRequestScheme(t *testing.T) {
-	t.Run("forwarded proto first value", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Header.Set("X-Forwarded-Proto", "https, http")
-		if got := requestScheme(req); got != "https" {
-			t.Fatalf("got %q", got)
-		}
-	})
-	t.Run("default http", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		if got := requestScheme(req); got != "http" {
-			t.Fatalf("got %q", got)
-		}
-	})
-	t.Run("tls", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.TLS = &tls.ConnectionState{}
-		if got := requestScheme(req); got != "https" {
-			t.Fatalf("got %q", got)
-		}
-	})
+	}
 }

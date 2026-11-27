@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -26,7 +27,14 @@ const (
 type BifrostOTelTracer struct {
 	schemas.NoOpTracer
 
-	handles sync.Map // span handle -> *otelSpanBridge.
+	handles     sync.Map // span handle -> *otelSpanBridge.
+	deferred    sync.Map // trace ID -> schemas.SpanHandle.
+	streamAccum sync.Map // trace ID -> *streamChunkAccumulator.
+}
+
+type streamChunkAccumulator struct {
+	mu     sync.Mutex
+	chunks []*schemas.BifrostResponse
 }
 
 var _ schemas.Tracer = (*BifrostOTelTracer)(nil)
@@ -119,19 +127,12 @@ func (t *BifrostOTelTracer) PopulateLLMRequestAttributes(handle schemas.SpanHand
 	if !ok || bridge == nil || bridge.otel == nil || req == nil {
 		return
 	}
-	provider, model, _ := req.GetRequestFields()
-	if provider != "" {
-		bridge.schema.SetAttribute(schemas.AttrBifrostProviderName, string(provider))
-		bridge.schema.SetAttribute(schemas.AttrProviderName, schemas.OTelProviderName(provider))
-	}
-	if model != "" {
-		bridge.schema.SetAttribute(schemas.AttrRequestModel, model)
-	}
+	populateLLMRequestUsage(bridge.schema, req)
 	flushBifrostSpanAttributes(bridge)
 }
 
 // PopulateLLMResponseAttributes implements schemas.Tracer.
-func (t *BifrostOTelTracer) PopulateLLMResponseAttributes(_ *schemas.BifrostContext, handle schemas.SpanHandle, resp *schemas.BifrostResponse, err *schemas.BifrostError) {
+func (t *BifrostOTelTracer) PopulateLLMResponseAttributes(bctx *schemas.BifrostContext, handle schemas.SpanHandle, resp *schemas.BifrostResponse, err *schemas.BifrostError) {
 	bridge, ok := handle.(*otelSpanBridge)
 	if !ok || bridge == nil || bridge.otel == nil {
 		return
@@ -139,7 +140,135 @@ func (t *BifrostOTelTracer) PopulateLLMResponseAttributes(_ *schemas.BifrostCont
 	if err != nil && err.Error != nil {
 		bridge.schema.SetAttribute("error.message", err.Error.Message)
 	}
+	populateLLMResponseUsage(bridge.schema, resp, err, bctx)
 	flushBifrostSpanAttributes(bridge)
+}
+
+// StoreDeferredSpan implements schemas.Tracer.
+func (t *BifrostOTelTracer) StoreDeferredSpan(traceID string, handle schemas.SpanHandle) {
+	if t == nil || traceID == "" || handle == nil {
+		return
+	}
+	t.deferred.Store(traceID, handle)
+}
+
+// GetDeferredSpanHandle implements schemas.Tracer.
+func (t *BifrostOTelTracer) GetDeferredSpanHandle(traceID string) schemas.SpanHandle {
+	if t == nil || traceID == "" {
+		return nil
+	}
+	v, ok := t.deferred.Load(traceID)
+	if !ok {
+		return nil
+	}
+	handle, ok := v.(schemas.SpanHandle)
+	if !ok {
+		return nil
+	}
+	return handle
+}
+
+// ClearDeferredSpan implements schemas.Tracer.
+func (t *BifrostOTelTracer) ClearDeferredSpan(traceID string) {
+	if t == nil || traceID == "" {
+		return
+	}
+	t.deferred.Delete(traceID)
+}
+
+// GetDeferredSpanID implements schemas.Tracer.
+func (t *BifrostOTelTracer) GetDeferredSpanID(traceID string) string {
+	handle := t.GetDeferredSpanHandle(traceID)
+	bridge, ok := handle.(*otelSpanBridge)
+	if !ok || bridge == nil || bridge.schema == nil {
+		return ""
+	}
+	return bridge.schema.SpanID
+}
+
+// CreateStreamAccumulator implements schemas.Tracer.
+func (t *BifrostOTelTracer) CreateStreamAccumulator(traceID string, _ time.Time) {
+	if t == nil || traceID == "" {
+		return
+	}
+	t.streamAccum.Store(traceID, &streamChunkAccumulator{})
+}
+
+// AddStreamingChunk implements schemas.Tracer.
+func (t *BifrostOTelTracer) AddStreamingChunk(traceID string, response *schemas.BifrostResponse) {
+	if t == nil || traceID == "" || response == nil {
+		return
+	}
+	v, ok := t.streamAccum.Load(traceID)
+	if !ok {
+		return
+	}
+	acc, ok := v.(*streamChunkAccumulator)
+	if !ok || acc == nil {
+		return
+	}
+	acc.mu.Lock()
+	acc.chunks = append(acc.chunks, response)
+	acc.mu.Unlock()
+}
+
+// GetAccumulatedChunks implements schemas.Tracer.
+func (t *BifrostOTelTracer) GetAccumulatedChunks(traceID string) (*schemas.BifrostResponse, int64, int) {
+	if t == nil || traceID == "" {
+		return nil, 0, 0
+	}
+	v, ok := t.streamAccum.Load(traceID)
+	if !ok {
+		return nil, 0, 0
+	}
+	acc, ok := v.(*streamChunkAccumulator)
+	if !ok || acc == nil {
+		return nil, 0, 0
+	}
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	if len(acc.chunks) == 0 {
+		return nil, 0, 0
+	}
+	var last *schemas.BifrostResponse
+	for i := len(acc.chunks) - 1; i >= 0; i-- {
+		if acc.chunks[i] != nil {
+			last = acc.chunks[i]
+			if last.NormalizedUsage() != nil {
+				break
+			}
+		}
+	}
+	if last == nil {
+		last = acc.chunks[len(acc.chunks)-1]
+	}
+	return last, 0, len(acc.chunks)
+}
+
+// CleanupStreamAccumulator implements schemas.Tracer.
+func (t *BifrostOTelTracer) CleanupStreamAccumulator(traceID string) {
+	if t == nil || traceID == "" {
+		return
+	}
+	t.streamAccum.Delete(traceID)
+}
+
+// ResetStreamAccumulator implements schemas.Tracer.
+func (t *BifrostOTelTracer) ResetStreamAccumulator(traceID string) {
+	if t == nil || traceID == "" {
+		return
+	}
+	v, ok := t.streamAccum.Load(traceID)
+	if !ok {
+		return
+	}
+	acc, ok := v.(*streamChunkAccumulator)
+	if !ok || acc == nil {
+		return
+	}
+	acc.mu.Lock()
+	acc.chunks = nil
+	acc.mu.Unlock()
 }
 
 // flushBifrostSpanAttributes copies the Bifrost span's attributes onto the OTel span.
@@ -218,6 +347,18 @@ func (t *BifrostOTelTracer) Stop() {
 			bridge.otel.End()
 		}
 		t.handles.Delete(key)
+		return true
+	})
+	clearSyncMap(&t.deferred)
+	clearSyncMap(&t.streamAccum)
+}
+
+func clearSyncMap(m *sync.Map) {
+	if m == nil {
+		return
+	}
+	m.Range(func(key, _ any) bool {
+		m.Delete(key)
 		return true
 	})
 }

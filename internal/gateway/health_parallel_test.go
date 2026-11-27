@@ -68,7 +68,7 @@ func TestHealthBackendsProbesInParallel(t *testing.T) {
 	barrier := newProbeBarrier(2)
 	a, b := barrier.server(t), barrier.server(t)
 	twoLocalBackendsConfig(t, a.URL, b.URL)
-	handler, err := NewHandler(config.ServeOptions{BackendURL: a.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: a.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestHealthBackendsBodyHasNoCauseChain(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	t.Cleanup(up.Close)
 	twoLocalBackendsConfig(t, up.URL, deadURL)
-	handler, err := NewHandler(config.ServeOptions{BackendURL: up.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: up.URL})
 	if err != nil {
 		t.Fatal(err)
 	}

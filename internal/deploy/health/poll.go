@@ -69,10 +69,10 @@ func checkOnce(ctx context.Context, client *http.Client, baseURL string) error {
 	for _, p := range endpoints {
 		status, err := probeStatus(ctx, client, baseURL+p)
 		if err != nil {
-			return fmt.Errorf("GET %s: %w", p, err)
+			return derrors.Wrap(err, derrors.CodeOr(err, derrors.CodeUnavailable), "health.checkOnce", "GET "+p)
 		}
 		if status != http.StatusOK {
-			return fmt.Errorf("GET %s: status %d", p, status)
+			return derrors.New(derrors.CodeUnavailable, "health.checkOnce", fmt.Sprintf("GET %s: status %d", p, status))
 		}
 	}
 	return nil

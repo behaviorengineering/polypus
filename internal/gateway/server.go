@@ -22,6 +22,7 @@ import (
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 	"github.com/behaviorengineering/polypus/internal/gateway/batches"
+	"github.com/behaviorengineering/polypus/internal/gateway/landing"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 	"github.com/behaviorengineering/polypus/internal/gateway/upstream"
 	"github.com/behaviorengineering/polypus/internal/observability"
@@ -114,20 +115,22 @@ type Handler interface {
 	io.Closer
 }
 
-// NewHandler returns the public Polypus HTTP handler. The caller owns it and calls
-// Close when done with it. It does not write Switchyard TOML; ListenAndServe
-// (process startup) does. Tests pass withRouter to inject a fake and skip
-// bifrost.Init.
-//
-// NewHandler is a process entry for hosts that only want the handler, so it starts
-// the router with a fresh context; ListenAndServe passes its own startup context.
-func NewHandler(opts config.ServeOptions, options ...HandlerOption) (Handler, error) {
-	return newHandler(context.Background(), opts, options...)
+// NewHandler returns the public Polypus HTTP handler. ctx is the host lifetime
+// the router's Bifrost runs under; it must be non-nil. The caller owns the
+// handler and calls Close when done with it. It does not write Switchyard TOML;
+// ListenAndServe (process startup) does. Tests pass withRouter to inject a fake
+// and skip bifrost.Init. A clock is required (WithClock); ListenAndServe supplies
+// the process wall clock when the caller does not.
+func NewHandler(ctx context.Context, opts config.ServeOptions, options ...HandlerOption) (Handler, error) {
+	return newHandler(ctx, opts, options...)
 }
 
 // newHandler is NewHandler with the startup context the router's Bifrost runs under.
 func newHandler(ctx context.Context, opts config.ServeOptions, options ...HandlerOption) (Handler, error) {
 	const op = "gateway.NewHandler"
+	if ctx == nil {
+		return nil, derrors.New(derrors.CodeInvalid, op, "context is required")
+	}
 	var ho handlerOptions
 	for _, opt := range options {
 		if opt != nil {
@@ -388,7 +391,7 @@ func (rt gatewayRoute) matches(r *http.Request) bool {
 
 var gatewayRoutes = []gatewayRoute{
 	{path: "/", methods: methodsAny, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) { g.serveLanding(w, r) }},
-	{path: bannerAssetPath, methods: methodsAny, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) { g.serveBannerWebP(w, r) }},
+	{path: landing.BannerPath, methods: methodsAny, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) { g.serveBannerWebP(w, r) }},
 	{path: pathHealth, methods: methodsRead, serve: func(g *gatewayHandler, w http.ResponseWriter, r *http.Request) {
 		g.health.serveHealth(w, r)
 	}},

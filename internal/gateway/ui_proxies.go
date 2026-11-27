@@ -9,6 +9,7 @@ import (
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
 
 	"github.com/behaviorengineering/polypus/internal/config"
+	"github.com/behaviorengineering/polypus/internal/gateway/httpreq"
 )
 
 type uiProxyMount struct {
@@ -57,7 +58,7 @@ func newUIReverseProxy(rs responder, prefix string, target *url.URL, stripPrefix
 			if prefix != "" {
 				pr.Out.Header.Set("X-Forwarded-Prefix", prefix)
 			}
-			if proto := requestScheme(pr.In); proto != "" {
+			if proto := httpreq.Scheme(pr.In); proto != "" {
 				pr.Out.Header.Set("X-Forwarded-Proto", proto)
 			}
 			if host := strings.TrimSpace(pr.In.Host); host != "" {

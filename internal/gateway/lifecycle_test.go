@@ -18,7 +18,7 @@ func TestGatewayFromHandlerUnwrapsAccessProtector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHandler(config.ServeOptions{}, withRouter(&fakeRouter{reg: reg}), WithAdminStateDir(t.TempDir()))
+	handler, err := newHandlerForTest(t, config.ServeOptions{}, withRouter(&fakeRouter{reg: reg}), WithAdminStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}

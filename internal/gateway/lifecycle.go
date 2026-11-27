@@ -32,6 +32,8 @@ func ListenAndServe(ctx context.Context, opts config.ServeOptions, options ...Ha
 	if ctx == nil {
 		return derrors.New(derrors.CodeInvalid, "gateway.ListenAndServe", "context is required")
 	}
+	// Process entry: a wall clock first, so a later WithClock from the host still wins.
+	options = append([]HandlerOption{WithClock(func() time.Time { return time.Now().UTC() })}, options...)
 	handler, g, err := newServingHandler(ctx, opts, options...)
 	if err != nil {
 		return err

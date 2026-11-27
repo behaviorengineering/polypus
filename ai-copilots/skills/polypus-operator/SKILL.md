@@ -196,6 +196,11 @@ See [thinking-policy.md](thinking-policy.md). Run L2 harness when host provides 
 - Skip Docker confirm when daemon is down: `POLYPUS_DOCKER_CONTINUE=1`
 - `go tool task serve-down` stops processes only; named Phoenix/HyperDX volumes are kept (pack skill `process-compose-docker`)
 - Shared practice: skill `process-compose-docker` (cursor-packs)
+- Phoenix **cost UI**: Settings → Models (LiteLLM table plus custom name patterns). Pin **`arizephoenix/phoenix:version-22.1.0`** in `images.env` for cost tracking and GenAI-to-OpenInference conversion (not `version-5.8.0`).
+- Polypus emits **`llm.token_count.*`** and Bifrost **`gen_ai.usage.*`** token details on **Bifrost LLM child spans** under the same trace as `polypus.chat`; it does **not** emit `gen_ai.usage.cost` or `bifrost.cost.*` (Phoenix owns dollar **estimates**; Bifrost catalog is not wired).
+- **OpenRouter** rows in Phoenix are **estimates** only: the invoice depends on which provider OpenRouter routed to, not on the request slug alone.
+- Custom Phoenix model patterns: needed for `cf_local` / `@cf/...` and MLX slugs that LiteLLM does not match out of the box.
+- Air-gapped catalogs: set `PHOENIX_DISABLE_MODEL_COST_AUTO_UPDATE` only when you maintain model prices entirely offline.
 
 ## Client contract
 

@@ -16,6 +16,8 @@ services:
       - "${PHOENIX_PORT:-6006}:6006"
     environment:
       PHOENIX_WORKING_DIR: /data
+      # Phoenix 21+ Docker binds :: so auth defaults on; local stack has no API key for smoke-otel.
+      PHOENIX_ENABLE_AUTH: "false"
     volumes:
       - phoenix_data:/data
 

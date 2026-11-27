@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 func shell(t *testing.T) {
@@ -70,5 +72,16 @@ func TestTailBufferKeepsTheEnd(t *testing.T) {
 func TestExitCodeWithoutExit(t *testing.T) {
 	if ExitCode(errors.New("x")) != -1 {
 		t.Fatal("want -1 for an error with no exited command")
+	}
+}
+
+func TestRunContextNilContext(t *testing.T) {
+	//nolint:staticcheck // SA1012: a nil context is the case under test.
+	err := RunContext(nil, "true", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "context required") {
+		t.Fatalf("err = %v, want context required", err)
+	}
+	if derrors.CodeOf(err) != derrors.CodeInvalid {
+		t.Fatalf("code %s, want invalid", derrors.CodeOf(err))
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/maximhq/bifrost/core/schemas"
 	"go.opentelemetry.io/otel"
@@ -83,4 +84,52 @@ func TestBifrostOTelTracer_flushWhileBifrostWrites(t *testing.T) {
 	}
 	wg.Wait()
 	tr.EndSpan(handle, schemas.SpanStatusOk, "")
+}
+
+func TestBifrostOTelTracer_concurrentStreamChunks(t *testing.T) {
+	tr := NewBifrostOTelTracer()
+	const traceID = "race-stream"
+	tr.CreateStreamAccumulator(traceID, time.Now())
+	const workers = 32
+	const perWorker = 50
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for range perWorker {
+				tr.AddStreamingChunk(traceID, &schemas.BifrostResponse{
+					ChatResponse: &schemas.BifrostChatResponse{Model: "m"},
+				})
+			}
+		}()
+	}
+	wg.Wait()
+	_, _, n := tr.GetAccumulatedChunks(traceID)
+	if n != workers*perWorker {
+		t.Fatalf("chunks = %d, want %d", n, workers*perWorker)
+	}
+}
+
+func TestBifrostOTelTracer_stopClearsDeferredAndStream(t *testing.T) {
+	memoryExporter(t)
+	tr := NewBifrostOTelTracer()
+	_, handle := tr.StartSpanID(context.Background(), "llm", schemas.SpanKindLLMCall)
+	const traceID = "stop-cleanup"
+	tr.StoreDeferredSpan(traceID, handle)
+	tr.CreateStreamAccumulator(traceID, time.Now())
+	tr.AddStreamingChunk(traceID, &schemas.BifrostResponse{
+		ChatResponse: &schemas.BifrostChatResponse{Model: "m"},
+	})
+	tr.Stop()
+	if tr.GetDeferredSpanHandle(traceID) != nil {
+		t.Fatal("deferred handle still present after Stop")
+	}
+	acc, _, n := tr.GetAccumulatedChunks(traceID)
+	if acc != nil || n != 0 {
+		t.Fatalf("stream accumulator still present after Stop: resp=%v chunks=%d", acc, n)
+	}
+	if n := handleCount(tr); n != 0 {
+		t.Fatalf("Stop left %d handles", n)
+	}
 }

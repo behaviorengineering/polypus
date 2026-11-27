@@ -141,4 +141,10 @@ func TestReasoningEffortIgnoresNonStrings(t *testing.T) {
 	if chatMapHasVision(root) {
 		t.Fatal("a non-string part type is not vision")
 	}
+	if chatMapHasVision(map[string]any{"messages": "not-an-array"}) {
+		t.Fatal("a non-array messages field is not vision")
+	}
+	if chatMapHasVision(map[string]any{"messages": []any{"not-an-object"}}) {
+		t.Fatal("a non-object message is not vision")
+	}
 }

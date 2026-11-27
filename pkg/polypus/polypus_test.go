@@ -10,9 +10,10 @@ func TestInvalidOptionsReturnErrorsInsteadOfPanicking(t *testing.T) {
 	for name, opt := range map[string]HandlerOption{
 		"nil logger":      WithLogger(nil),
 		"empty state dir": WithAdminStateDir("  "),
+		"nil clock":       WithClock(nil),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := NewHandler(ServeOptions{}, opt); CodeOf(err) != CodeInvalid {
+			if _, err := NewHandler(t.Context(), ServeOptions{}, opt); CodeOf(err) != CodeInvalid {
 				t.Fatalf("NewHandler: want CodeInvalid, got %v", err)
 			}
 			err := Serve(context.Background(), ServeOptions{}, opt)

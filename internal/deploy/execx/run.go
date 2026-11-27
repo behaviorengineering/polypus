@@ -14,6 +14,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	derrors "github.com/behaviorengineering/polypus/internal/errors"
 )
 
 // stderrTail bounds how much of a command's stderr a RunError keeps.
@@ -92,14 +94,15 @@ func command(ctx context.Context, name string, args, env []string) *exec.Cmd {
 // carries the stderr tail.
 func RunContext(ctx context.Context, name string, args []string, env []string) error {
 	if ctx == nil {
-		return fmt.Errorf("execx: context required")
+		return derrors.New(derrors.CodeInvalid, "execx.RunContext", "context required")
 	}
 	cmd := command(ctx, name, args, env)
 	tail := &tailBuffer{limit: stderrTail}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, tail)
 	if err := cmd.Run(); err != nil {
-		return &RunError{Name: name, Args: args, Stderr: tail.String(), Err: err}
+		return derrors.Wrap(&RunError{Name: name, Args: args, Stderr: tail.String(), Err: err},
+			derrors.CodeUnavailable, "execx.RunContext", "run")
 	}
 	return nil
 }
@@ -108,11 +111,12 @@ func RunContext(ctx context.Context, name string, args []string, env []string) e
 // together, for output a person reads (such as container logs). Never parse it.
 func OutputContext(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("execx: context required")
+		return nil, derrors.New(derrors.CodeInvalid, "execx.OutputContext", "context required")
 	}
 	out, err := command(ctx, name, args, env).CombinedOutput()
 	if err != nil {
-		return out, &RunError{Name: name, Args: args, Err: err}
+		return out, derrors.Wrap(&RunError{Name: name, Args: args, Err: err},
+			derrors.CodeUnavailable, "execx.OutputContext", "run")
 	}
 	return out, nil
 }
@@ -127,7 +131,7 @@ func StdoutContext(ctx context.Context, name string, args []string, env []string
 // StdoutInputContext is StdoutContext with stdin fed to the command (nil for none).
 func StdoutInputContext(ctx context.Context, name string, args, env []string, stdin []byte) ([]byte, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("execx: context required")
+		return nil, derrors.New(derrors.CodeInvalid, "execx.StdoutInputContext", "context required")
 	}
 	cmd := command(ctx, name, args, env)
 	if stdin != nil {
@@ -137,7 +141,8 @@ func StdoutInputContext(ctx context.Context, name string, args, env []string, st
 	cmd.Stderr = tail
 	out, err := cmd.Output()
 	if err != nil {
-		return out, &RunError{Name: name, Args: args, Stderr: tail.String(), Err: err}
+		return out, derrors.Wrap(&RunError{Name: name, Args: args, Stderr: tail.String(), Err: err},
+			derrors.CodeUnavailable, "execx.StdoutInputContext", "run")
 	}
 	return out, nil
 }

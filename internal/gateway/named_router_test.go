@@ -67,7 +67,7 @@ routers:
 `, cf.URL)
 	writeConfig(t, dir, content)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ routers:
 	writeConfig(t, dir, content)
 	t.Setenv("POLYPUS_SWITCHYARD_BASE_URL", "http://127.0.0.1:1")
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ routers:
 `
 	writeConfig(t, dir, content)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ routers:
 `
 	writeConfig(t, dir, content)
 
-	inner, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	inner, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ routers:
 `
 	writeConfig(t, dir, content)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +470,7 @@ routers:
 `, backend.URL)
 	writeConfig(t, dir, content)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: backend.URL}, withPolicies(fastTestPolicies()))
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: backend.URL}, withPolicies(fastTestPolicies()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +528,7 @@ routers:
 `
 	writeConfig(t, dir, content)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1322"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,19 +1,31 @@
-package gateway
+package landing
 
 import (
 	"bytes"
 	"html/template"
-	"net"
+	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/behaviorengineering/polypus/internal/buildinfo"
 	"github.com/behaviorengineering/polypus/internal/config"
 	"github.com/behaviorengineering/polypus/internal/gateway/assets"
+	"github.com/behaviorengineering/polypus/internal/gateway/httpreq"
 )
 
-const bannerAssetPath = "/media/banner.webp"
+// BannerPath is the public URL of the landing banner.
+const BannerPath = "/media/banner.webp"
+
+// Public hrefs the landing page advertises. They must match the gateway route table
+// (TestLandingHrefsMatchRouteTable).
+const (
+	HrefAPIs             = "/v1/apis"
+	HrefOpenAIModels     = "/v1/apis/openai/models"
+	HrefSystemOneModels  = "/v1/apis/systemone/models"
+	HrefAdminModelsAllow = "/v1/admin/models/allow"
+	HrefHealthBackends   = "/health/backends"
+	HrefHealthUpstreams  = "/health/upstreams"
+)
 
 // The Polypus site, linked from the page header.
 const landingDocsURL = "https://behaviorengineering.github.io/polypus/"
@@ -111,7 +123,7 @@ footer.version-footer a { color: var(--muted); text-decoration: underline; }
 </div></header>
 <main>
 <div class="intro">
-<div class="hero"><img class="banner" src="` + bannerAssetPath + `" width="1536" height="753" alt="Polypus"></div>
+<div class="hero"><img class="banner" src="` + BannerPath + `" width="1536" height="753" alt="Polypus"></div>
 <section class="allow">
 <h2>Allow model (inventory check)</h2>
 <form id="allow-form">
@@ -159,7 +171,7 @@ footer.version-footer a { color: var(--muted); text-decoration: underline; }
     var fd = new FormData(form);
     var payload = { backend: String(fd.get('backend') || '').trim(), model: String(fd.get('model') || '').trim() };
     out.textContent = 'Sending…';
-    fetch('` + pathAdminModelsAllow + `', {
+    fetch('` + HrefAdminModelsAllow + `', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
@@ -193,19 +205,19 @@ func landingPageDataForRequest(r *http.Request, cfg config.RouterConfig) landing
 func landingModelLinks(cfg config.RouterConfig) []landingLink {
 	links := []landingLink{
 		{
-			Href:        pathAPIs,
+			Href:        HrefAPIs,
 			Title:       "API catalog",
 			Description: "Discovery index with model list URLs for each API surface.",
 		},
 		{
-			Href:        pathOpenAIModels,
+			Href:        HrefOpenAIModels,
 			Title:       "OpenAI models (enabled)",
 			Description: "Chat, vision, embed, audio, and router models allowed on this gateway.",
 		},
 	}
 	if cfg.EffectiveSystemOneBackend() != "" {
 		links = append(links, landingLink{
-			Href:        pathSystemOneModels,
+			Href:        HrefSystemOneModels,
 			Title:       "SystemOne models",
 			Description: "TypeSafe and JEV decider models (POST /v1/systemone).",
 		})
@@ -216,12 +228,12 @@ func landingModelLinks(cfg config.RouterConfig) []landingLink {
 func landingOpsLinks(r *http.Request) []landingLink {
 	links := []landingLink{
 		{
-			Href:        pathHealthBackends,
+			Href:        HrefHealthBackends,
 			Title:       "Backend health",
 			Description: "Probes each configured backend (and Switchyard when enabled).",
 		},
 		{
-			Href:        pathHealthUpstreams,
+			Href:        HrefHealthUpstreams,
 			Title:       "Upstream breakers",
 			Description: "Circuit-breaker state without dialing leaf backends.",
 		},
@@ -231,12 +243,12 @@ func landingOpsLinks(r *http.Request) []landingLink {
 
 func landingHostPortURL(r *http.Request, port string) string {
 	// Phoenix and HyperDX listen plaintext HTTP on these ports (Tailscale TCP forward).
-	return "http://" + requestHostname(r) + ":" + port
+	return "http://" + httpreq.Hostname(r) + ":" + port
 }
 
 func landingOTLPEndpointURL(r *http.Request, port string) string {
 	// Homelab landing is HTTPS (Tailscale Serve); local make serve is HTTP.
-	return requestScheme(r) + "://" + requestHostname(r) + ":" + port
+	return httpreq.Scheme(r) + "://" + httpreq.Hostname(r) + ":" + port
 }
 
 // Ports of the local observability stack the landing page links to.
@@ -270,79 +282,14 @@ func landingOTLPNote(r *http.Request) string {
 		"http: " + httpURL
 }
 
-// URL schemes a request can arrive on.
-const (
-	schemeHTTP  = "http"
-	schemeHTTPS = "https"
-)
-
-// requestScheme is the scheme the client used: the proxy's X-Forwarded-Proto, else
-// TLS, else http. The landing page, the UI proxies and the admin same-origin check
-// all read it here.
-func requestScheme(r *http.Request) string {
-	if r == nil {
-		return schemeHTTP
-	}
-	// The first X-Forwarded-Proto value wins, and only http or https counts.
-	if proto := strings.ToLower(firstForwarded(r.Header.Get("X-Forwarded-Proto"))); proto == schemeHTTPS || proto == schemeHTTP {
-		return proto
-	}
-	if r.TLS != nil {
-		return schemeHTTPS
-	}
-	return schemeHTTP
-}
-
-func requestHostname(r *http.Request) string {
-	const fallback = "127.0.0.1"
-	if r == nil {
-		return fallback
-	}
-	raw := strings.TrimSpace(r.Host)
-	if raw == "" {
-		raw = strings.TrimSpace(r.URL.Host)
-	}
-	if raw == "" {
-		return fallback
-	}
-	host, _, err := net.SplitHostPort(raw)
-	if err != nil {
-		host = raw
-	}
-	host = strings.Trim(host, "[]")
-	if !safeHostname(host) {
-		return fallback
-	}
-	return host
-}
-
-func safeHostname(host string) bool {
-	if host == "" || len(host) > 253 {
-		return false
-	}
-	for _, r := range host {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == '.' || r == '-':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-func (g *gatewayHandler) serveLanding(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		g.writeMethodNotAllowed(w, allowRead...)
-		return
-	}
-	cfg := g.registry.Config()
+// WritePage renders the landing HTML. The caller has already accepted GET or HEAD.
+func WritePage(w http.ResponseWriter, r *http.Request, cfg config.RouterConfig, log *slog.Logger) {
 	// Render before the status goes out, so a template error is a 500, not a cut-off 200.
 	var page bytes.Buffer
 	if err := landingPageTemplate.Execute(&page, landingPageDataForRequest(r, cfg)); err != nil {
-		g.log.Warn("polypus: landing page render failed", "err", err)
+		if log != nil {
+			log.Warn("polypus: landing page render failed", "err", err)
+		}
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -352,16 +299,13 @@ func (g *gatewayHandler) serveLanding(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		return
 	}
-	if _, err := page.WriteTo(w); err != nil {
-		g.log.Debug("polypus: landing page write failed", "err", err)
+	if _, err := page.WriteTo(w); err != nil && log != nil {
+		log.Debug("polypus: landing page write failed", "err", err)
 	}
 }
 
-func (g *gatewayHandler) serveBannerWebP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		g.writeMethodNotAllowed(w, allowRead...)
-		return
-	}
+// WriteBanner serves the brand banner. The caller has already accepted GET or HEAD.
+func WriteBanner(w http.ResponseWriter, r *http.Request, log *slog.Logger) {
 	banner := assets.BannerWebP()
 	w.Header().Set("Content-Type", "image/webp")
 	if r.Method == http.MethodHead {
@@ -370,7 +314,7 @@ func (g *gatewayHandler) serveBannerWebP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(banner); err != nil {
-		g.log.Debug("polypus: banner write failed", "err", err)
+	if _, err := w.Write(banner); err != nil && log != nil {
+		log.Debug("polypus: banner write failed", "err", err)
 	}
 }

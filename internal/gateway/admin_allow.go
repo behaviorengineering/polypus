@@ -13,6 +13,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/config"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/gateway/httpreq"
 	"github.com/behaviorengineering/polypus/internal/gateway/router"
 )
 
@@ -96,19 +97,13 @@ func sameOrigin(origin string, r *http.Request) bool {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return false // Includes the opaque "null" origin.
 	}
-	scheme := requestScheme(r)
+	scheme := httpreq.Scheme(r)
 	host := r.Host
-	if fh := firstForwarded(r.Header.Get("X-Forwarded-Host")); fh != "" {
+	if fh := httpreq.FirstForwarded(r.Header.Get("X-Forwarded-Host")); fh != "" {
 		host = fh
 	}
 	return strings.EqualFold(u.Scheme, scheme) &&
 		strings.EqualFold(hostWithDefaultPort(u.Host, u.Scheme), hostWithDefaultPort(host, scheme))
-}
-
-// firstForwarded is the first value of a comma-separated X-Forwarded-* header.
-func firstForwarded(v string) string {
-	first, _, _ := strings.Cut(v, ",")
-	return strings.TrimSpace(first)
 }
 
 // hostWithDefaultPort adds the scheme's default port when host has none, so
@@ -117,7 +112,7 @@ func hostWithDefaultPort(host, scheme string) string {
 	if u, err := url.Parse("//" + host); err == nil && u.Port() != "" {
 		return host
 	}
-	if strings.EqualFold(scheme, schemeHTTPS) {
+	if strings.EqualFold(scheme, httpreq.HTTPS) {
 		return host + ":443"
 	}
 	return host + ":80"

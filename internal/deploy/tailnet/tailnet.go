@@ -14,6 +14,7 @@ import (
 
 	"github.com/behaviorengineering/polypus/internal/deploy/execx"
 	derrors "github.com/behaviorengineering/polypus/internal/errors"
+	"github.com/behaviorengineering/polypus/internal/outbound"
 )
 
 // status is the part of `tailscale status --json` the check reads.
@@ -74,7 +75,50 @@ func cliStatus(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return execx.StdoutContext(ctx, bin, []string{"status", "--json"}, nil)
+	var out []byte
+	err = outbound.Run(ctx, outbound.DepTailscale, func() error {
+		raw, runErr := execx.StdoutContext(ctx, bin, []string{"status", "--json"}, nil)
+		out = raw
+		if runErr == nil {
+			return nil
+		}
+		if tailscaleExecRetryable(runErr) {
+			return outbound.Retry(runErr)
+		}
+		return outbound.Abort(runErr)
+	})
+	return out, err
+}
+
+// tailscaleExecRetryable reports a transient tailscale CLI failure: the process
+// was killed, or stderr names a transport blip. A missing CLI, a wrong tailnet,
+// and a canceled or expired context are not retried.
+func tailscaleExecRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if signaled(err) {
+		return true
+	}
+	stderr := strings.ToLower(execx.Stderr(err))
+	for _, p := range []string{"connection refused", "connection reset", "i/o timeout", "temporary failure"} {
+		if strings.Contains(stderr, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func signaled(err error) bool {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return false
+	}
+	// ExitCode is -1 when the process was terminated by a signal (or never exited).
+	return ee.ExitCode() == -1
 }
 
 // findCLI looks for tailscale on PATH, then where the desktop apps install it.

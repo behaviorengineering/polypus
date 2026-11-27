@@ -59,7 +59,7 @@ backends:
 	t.Setenv("POLYPUS_DEFAULT_MODEL", "")
 	t.Setenv("POLYPUS_DEFAULT_STT_MODEL", "")
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: cf.URL})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: cf.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ backends:
 	}
 	t.Setenv("POLYPUS_CONFIG", path)
 
-	handler, err := NewHandler(config.ServeOptions{BackendURL: "http://127.0.0.1:1"})
+	handler, err := newHandlerForTest(t, config.ServeOptions{BackendURL: "http://127.0.0.1:1"})
 	if err != nil {
 		t.Fatal(err)
 	}
